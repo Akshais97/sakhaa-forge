@@ -1,0 +1,108 @@
+# Local dependency and build output
+node_modules/
+.next/
+dist/
+build/
+coverage/
+.turbo/
+.cache/
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local generated media, archives and binary reports
+*.mp4
+*.mov
+*.wav
+*.mp3
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.npy
+*.npz
+*.pt
+*.pkl
+*.onnx
+*.sqlite
+*.db
+
+# Legacy research and exploratory folders kept out of the new product repo
+ad-brain-scorer/
+cache/
+cache_validation_output/
+Fastlane Features/
+instagram-content-impact-predictor/
+kaggle_tribev2_pipeline_bundle/
+Marketing Score Creation/
+Prep Pipeline/
+project based skills/
+research/
+skills/
+Tribe V2/
+tribe v2 adapter/
+tribe_analysis/
+tribe_report/
+tribe_report_surya/
+TribeV2_environment_handover_V2_files/
+tribev2_reverse/
+tribev2_stages/
+tribev2-main/
+trypencil_design_extraction/
+Untitled/
+v0_testing/
+.obsidian/
+
+# Deferred product documentation kept local until this V0 repo needs it
+docs/V1/
+docs/V2/
+docs/superpowers/plans/2026-06-15-*.md
+docs/superpowers/specs/
+
+# Loose historical scratch files in this local workspace
+*.html
+*.tsv
+*.csv
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.log
+missing_debug.txt
+tribe_cache_probe_output.txt
+tribe_source_probe_no_import_output.txt
+Untitled*.md
+handover*.md
+Findings.md
+Initial_flow.md
+HCP_Mapping_Documentation.md
+Rules to follow while developing.md
+app_initial_idea.md
+*_patches_made_and_revert_guide*
+inspect_*.py
+search_*.py
+find_all_files.py
+map_hcp_atlas.py
+make_surya_reconstructed_events.py
+python tribe_source_probe_no_import.py
+test_cache_loader_*.py
+tribe_cache_probe.py
+sakhaa_marketing_cloud_architecture_initial_idea.md
+tests/__pycache__/
+tests/test_hcp_cluster_evidence.py
