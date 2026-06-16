@@ -1,0 +1,12 @@
+// Product V0 F0 migration metadata only.
+// Business models are introduced by owning slices after predecessor evidence is retained.
+// Sources: docs/V0/V0_PRISMA_SCHEMA.md and docs/V0/Sprints/V0-F0_RUNNABLE_WALKING_SKELETON_SPRINT.md.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}

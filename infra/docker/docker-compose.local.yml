@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: v0
+      POSTGRES_USER: v0_migration
+      POSTGRES_PASSWORD: local_only
+    ports:
+      - "5432:5432"
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6379:6379"
+  object-storage:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: local-placeholder
+      MINIO_ROOT_PASSWORD: local-placeholder
+    ports:
+      - "9000:9000"
+      - "9001:9001"

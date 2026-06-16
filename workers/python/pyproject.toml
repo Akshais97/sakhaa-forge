@@ -1,0 +1,8 @@
+[project]
+name = "sakhaa-forge-worker"
+version = "0.0.0"
+requires-python = "==3.12.13"
+description = "Sakhaa Forge V0 fake private worker boundary."
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

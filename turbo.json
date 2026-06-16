@@ -1,0 +1,35 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "generate": {
+      "outputs": [
+        "packages/contracts/generated/**"
+      ]
+    },
+    "format:check": {
+      "outputs": []
+    },
+    "lint": {
+      "outputs": []
+    },
+    "typecheck": {
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": [
+        "generate"
+      ],
+      "outputs": []
+    },
+    "verify": {
+      "dependsOn": [
+        "generate",
+        "format:check",
+        "lint",
+        "typecheck",
+        "test"
+      ],
+      "outputs": []
+    }
+  }
+}

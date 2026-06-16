@@ -1,0 +1,11 @@
+{
+  "name": "@sakhaa-forge/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "node scripts/db-generate.mjs",
+    "migrate:dev": "node scripts/db-migrate-dev.mjs",
+    "validate": "node scripts/db-validate.mjs"
+  }
+}

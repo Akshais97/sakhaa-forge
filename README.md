@@ -6,10 +6,10 @@ published and audience-verified short-form video with complete cost and creative
 
 ## Current Status
 
-The repository currently contains authoritative product and implementation
-documentation. Application scaffolding starts with vertical slice `V0-F0`.
-Documentation does not prove implementation; only executable code and passing evidence
-do.
+The repository contains authoritative V0 documentation and the initial `V0-F0` walking
+skeleton scaffold. The current scaffold provides workspace boundaries, health/readiness
+contracts, a generated-client smoke path and local verification scripts. Later slices
+must not start until the full F0 evidence package is retained.
 
 ## V0 Journey
 
@@ -54,8 +54,14 @@ Brand intake and approval
 - pnpm 11, with the exact version committed in root `packageManager` by V0-F0
 - Python `3.12.13`
 
-The executable package/workspace commands described in the development workflow become
-available when V0-F0 creates the application scaffold.
+Use Corepack to run the pinned pnpm line:
+
+```text
+corepack pnpm verify
+```
+
+Direct `pnpm verify` requires the machine-level pnpm shim to be enabled. On Windows this
+may require administrator permission for `corepack enable`.
 
 ## Scope
 

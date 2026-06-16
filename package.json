@@ -1,0 +1,33 @@
+{
+  "name": "sakhaa-forge",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Sakhaa Forge V0 walking skeleton.",
+  "packageManager": "pnpm@11.7.0+sha512.19cc852c120c7125760f2443ee6be0ca5b40f9f50598de1a09a1f177503e010e57c23c77646e01e761de59bf874fb22a3398c33ab9691fc13eb946b6f0f4d620",
+  "engines": {
+    "node": "22.22.1",
+    "pnpm": ">=11 <12"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "node apps/web/src/server.mjs",
+    "dev:api": "node apps/api/src/server.mjs",
+    "dev:queue": "node workers/queue/src/processor.mjs",
+    "services:up": "node scripts/services.mjs up",
+    "services:down": "node scripts/services.mjs down",
+    "generate": "node scripts/generate-contracts.mjs",
+    "format:check": "node scripts/check-format.mjs",
+    "lint": "node scripts/lint.mjs",
+    "typecheck": "node scripts/typecheck.mjs",
+    "test": "node --test tests/**/*.test.mjs",
+    "test:unit": "node --test tests/unit/*.test.mjs",
+    "test:contract": "node --test tests/contract/*.test.mjs",
+    "test:integration": "node --test tests/integration/*.test.mjs",
+    "test:e2e": "node --test tests/e2e/*.test.mjs",
+    "test:rls": "node tests/rls/placeholder.mjs",
+    "db:generate": "node packages/db/scripts/db-generate.mjs",
+    "db:migrate:dev": "node packages/db/scripts/db-migrate-dev.mjs",
+    "db:validate": "node packages/db/scripts/db-validate.mjs",
+    "verify": "node scripts/verify.mjs"
+  }
+}

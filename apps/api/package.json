@@ -1,0 +1,10 @@
+{
+  "name": "@sakhaa-forge/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.mjs",
+    "test": "node --test ../../tests/unit/health.test.mjs ../../tests/integration/readiness.test.mjs"
+  }
+}
