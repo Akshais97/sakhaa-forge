@@ -9,7 +9,9 @@ const requiredFiles = [
   "apps/web/src/server.mjs",
   "workers/queue/src/processor.mjs",
   "workers/python/fake_worker.py",
+  "scripts/install-pnpm-shim.mjs",
   "packages/contracts/generated/v0-client.mjs",
+  "packages/config/src/storage.mjs",
   "packages/db/prisma/schema.prisma",
   "infra/docker/docker-compose.local.yml"
 ];

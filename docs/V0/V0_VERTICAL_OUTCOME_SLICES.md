@@ -94,9 +94,9 @@ later V0 outcome.
 
 ### V0-F0: Runnable Walking Skeleton
 
-**Outcome:** A developer can start the V0 web, API, PostgreSQL, Redis, local object
-storage, queue processor and fake worker with one documented command; an authenticated
-health page shows each dependency state.
+**Outcome:** A developer can start the V0 web, API, PostgreSQL, Redis, a deterministic
+local storage simulator, queue processor and fake worker with one documented command; an
+authenticated health page shows each dependency state.
 
 **Includes:**
 
@@ -105,7 +105,7 @@ health page shows each dependency state.
 - typed environment validation with redacted examples;
 - health, readiness and build/version endpoints;
 - local Supabase-compatible PostgreSQL/Auth setup or deterministic local auth adapter;
-- Redis and S3-compatible local storage;
+- Redis and a filesystem-backed local storage simulator;
 - fake worker and fake provider process;
 - CI entrypoints for format, typecheck, unit and contract tests.
 

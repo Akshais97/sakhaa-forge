@@ -17,10 +17,13 @@ test("health payload is public-safe and does not expose connection strings", () 
 test("readiness reports available local simulator dependencies", () => {
   const readiness = getReadiness({
     APP_ENV: "local",
-    APP_VERSION: "test"
+    APP_VERSION: "test",
+    OBJECT_STORAGE_PROVIDER: "local-filesystem"
   });
 
   assert.equal(readiness.status, "ready");
   assert.equal(readiness.dependencies.postgres.status, "available");
   assert.equal(readiness.dependencies.fakeWorker.status, "available");
+  assert.equal(readiness.dependencies.objectStorage.provider, "local-filesystem");
+  assert.equal(readiness.dependencies.objectStorage.mode, "simulator");
 });

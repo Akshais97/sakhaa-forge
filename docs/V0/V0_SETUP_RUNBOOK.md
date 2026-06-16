@@ -6,10 +6,13 @@
    Docker Desktop and
    the worker-image-pinned `ffmpeg`.
 2. Create environment files from redacted examples.
-3. Start PostgreSQL, Redis and an S3-compatible local object store.
-4. Run Prisma migrations and seed two isolated workspaces.
-5. Start web, API, queue processor and fake provider/media workers.
-6. Run contract, RLS, ledger and end-to-end simulator suites.
+3. On Windows PowerShell, run `node scripts/install-pnpm-shim.mjs` once if bare `pnpm`
+   commands are unresolved.
+4. Start PostgreSQL and Redis, then initialize the filesystem-backed local storage
+   simulator.
+5. Run Prisma migrations and seed two isolated workspaces.
+6. Start web, API, queue processor and fake provider/media workers.
+7. Run contract, RLS, ledger and end-to-end simulator suites.
 
 ## Staging
 

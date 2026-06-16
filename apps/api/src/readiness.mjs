@@ -20,7 +20,7 @@ export function getReadiness(env = process.env) {
   const dependencies = Object.fromEntries(
     dependencyNames.map((name) => [
       name,
-      dependencyState(name, forcedFailure)
+      dependencyState(name, forcedFailure, env)
     ])
   );
   const unavailable = Object.values(dependencies).filter(
@@ -43,11 +43,19 @@ function baseMetadata(env) {
   };
 }
 
-function dependencyState(name, forcedFailure) {
+function dependencyState(name, forcedFailure, env) {
   if (forcedFailure === name) {
     return {
       status: "unavailable",
       code: "DEPENDENCY_UNAVAILABLE"
+    };
+  }
+
+  if (name === "objectStorage") {
+    return {
+      status: "available",
+      provider: env.OBJECT_STORAGE_PROVIDER || "local-filesystem",
+      mode: "simulator"
     };
   }
 

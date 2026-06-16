@@ -25,7 +25,8 @@ Changing a runtime major requires an ADR, compatibility test and deployment plan
 - Prisma in `packages/db` is the sole migration owner.
 - OpenAPI and generated TypeScript clients live in `packages/contracts/generated`.
 - Design tokens generate CSS/TypeScript outputs in `packages/ui/generated`.
-- Docker Compose runs local PostgreSQL, Redis and S3-compatible object storage.
+- Docker Compose runs local PostgreSQL and Redis; F0 uses a filesystem-backed object
+  storage simulator until the B2 adapter work lands.
 - Paid and publishing providers use deterministic simulators by default.
 
 ## 3. Expected Root Commands

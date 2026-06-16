@@ -91,11 +91,12 @@ Redis loss degrades delivery but cannot change canonical job or financial state.
 
 | Variable | Type | Required | Class | Default / failure |
 |---|---|---|---|---|
-| `OBJECT_STORAGE_PROVIDER` | enum `s3-local,b2` | Yes | Internal | local `s3-local`; others fail |
-| `OBJECT_STORAGE_ENDPOINT` | absolute URL | Yes | Internal | Fail |
-| `OBJECT_STORAGE_REGION` | provider region string | Yes | Internal | Fail |
-| `OBJECT_STORAGE_KEY_ID` | credential ID | Yes | Secret | Fail; `OPS/SEC` |
-| `OBJECT_STORAGE_APPLICATION_KEY` | credential secret | Yes | Secret | Fail; `OPS/SEC` |
+| `OBJECT_STORAGE_PROVIDER` | enum `local-filesystem,b2` | Yes | Internal | local `local-filesystem`; others fail |
+| `LOCAL_STORAGE_ROOT` | relative or absolute path | Local filesystem mode | Internal | local `.local/storage`; fail if empty in local mode |
+| `OBJECT_STORAGE_ENDPOINT` | absolute URL | B2 mode | Internal | Fail |
+| `OBJECT_STORAGE_REGION` | provider region string | B2 mode | Internal | Fail |
+| `OBJECT_STORAGE_KEY_ID` | credential ID | B2 mode | Secret | Fail; `OPS/SEC` |
+| `OBJECT_STORAGE_APPLICATION_KEY` | credential secret | B2 mode | Secret | Fail; `OPS/SEC` |
 | `B2_BUCKET_QUARANTINE` | bucket name | Yes | Sensitive reference | Fail |
 | `B2_BUCKET_CLEAN_MEDIA` | bucket name | Yes | Sensitive reference | Fail |
 | `B2_BUCKET_PRIVATE_ARTIFACTS` | bucket name | Yes | Sensitive reference | Fail |

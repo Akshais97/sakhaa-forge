@@ -54,14 +54,23 @@ Brand intake and approval
 - pnpm 11, with the exact version committed in root `packageManager` by V0-F0
 - Python `3.12.13`
 
-Use Corepack to run the pinned pnpm line:
+Use the repo-root `pnpm.cmd` launcher or Corepack directly to run the pinned pnpm line:
+
+```text
+pnpm verify
+```
+
+Fallback:
 
 ```text
 corepack pnpm verify
 ```
 
-Direct `pnpm verify` requires the machine-level pnpm shim to be enabled. On Windows this
-may require administrator permission for `corepack enable`.
+On Windows PowerShell, if `pnpm` is still unresolved, run:
+
+```text
+node scripts/install-pnpm-shim.mjs
+```
 
 ## Scope
 

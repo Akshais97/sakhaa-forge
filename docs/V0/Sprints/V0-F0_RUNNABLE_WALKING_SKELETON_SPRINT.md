@@ -3,7 +3,8 @@
 ## Sprint Objective
 
 Make Product V0 start locally as a real system: Next.js web, NestJS/Fastify API,
-PostgreSQL/Auth, Redis/BullMQ, local object storage, queue processor and fake worker.
+PostgreSQL/Auth, Redis/BullMQ, a deterministic local storage simulator, queue processor
+and fake worker.
 The sprint proves dependency health through generated client calls and does not create
 speculative product tables.
 
@@ -26,7 +27,8 @@ speculative product tables.
   PostgreSQL, Redis, ffmpeg and Docker image metadata.
 - Add typed environment validation with redacted examples.
 - Add `GET /health`, `GET /ready` and build/version metadata.
-- Add local service orchestration for PostgreSQL/Auth, Redis and S3-compatible storage.
+- Add local service orchestration for PostgreSQL/Auth, Redis and a deterministic local
+  storage simulator.
 - Add deterministic fake provider and fake worker process.
 - Add root commands for dev, generation, lint, typecheck, test, DB validation and verify.
 
