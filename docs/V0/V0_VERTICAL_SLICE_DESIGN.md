@@ -8,7 +8,7 @@
 
 This design converts Product V0 into independently demonstrable vertical outcomes. A
 slice is not a frontend task, backend task or database task. It is the smallest coherent
-user or operator outcome that crosses every required layer and proves its own failure
+user or administrator outcome that crosses every required layer and proves its own failure
 behavior.
 
 V1 and V2 are not implementation dependencies, parallel workstreams or acceptance
@@ -20,7 +20,7 @@ Use vertical outcome slices with a thin walking skeleton first.
 
 Each slice may include:
 
-- Next.js user or operator interaction;
+- Next.js user or administrator interaction;
 - generated OpenAPI client and NestJS/Fastify route;
 - domain service and explicit repository query;
 - Prisma model or additive migration;
@@ -29,7 +29,7 @@ Each slice may include:
 - private Python, media or AE worker interaction;
 - B2 artifact ownership and hashes;
 - provider adapter or deterministic simulator;
-- audit, tracing, metrics and operator recovery;
+- audit, tracing, metrics and Admin recovery;
 - unit, contract, integration and end-to-end evidence.
 
 A slice includes only the layers required for its outcome. It must not create speculative
@@ -47,7 +47,7 @@ Vertical slices force those boundaries to work from the beginning.
 
 ## Slice Rules
 
-1. A slice has one named user or operator outcome.
+1. A slice has one named user or administrator outcome.
 2. A slice has one primary aggregate or state transition.
 3. A slice ends in demonstrable behavior, not internal code completion.
 4. A slice includes nil, empty, malformed, unauthorized, duplicate, stale, timeout and
@@ -63,7 +63,7 @@ Vertical slices force those boundaries to work from the beginning.
 
 A slice is complete only when:
 
-- the user/operator outcome works through the real public contract;
+- the user or administrator outcome works through the real public contract;
 - the intended test failed before implementation and now passes;
 - authorization and workspace isolation are verified;
 - state transitions and idempotency are enforced;
@@ -81,7 +81,7 @@ F0 Walking skeleton
   -> F2 Executable API contracts
   -> F3 Private artifact lifecycle
   -> F4 Durable jobs and worker protocol
-  -> F5 Observability and operator recovery
+  -> F5 Observability and Admin recovery
 
 F1, F2 and F3 may overlap after F0.
 F4 depends on F1-F3.
@@ -150,4 +150,3 @@ must pass first.
 The design succeeds when every requirement in `V0.md` maps to at least one slice, every
 slice maps to a V0 gate, and the final slice proves the complete reference journey with
 V1 and V2 absent.
-

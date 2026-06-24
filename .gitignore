@@ -69,6 +69,10 @@ trypencil_design_extraction/
 Untitled/
 v0_testing/
 .obsidian/
+.claude/
+CLAUDE.md
+graphify-out/
+packages/db/generated/
 
 # Deferred product documentation kept local until this V0 repo needs it
 docs/V1/

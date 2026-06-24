@@ -14,6 +14,17 @@ test("health payload is public-safe and does not expose connection strings", () 
   assert.equal(JSON.stringify(health).includes("postgresql://"), false);
 });
 
+test("build metadata identifies the NestJS Fastify API runtime", async () => {
+  const { getBuildInfo } = await import("../../apps/api/src/build-info.mjs");
+
+  const version = getBuildInfo({
+    APP_ENV: "local",
+    APP_VERSION: "test"
+  });
+
+  assert.equal(version.apiRuntime, "nestjs-fastify");
+});
+
 test("readiness reports available local simulator dependencies", () => {
   const readiness = getReadiness({
     APP_ENV: "local",

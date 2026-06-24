@@ -12,4 +12,4 @@
 - Provide keyboard navigation, visible focus, AA contrast, text alternatives, and tables
   for all charts.
 - Optimize dense comparison for desktop while keeping mobile review usable.
-- User testing must include a creative strategist and brand manager before release.
+- User testing must include a client manager and reviewer before release.

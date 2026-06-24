@@ -91,7 +91,7 @@ Every V2-to-V1 generation brief includes:
 - Short-lived signed media access is preferred over public URLs or copied credentials.
 - Provider secrets, payment secrets, raw webhook bodies, and creator-credit balances
   never cross into V2.
-- V1 and V2 audit the same trace ID so an operator can reconstruct the full loop.
+- V1 and V2 audit the same trace ID so an authorised Admin can reconstruct the full loop.
 
 ## Compatibility and Rollout
 

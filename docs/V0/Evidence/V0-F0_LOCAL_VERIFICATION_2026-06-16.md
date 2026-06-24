@@ -118,12 +118,12 @@ Command: docker compose -f infra/docker/docker-compose.local.yml down
 Local storage simulator directories are left intact for retained evidence.
 ```
 
-## Remaining Machine-Level Caveats
+## 2026-06-17 Toolchain Update
 
-- The local Node runtime is `v24.15.0`; V0 implementation remains pinned to Node
-  `22.22.1` in repository files.
+Project owner accepted the current local Node runtime as the V0 implementation pin.
+Repository toolchain files and workflow docs now pin Node.js `24.15.0`.
 
-The direct `pnpm` command path is now fixed for this workstation, but the Node runtime
-warning remains real. Changing the pinned Node major/minor would require updating the
-canonical V0 contracts, compatibility evidence and the rest of the toolchain files, not
-only `package.json`.
+Verification after the pin change is recorded in:
+
+- `docs/V0/Evidence/V0-F1_LOCAL_DUMMY_DATA_VERIFICATION_2026-06-17.md`
+- `docs/V0/Evidence/V0-F2_LOCAL_DUMMY_DATA_VERIFICATION_2026-06-17.md`

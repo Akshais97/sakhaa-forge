@@ -2,7 +2,7 @@
 
 ## Sprint Objective
 
-Let an authorized brand manager edit candidates and approve one exact brand profile
+Let an authorised client manager edit candidates and approve one exact brand profile
 version that downstream production APIs require.
 
 ## Source Contracts

@@ -5,7 +5,7 @@
   "description": "Sakhaa Forge V0 walking skeleton.",
   "packageManager": "pnpm@11.7.0+sha512.19cc852c120c7125760f2443ee6be0ca5b40f9f50598de1a09a1f177503e010e57c23c77646e01e761de59bf874fb22a3398c33ab9691fc13eb946b6f0f4d620",
   "engines": {
-    "node": "22.22.1",
+    "node": "24.15.0",
     "pnpm": ">=11 <12"
   },
   "scripts": {
@@ -24,7 +24,7 @@
     "test:contract": "node --test tests/contract/*.test.mjs",
     "test:integration": "node --test tests/integration/*.test.mjs",
     "test:e2e": "node --test tests/e2e/*.test.mjs",
-    "test:rls": "node tests/rls/placeholder.mjs",
+    "test:rls": "node --test tests/rls/*.test.mjs",
     "db:generate": "node packages/db/scripts/db-generate.mjs",
     "db:migrate:dev": "node packages/db/scripts/db-migrate-dev.mjs",
     "db:validate": "node packages/db/scripts/db-validate.mjs",

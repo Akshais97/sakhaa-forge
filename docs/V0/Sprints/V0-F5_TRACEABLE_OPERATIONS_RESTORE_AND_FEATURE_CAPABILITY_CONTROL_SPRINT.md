@@ -2,7 +2,7 @@
 
 ## Sprint Objective
 
-Give operators traceability, safe recovery controls, feature capability switches,
+Give Owners and Admins traceability, safe recovery controls, feature capability switches,
 credential metadata and restore proof before product-domain slices begin.
 
 ## Source Contracts
@@ -20,7 +20,7 @@ credential metadata and restore proof before product-domain slices begin.
 - Add structured logs and metrics for request rate, queue age, retries, leases, dead
   letters and artifact validation.
 - Add `ServiceCredential` metadata with secret-manager references and rotation status.
-- Add protected operator reads and recovery actions.
+- Add protected Owner/Admin reads and recovery actions.
 - Add workspace capability configuration for unfinished slices.
 - Add local simulator modes: success, timeout, duplicate, malformed and bad signature.
 - Add backup/PITR and artifact-reference restore procedure.
@@ -28,7 +28,7 @@ credential metadata and restore proof before product-domain slices begin.
 
 ## TDD And Verification Plan
 
-First failing test: an operator cannot trace a failed request or recovery can bypass
+First failing test: an Owner/Admin cannot trace a failed request or recovery can bypass
 authorization, duplicate side effects or mutate immutable state.
 
 Required tests:

@@ -121,8 +121,8 @@ invented independently during implementation.
 | `/w/{workspaceSlug}/settings/members` | Membership and roles | Owner, Admin |
 | `/w/{workspaceSlug}/settings/integrations` | Provider credential metadata | Owner, Admin |
 | `/w/{workspaceSlug}/settings/data` | Export and deletion | Owner, Admin |
-| `/w/{workspaceSlug}/operations/jobs` | Job/dead-letter operations | Owner, Admin, Operator |
-| `/w/{workspaceSlug}/operations/reconciliation` | Provider/credit/publishing reconciliation | Owner, Admin, Operator, Finance by capability |
+| `/w/{workspaceSlug}/operations/jobs` | Job/dead-letter operations | Owner, Admin |
+| `/w/{workspaceSlug}/operations/reconciliation` | Provider/credit/publishing reconciliation | Owner, Admin |
 | `/w/{workspaceSlug}/operations/audit` | Security and production audit | Owner, Admin |
 
 ## 5. Authenticated Application Shell
@@ -160,7 +160,7 @@ The production navigation is:
 7. Calendar
 8. Activity
 
-Credits is a persistent wallet affordance and a destination under workspace finance.
+Credits is a persistent wallet affordance for Owner, Admin and Client Manager roles.
 Avatars appears under Generate until its catalogue justifies primary navigation.
 Operations and Settings are in a separated lower navigation group.
 
@@ -168,13 +168,10 @@ Operations and Settings are in a separated lower navigation group.
 
 | Role | Primary additions/omissions |
 |---|---|
-| Owner | All destinations, including settings, audit, export and finance |
-| Admin | All operational destinations except finance-only adjustments |
-| Brand Manager | Brand, blueprint, script, avatar, generation, review and calendar |
-| Strategist | Blueprint, script, confirmed generation, review comments and calendar |
+| Owner | All destinations, including settings, audit, export, credits and recovery |
+| Admin | All destinations needed for administration, credentials, reconciliation and recovery |
+| Client Manager | Brand, blueprint, script, avatar, credits, generation, review and calendar |
 | Reviewer | Review and notifications; read-only context needed to review |
-| Operator | Activity, operational jobs, avatars, generation and publishing |
-| Finance | Credits, ledger and financial reconciliation only |
 
 Navigation visibility is convenience, not authorization. NestJS rechecks every action.
 

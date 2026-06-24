@@ -23,7 +23,7 @@ speculative product tables.
 
 - Create the V0 monorepo shape for web, API, queue worker, Python worker, contracts,
   database, config, tests and infra.
-- Pin the V0 toolchain: Node.js `22.22.1`, pnpm line `11`, Python `3.12.13`,
+- Pin the V0 toolchain: Node.js `24.15.0`, pnpm line `11`, Python `3.12.13`,
   PostgreSQL, Redis, ffmpeg and Docker image metadata.
 - Add typed environment validation with redacted examples.
 - Add `GET /health`, `GET /ready` and build/version metadata.

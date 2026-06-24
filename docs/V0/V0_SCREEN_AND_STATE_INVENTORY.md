@@ -35,7 +35,7 @@ surface.
 | Activity | `/w/{slug}/activity` | All members | Workspace shell | Jobs/events; filter/open job | empty, queued, running, retrying, unknown, failed, done |
 | Job detail | `/w/{slug}/activity?job={id}` or owning detail | Authorised members | Durable job ID | Job events, attempts, linked artifact | reconnecting, stale lease, retry scheduled, dead letter |
 | Notifications | `/w/{slug}/notifications` | All members | Workspace shell | Notification list; mark read/open object | empty, loading, malformed deep link |
-| Operations jobs | `/w/{slug}/operations/jobs` | Owner/Admin/Operator | Operational role | Jobs, attempts, traces; retry/cancel | queue loss, dead letter, unauthorised, recovery success |
+| Operations jobs | `/w/{slug}/operations/jobs` | Owner/Admin | Operational role | Jobs, attempts, traces; retry/cancel | queue loss, dead letter, unauthorised, recovery success |
 | Integrations | `/w/{slug}/settings/integrations` | Owner/Admin | Settings | Credential metadata; add/rotate/revoke reference | unconfigured, validating, active, expired, rotation failed |
 | Members | `/w/{slug}/settings/members` | Owner/Admin | Settings | Memberships; invite/change/remove | empty, pending, stale role, last-owner destructive block |
 | Workspace data | `/w/{slug}/settings/data` | Owner/Admin | Settings | Export/delete state | calculating, ready, expired export, deletion confirmation |
@@ -44,23 +44,23 @@ surface.
 
 | Screen | Route | Roles | Entry / exit | Primary actions | State requirements |
 |---|---|---|---|---|---|
-| Brand list | `/brands` | Owner/Admin/Brand Manager/Strategist/Operator read | Workspace | Create/open brand | empty with Create brand; loading; archived filter |
-| Brand intake | `/brands/new` | Owner/Admin/Brand Manager | Workspace capability | Submit permitted URL/files | URL invalid, rights missing, upload scanning, partial uploads, success run |
-| Crawl run | `/brands/{id}/runs/{runId}` | Brand roles/Operator | Intake run | Observe, cancel before external side effect, retry safe stage | queued, crawling, partial, blocked, failed, candidates ready |
-| Brand review | `/brands/{id}/profiles/{profileId}/review` | Owner/Admin/Brand Manager | Candidates ready | Edit candidate, approve/reject | low confidence, source conflict, missing required field, stale version |
+| Brand list | `/brands` | Owner/Admin/Client Manager | Workspace | Create/open brand | empty with Create brand; loading; archived filter |
+| Brand intake | `/brands/new` | Owner/Admin/Client Manager | Workspace capability | Submit permitted URL/files | URL invalid, rights missing, upload scanning, partial uploads, success run |
+| Crawl run | `/brands/{id}/runs/{runId}` | Owner/Admin/Client Manager | Intake run | Observe, cancel before external side effect, retry safe stage | queued, crawling, partial, blocked, failed, candidates ready |
+| Brand review | `/brands/{id}/profiles/{profileId}/review` | Owner/Admin/Client Manager | Candidates ready | Edit candidate, approve/reject | low confidence, source conflict, missing required field, stale version |
 | Brand detail | `/brands/{id}` | Relevant production roles | Brand exists | Open active profile/assets/rules | no approved profile, approved, superseded |
 | Brand assets | `/brands/{id}/assets` | Brand roles | Brand exists | Upload/approve/revoke | quarantine, validating, clean, rejected, revoked |
-| Brand rules | `/brands/{id}/rules` | Owner/Admin/Brand Manager | Brand exists | Add required/prohibited rule | empty, duplicate, conflicting rule |
+| Brand rules | `/brands/{id}/rules` | Owner/Admin/Client Manager | Brand exists | Add required/prohibited rule | empty, duplicate, conflicting rule |
 
 ## 4. Blueprint Screens
 
 | Screen | Route | Roles | Entry / exit | Primary actions | State requirements |
 |---|---|---|---|---|---|
-| Blueprint library | `/blueprints` | Owner/Admin/Brand Manager/Strategist/Operator | Approved brand selected | Select/open/start discovery | empty, loading, incompatible, archived |
+| Blueprint library | `/blueprints` | Owner/Admin/Client Manager | Approved brand selected | Select/open/start discovery | empty, loading, incompatible, archived |
 | Path selection | `/blueprints/new` | Creation roles | Approved brand | Choose existing or new discovery | no library, stale selected brand, explicit choice |
 | Candidate search | `/discover` | Creation roles | New discovery chosen | Search/filter/select | empty before search, searching, no results, provider delayed/failed |
 | Candidate detail | `/discover/{candidateId}` | Creation roles | Candidate exists | Inspect metrics/rights; extract | stale metrics, missing rights, provider payload partial |
-| Blueprint stages | `/blueprints/{id}/stages` | Creation roles/Operator | Extraction created | Observe/retry permitted stage | per-stage queued/running/retrying/failed/blocked/partial |
+| Blueprint stages | `/blueprints/{id}/stages` | Creation roles | Extraction created | Observe/retry permitted stage | per-stage queued/running/retrying/failed/blocked/partial |
 | Blueprint detail | `/blueprints/{id}` | Production roles | Ready or historical blueprint | Use for scripts; inspect formula/prompt | pending, ready, blocked, failed, archived |
 
 ## 5. Script Screens
@@ -68,25 +68,25 @@ surface.
 | Screen | Route | Roles | Entry / exit | Primary actions | State requirements |
 |---|---|---|---|---|---|
 | Tournament list | `/scripts` | Creation roles | Workspace | Create/open tournament | empty, loading, status filters |
-| New tournament | `/scripts/new` | Owner/Admin/Brand Manager/Strategist/Operator | Approved brand + ready formula | Set objective/constraints; generate | malformed constraints, stale brand/blueprint, blocked claim |
+| New tournament | `/scripts/new` | Owner/Admin/Client Manager | Approved brand + ready formula | Set objective/constraints; generate | malformed constraints, stale brand/blueprint, blocked claim |
 | Tournament detail | `/scripts/{id}` | Creation roles | Tournament exists | Observe variants/evaluations | generating, partial-valid, evaluating, failed |
-| Script comparison | `/scripts/{id}/compare` | Owner/Admin/Brand Manager/Strategist/Operator | Ready for selection | Compare/select exact variant | no valid variants, stale selection, already selected |
+| Script comparison | `/scripts/{id}/compare` | Owner/Admin/Client Manager | Ready for selection | Compare/select exact variant | no valid variants, stale selection, already selected |
 
 ## 6. Avatar, Credits and Generation Screens
 
 | Screen | Route | Roles | Entry / exit | Primary/destructive actions | State requirements |
 |---|---|---|---|---|---|
-| Avatar catalogue | `/avatars` | Owner/Admin/Brand Manager/Strategist read/Operator | Approved brand | Select/manage allowed avatar | empty, consent missing, expiring, expired, revoked |
-| Credits | `/credits` | Owner/Admin/Finance; balance summary for generation roles | Workspace wallet | View ledger/purchase | loading, zero balance, pending purchase, reconciliation mismatch |
-| Purchase credits | `/credits/purchase` | Owner/Finance where delegated | Wallet | Start payment | amount invalid, provider pending, callback delayed, failed, succeeded |
-| New generation | `/generate/new` | Owner/Admin/Brand Manager/Strategist | Selected script + eligible avatar | Estimate, confirm reservation | estimating, stale estimate, insufficient credit, price changed |
-| Generation detail | `/generations/{id}` | Generation roles/Operator | Generation created | Observe/cancel where safe | queued, submitting, accepted, unknown-checking, generating, generated, failed, cancel requested |
+| Avatar catalogue | `/avatars` | Owner/Admin/Client Manager | Approved brand | Select/manage allowed avatar | empty, consent missing, expiring, expired, revoked |
+| Credits | `/credits` | Owner/Admin/Client Manager | Workspace wallet | View ledger/purchase | loading, zero balance, pending purchase, reconciliation mismatch |
+| Purchase credits | `/credits/purchase` | Owner/Admin/Client Manager | Wallet | Start payment | amount invalid, provider pending, callback delayed, failed, succeeded |
+| New generation | `/generate/new` | Owner/Admin/Client Manager | Selected script + eligible avatar | Estimate, confirm reservation | estimating, stale estimate, insufficient credit, price changed |
+| Generation detail | `/generations/{id}` | Owner/Admin/Client Manager | Generation created | Observe/cancel where safe | queued, submitting, accepted, unknown-checking, generating, generated, failed, cancel requested |
 
 ## 7. Composition and Review Screens
 
 | Screen | Route | Roles | Entry / exit | Primary/destructive actions | State requirements |
 |---|---|---|---|---|---|
-| Composition | `/compositions/{id}` | Owner/Admin/Brand Manager/Strategist/Operator | Retained generated asset | Enter direction; validate; render | planning, malformed plan, unsupported capability, validated, rendering |
+| Composition | `/compositions/{id}` | Owner/Admin/Client Manager | Retained generated asset | Enter direction; validate; render | planning, malformed plan, unsupported capability, validated, rendering |
 | Final video | `/videos/{id}` | Production/review roles | Render exists | Inspect/download/create revision | rendering, rendered, failed, superseded, signed URL refresh |
 | Review queue | `/reviews` | Review participants | Workspace | Open assigned review | empty, loading, role-filtered |
 | Review item | `/reviews/{id}` | Comment roles; decision roles restricted | Exact final video | Comment, request changes, approve/reject | media processing, comment failure, stale/superseded, approved/rejected |
@@ -96,9 +96,9 @@ surface.
 | Screen | Route | Roles | Entry / exit | Primary/destructive actions | State requirements |
 |---|---|---|---|---|---|
 | Calendar | `/calendar` | Publishing roles; Reviewer read if assigned | Workspace | Open/create schedule | empty, timezone display, conflict, loading |
-| New schedule | `/calendar/new` | Owner/Admin/Brand Manager/Strategist/Operator | Exact approved video | Select platform/account/time; export | invalid/past time, unauthorised account, stale approval |
-| Post detail | `/posts/{id}` | Publishing roles/Operator | Calendar post | Publish, verify, provide manual URL, cancel before submit | scheduled, submitting, accepted, unverified, retrying, mismatch, verified, failed |
-| Lineage | `/lineage/{finalVideoId}` | Authorised production roles/Finance limited cost view | Final video | Inspect/export manifest | loading, incomplete, hash mismatch, ready |
+| New schedule | `/calendar/new` | Owner/Admin/Client Manager | Exact approved video | Select platform/account/time; export | invalid/past time, unauthorised account, stale approval |
+| Post detail | `/posts/{id}` | Publishing roles | Calendar post | Publish, verify, provide manual URL, cancel before submit | scheduled, submitting, accepted, unverified, retrying, mismatch, verified, failed |
+| Lineage | `/lineage/{finalVideoId}` | Authorised production roles | Final video | Inspect/export manifest | loading, incomplete, hash mismatch, ready |
 
 ## 9. Confirmation Dialogues
 

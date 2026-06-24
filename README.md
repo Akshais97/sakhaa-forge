@@ -50,7 +50,7 @@ Brand intake and approval
 
 ## Toolchain
 
-- Node.js `22.22.1`
+- Node.js `24.15.0`
 - pnpm 11, with the exact version committed in root `packageManager` by V0-F0
 - Python `3.12.13`
 

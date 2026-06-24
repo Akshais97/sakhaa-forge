@@ -2,7 +2,7 @@
 
 ## Local
 
-1. Install Node.js 22.22.1, the exact pnpm 11 version committed by V0-F0, Python 3.12.13,
+1. Install Node.js 24.15.0, the exact pnpm 11 version committed by V0-F0, Python 3.12.13,
    Docker Desktop and
    the worker-image-pinned `ffmpeg`.
 2. Create environment files from redacted examples.

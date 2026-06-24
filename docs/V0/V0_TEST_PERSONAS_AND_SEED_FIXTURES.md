@@ -20,11 +20,8 @@
 |---|---|---|---|---|---|
 | Asha Owner | `00000000-0000-4000-8000-000000000001` | `asha.owner@example.test` | Aster | Owner | Full governance and acceptance |
 | Arjun Admin | `00000000-0000-4000-8000-000000000002` | `arjun.admin@example.test` | Aster | Admin | Members, credentials, operations |
-| Bhavna Brand Manager | `00000000-0000-4000-8000-000000000003` | `bhavna.brand@example.test` | Aster | Brand Manager | Brand approval and production |
-| Sameer Strategist | `00000000-0000-4000-8000-000000000004` | `sameer.strategy@example.test` | Aster | Strategist | Blueprint/script/generation/calendar |
+| Bhavna Client Manager | `00000000-0000-4000-8000-000000000003` | `bhavna.client@example.test` | Aster | Client Manager | Brand, production, wallet and publishing |
 | Riya Reviewer | `00000000-0000-4000-8000-000000000005` | `riya.review@example.test` | Aster | Reviewer | Review comments only |
-| Om Operator | `00000000-0000-4000-8000-000000000006` | `om.operator@example.test` | Aster | Operator | Jobs, generation and publishing |
-| Farah Finance | `00000000-0000-4000-8000-000000000007` | `farah.finance@example.test` | Aster | Finance | Ledger/reconciliation/adjustments |
 | Neel Other Tenant | `00000000-0000-4000-8000-000000000008` | `neel.owner@example.test` | Meridian | Owner | Cross-tenant negative tests |
 | Mira No Workspace | `00000000-0000-4000-8000-000000000009` | `mira.new@example.test` | None | None | Empty onboarding |
 | Dev Service Worker | `00000000-0000-4000-8000-000000000010` | None | Service identity | Worker | Internal API authentication |
@@ -140,7 +137,7 @@ Each adapter accepts a test-only scenario header/config outside production.
 | `timeout_after_acceptance` | Provider accepts but client times out | `unknown`, reconciliation only |
 | `rate_limited` | `429` with `Retry-After` | Delayed bounded retry |
 | `provider_failed` | Terminal provider failure | Release credits once |
-| `corrupt_output` | Completed URL yields wrong/malformed media | No capture; operator-visible failure |
+| `corrupt_output` | Completed URL yields wrong/malformed media | No capture; admin-visible failure |
 | `cost_mismatch` | Provider cost exceeds authorised maximum | Block settlement and escalate |
 
 Payment simulators additionally cover refund, dispute and amount/currency mismatch.
@@ -170,4 +167,3 @@ The full fixture journey must emit:
 - Cleanup deletes only test-owned resources with the fixture prefix.
 - Time, random IDs and provider responses are controlled.
 - Tests never depend on execution order.
-

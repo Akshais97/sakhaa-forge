@@ -9,7 +9,6 @@
   artifact hash before committing completion.
 - Retries use bounded exponential backoff with jitter.
 - Validation and policy failures are non-retryable.
-- Exhausted work enters an operator-visible dead-letter state.
+- Exhausted work enters an Owner/Admin-visible dead-letter state.
 - Cancellation blocks new leases and reconciles already-submitted provider operations.
 - Redis loss cannot erase, complete or financially alter canonical work.
-

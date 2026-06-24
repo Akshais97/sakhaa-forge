@@ -154,7 +154,7 @@ No event contains exact wallet balance or exact payment/provider identifiers.
 | Revision rate | Number of final-video revisions before approval |
 | Provider unknown rate | Unknown operations / provider submissions |
 | Generation failure rate | Failed generation jobs / confirmed generations |
-| Operator intervention rate | Journeys needing protected recovery action |
+| Admin recovery intervention rate | Journeys needing protected recovery action |
 | Cost per verified post | Settled variable cost / verified posts |
 | Repeat production rate | Workspaces starting another journey within 30 days |
 | Approval rate | Approved review items / terminal review decisions |
@@ -170,4 +170,3 @@ behavioural analytics alone.
 - Analytics delivery failure never blocks the product transaction.
 - CI validates event names and property allowlists.
 - Test environments use a capture sink and assert prohibited fields are absent.
-

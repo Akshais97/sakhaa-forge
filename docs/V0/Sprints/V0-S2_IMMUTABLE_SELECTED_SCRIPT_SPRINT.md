@@ -2,7 +2,7 @@
 
 ## Sprint Objective
 
-Let a strategist compare evaluated variants and select one exact immutable script version
+Let a client manager compare evaluated variants and select one exact immutable script version
 for generation.
 
 ## Source Contracts

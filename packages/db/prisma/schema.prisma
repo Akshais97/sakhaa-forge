@@ -1,12 +1,270 @@
-// Product V0 F0 migration metadata only.
-// Business models are introduced by owning slices after predecessor evidence is retained.
-// Sources: docs/V0/V0_PRISMA_SCHEMA.md and docs/V0/Sprints/V0-F0_RUNNABLE_WALKING_SKELETON_SPRINT.md.
+// Product V0 F3 identity, tenancy, idempotency and artifact schema.
+// Sources: docs/V0/V0_PRISMA_SCHEMA.md and docs/V0/Sprints/V0-F3_PRIVATE_ARTIFACT_UPLOAD_QUARANTINE_AND_AUTHORIZED_RETRIEVAL_SPRINT.md.
 
 generator client {
   provider = "prisma-client-js"
+  output   = "../generated/client"
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  CLIENT_MANAGER
+  REVIEWER
+
+  @@map("membership_role")
+}
+
+enum RecordStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+
+  @@map("record_status")
+}
+
+enum AssetTrustStatus {
+  QUARANTINED
+  VALIDATING
+  CLEAN
+  REJECTED
+  DELETED
+
+  @@map("asset_trust_status")
+}
+
+enum JobStatus {
+  CREATED
+  QUEUED
+  LEASED
+  RUNNING
+  RETRY_WAIT
+  SUCCEEDED
+  FAILED
+  CANCEL_REQUESTED
+  CANCELLED
+  EXPIRED
+
+  @@map("job_status")
+}
+
+model User {
+  id          String       @id @db.Uuid
+  email       String?      @db.VarChar(320)
+  displayName String?      @map("display_name") @db.VarChar(160)
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  memberships Membership[]
+  auditEvents AuditEvent[] @relation("AuditActor")
+  idempotencyRecords IdempotencyRecord[] @relation("IdempotencyActor")
+
+  @@map("users")
+}
+
+model Workspace {
+  id          String       @id @default(uuid()) @db.Uuid
+  name        String       @db.VarChar(120)
+  slug        String       @db.VarChar(140)
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  memberships Membership[]
+  auditEvents AuditEvent[]
+  idempotencyRecords IdempotencyRecord[]
+  artifacts Artifact[]
+  inboxEvents InboxEvent[]
+  jobs Job[]
+  jobAttempts JobAttempt[]
+  jobEvents JobEvent[]
+  outboxEvents OutboxEvent[]
+
+  @@unique([slug])
+  @@index([status, createdAt])
+  @@map("workspaces")
+}
+
+model Membership {
+  id          String         @id @default(uuid()) @db.Uuid
+  workspaceId String         @map("workspace_id") @db.Uuid
+  userId      String         @map("user_id") @db.Uuid
+  role        MembershipRole
+  status      RecordStatus   @default(ACTIVE)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id])
+  user        User           @relation(fields: [userId], references: [id])
+
+  @@unique([workspaceId, userId])
+  @@index([userId, status])
+  @@index([workspaceId, role])
+  @@map("memberships")
+}
+
+model AuditEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  workspaceId   String?   @map("workspace_id") @db.Uuid
+  actorUserId   String?   @map("actor_user_id") @db.Uuid
+  eventType     String    @map("event_type") @db.VarChar(120)
+  targetType    String?   @map("target_type") @db.VarChar(120)
+  targetId      String?   @map("target_id") @db.Uuid
+  reason        String?   @db.VarChar(500)
+  occurredAt    DateTime  @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  workspace     Workspace? @relation(fields: [workspaceId], references: [id])
+  actor         User?      @relation("AuditActor", fields: [actorUserId], references: [id])
+
+  @@index([workspaceId, occurredAt])
+  @@index([actorUserId, occurredAt])
+  @@map("audit_events")
+}
+
+model IdempotencyRecord {
+  id             String    @id @default(uuid()) @db.Uuid
+  workspaceId    String?   @map("workspace_id") @db.Uuid
+  actorUserId    String    @map("actor_user_id") @db.Uuid
+  operation      String    @db.VarChar(120)
+  idempotencyKey String    @map("idempotency_key") @db.VarChar(200)
+  requestHash    String    @map("request_hash") @db.Char(64)
+  responseStatus Int       @map("response_status")
+  responseBody   Json      @map("response_body")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  workspace      Workspace? @relation(fields: [workspaceId], references: [id])
+  actor          User      @relation("IdempotencyActor", fields: [actorUserId], references: [id])
+
+  @@unique([workspaceId, operation, idempotencyKey])
+  @@unique([actorUserId, operation, idempotencyKey])
+  @@index([actorUserId, operation, createdAt])
+  @@map("idempotency_records")
+}
+
+model Artifact {
+  id             String           @id @default(uuid()) @db.Uuid
+  workspaceId    String           @map("workspace_id") @db.Uuid
+  fileName       String           @map("file_name") @db.VarChar(240)
+  contentType    String           @map("content_type") @db.VarChar(120)
+  byteSize       Int              @map("byte_size")
+  sha256         String           @db.Char(64)
+  status         AssetTrustStatus @default(QUARANTINED)
+  retentionClass String           @map("retention_class") @db.VarChar(80)
+  producer       String           @db.VarChar(120)
+  schemaVersion  String           @map("schema_version") @db.VarChar(80)
+  objectKey      String           @map("object_key") @db.VarChar(500)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace      Workspace        @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, updatedAt, id])
+  @@map("artifacts")
+}
+
+model Job {
+  id             String       @id @default(uuid()) @db.Uuid
+  workspaceId    String       @map("workspace_id") @db.Uuid
+  type           String       @db.VarChar(120)
+  resourceClass  String       @map("resource_class") @db.VarChar(40)
+  status         JobStatus    @default(CREATED)
+  priority       Int          @default(0)
+  inputHash      String       @map("input_hash") @db.Char(64)
+  input          Json
+  outputArtifactId String?    @map("output_artifact_id") @db.Uuid
+  lastErrorCode  String?      @map("last_error_code") @db.VarChar(120)
+  nextRunAt      DateTime?    @map("next_run_at") @db.Timestamptz(6)
+  maxAttempts    Int          @default(5) @map("max_attempts")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace      Workspace    @relation(fields: [workspaceId], references: [id])
+  attempts       JobAttempt[]
+  events         JobEvent[]
+  parentEdges    JobDependency[] @relation("JobParent")
+  childEdges     JobDependency[] @relation("JobChild")
+
+  @@index([workspaceId, status, nextRunAt])
+  @@index([workspaceId, updatedAt, id])
+  @@map("jobs")
+}
+
+model JobAttempt {
+  id             String    @id @default(uuid()) @db.Uuid
+  workspaceId    String    @map("workspace_id") @db.Uuid
+  jobId          String    @map("job_id") @db.Uuid
+  attemptNumber  Int       @map("attempt_number")
+  leaseToken     String    @map("lease_token") @db.Uuid
+  status         JobStatus @default(LEASED)
+  leasedAt       DateTime  @default(now()) @map("leased_at") @db.Timestamptz(6)
+  heartbeatAt    DateTime  @default(now()) @map("heartbeat_at") @db.Timestamptz(6)
+  completedAt    DateTime? @map("completed_at") @db.Timestamptz(6)
+  errorCode      String?   @map("error_code") @db.VarChar(120)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace      Workspace @relation(fields: [workspaceId], references: [id])
+  job            Job       @relation(fields: [jobId], references: [id])
+
+  @@unique([jobId, attemptNumber])
+  @@index([workspaceId, status, heartbeatAt])
+  @@map("job_attempts")
+}
+
+model JobDependency {
+  id        String @id @default(uuid()) @db.Uuid
+  parentJobId String @map("parent_job_id") @db.Uuid
+  childJobId  String @map("child_job_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  parentJob Job @relation("JobParent", fields: [parentJobId], references: [id])
+  childJob  Job @relation("JobChild", fields: [childJobId], references: [id])
+
+  @@unique([parentJobId, childJobId])
+  @@map("job_dependencies")
+}
+
+model JobEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  jobId       String    @map("job_id") @db.Uuid
+  eventType   String    @map("event_type") @db.VarChar(120)
+  payload     Json
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  job         Job       @relation(fields: [jobId], references: [id])
+
+  @@index([workspaceId, jobId, createdAt])
+  @@map("job_events")
+}
+
+model OutboxEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  workspaceId   String    @map("workspace_id") @db.Uuid
+  eventType     String    @map("event_type") @db.VarChar(120)
+  aggregateType String    @map("aggregate_type") @db.VarChar(120)
+  aggregateId   String    @map("aggregate_id") @db.Uuid
+  payload       Json
+  status        String    @default("PENDING") @db.VarChar(40)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  publishedAt   DateTime? @map("published_at") @db.Timestamptz(6)
+  workspace     Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, status, createdAt])
+  @@map("outbox_events")
+}
+
+model InboxEvent {
+  id             String   @id @default(uuid()) @db.Uuid
+  workspaceId    String   @map("workspace_id") @db.Uuid
+  source         String   @db.VarChar(120)
+  eventType      String   @map("event_type") @db.VarChar(120)
+  idempotencyKey String   @map("idempotency_key") @db.VarChar(200)
+  payloadHash    String   @map("payload_hash") @db.Char(64)
+  payload         Json
+  consumedAt      DateTime? @map("consumed_at") @db.Timestamptz(6)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  workspace      Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@unique([workspaceId, source, idempotencyKey])
+  @@index([workspaceId, createdAt])
+  @@map("inbox_events")
 }

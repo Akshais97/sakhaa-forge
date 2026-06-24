@@ -98,7 +98,8 @@ V0 may create export-ready events, but delivery to V2 is not required for V0 acc
 
 ## Job Infrastructure
 
-- `Job`: work type, canonical state, priority, resource class and input hash.
+- `Job`: work type, canonical state, priority, resource class, input hash and retained
+  last error code for dead-letter recovery.
 - `JobAttempt`: worker lease, heartbeat, retry and error.
 - `JobDependency`: parent/child edge.
 - `JobEvent`: append-only progress and transitions.
@@ -107,6 +108,8 @@ V0 may create export-ready events, but delivery to V2 is not required for V0 acc
 
 - Every tenant row contains `workspace_id`.
 - Unique `(workspace_id, operation, idempotency_key)`.
+- Pre-workspace externally visible mutations also carry unique
+  `(actor_user_id, operation, idempotency_key)` until a workspace boundary exists.
 - Unique provider operation by provider plus idempotency key.
 - One active credit reservation per generation job.
 - One active lease per job.

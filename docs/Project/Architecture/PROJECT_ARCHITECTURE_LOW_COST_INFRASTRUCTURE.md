@@ -73,7 +73,7 @@ For at least 30 representative jobs record:
 - India-to-B2 transfer bytes and latency;
 - V0-reported creator-credit cost and generated duration;
 - retries, failures, and duplicate-prevention outcome;
-- operator time;
+- manual intervention time;
 - total cost per successful scored minute and approved revision.
 
 Only measured results may populate the production budget. Provider price pages are

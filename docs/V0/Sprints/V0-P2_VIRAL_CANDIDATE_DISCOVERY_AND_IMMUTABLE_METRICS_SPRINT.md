@@ -2,7 +2,7 @@
 
 ## Sprint Objective
 
-Allow a strategist to search a real-estate niche, review ranked viral candidates and
+Allow a client manager to search a real-estate niche, review ranked viral candidates and
 select one with immutable metric evidence and rights warnings.
 
 ## Source Contracts

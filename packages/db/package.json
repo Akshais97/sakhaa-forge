@@ -7,5 +7,11 @@
     "generate": "node scripts/db-generate.mjs",
     "migrate:dev": "node scripts/db-migrate-dev.mjs",
     "validate": "node scripts/db-validate.mjs"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.0"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.0"
   }
 }

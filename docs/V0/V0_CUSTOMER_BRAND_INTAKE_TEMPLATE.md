@@ -210,5 +210,5 @@ Signature/evidence reference:
 
 ## 14. Approval
 
-The extracted brand profile remains a draft until a Brand Manager, Admin or Owner reviews
+The extracted brand profile remains a draft until a Client Manager, Admin or Owner reviews
 the source evidence, resolves conflicts and approves one exact version.

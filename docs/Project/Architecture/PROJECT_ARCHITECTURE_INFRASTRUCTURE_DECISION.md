@@ -50,7 +50,7 @@ Run representative end-to-end jobs and record:
 - queue delay, retries and duplicate handling;
 - successful cost per processed video minute;
 - database connection and query-plan behavior;
-- worker startup, GPU utilization and operator intervention.
+- worker startup, GPU utilization and manual intervention.
 
 The stack may be consolidated later, but changing database ownership, queue semantics or
 storage layout requires a superseding ADR.

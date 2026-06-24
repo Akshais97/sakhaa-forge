@@ -6,7 +6,7 @@
 > predecessor evidence is retained.
 
 **Goal:** Deliver standalone Product V0, Sakhaa Forge, as a sequence of
-small, demonstrable user and operator outcomes.
+small, demonstrable user and administrator outcomes.
 
 **Architecture:** Next.js uses a generated client for the NestJS/Fastify control plane.
 Prisma-managed Supabase PostgreSQL owns domain, job and financial truth. BullMQ carries
@@ -27,7 +27,7 @@ document explicitly promotes them.
 
 Every slice must be planned from first principles:
 
-- identify the user or operator outcome before choosing implementation layers;
+- identify the user or administrator outcome before choosing implementation layers;
 - trace every requirement to an owning document, status, permission, route, model, job,
   screen state or evidence artifact;
 - write tests against observable behaviour and contract boundaries, not internal
@@ -40,7 +40,7 @@ Every slice must be planned from first principles:
 
 Each slice contains:
 
-- **Outcome:** the behavior a user or operator can demonstrate;
+- **Outcome:** the behavior a user or administrator can demonstrate;
 - **Includes:** the minimum end-to-end capability;
 - **Primary records:** the domain records introduced or completed;
 - **Contracts/jobs:** API, callback or worker surfaces involved;
@@ -264,7 +264,7 @@ upload do not lose canonical work, create two completions or accept substituted 
 
 ### V0-F5: Traceable Operations, Restore And Feature Capability Control
 
-**Outcome:** An operator can trace a request across API, outbox, queue, worker and
+**Outcome:** An Owner or Admin can trace a request across API, outbox, queue, worker and
 artifact; inspect failed jobs; disable a capability; and recover canonical state after a
 restore drill.
 
@@ -275,7 +275,7 @@ restore drill.
   dead letters and artifact validation;
 - `ServiceCredential` metadata, secret-manager references, rotation status and
   environment/workspace ownership without storing secret values in PostgreSQL;
-- operator views or protected endpoints for job history and recovery actions;
+- protected Owner/Admin views or endpoints for job history and recovery actions;
 - workspace capability configuration for unfinished slices;
 - backup/PITR and object-reference restore procedure;
 - local provider simulators with success, timeout, duplicate, malformed and bad-signature
@@ -306,7 +306,7 @@ side effects or mutate immutable financial/lineage state.
 
 ### V0-B1: Safe Brand Intake
 
-**Outcome:** A brand manager submits a website URL and approved files, sees crawl/upload
+**Outcome:** A client manager submits a website URL and approved files, sees crawl/upload
 scope before execution, and receives a durable intake run.
 
 **Includes:** URL normalization, crawl scope, robots/policy recording, SSRF protection,
@@ -350,7 +350,7 @@ UI and candidate-source trace.
 
 ### V0-B3: Human-Approved Versioned Brand Memory
 
-**Outcome:** A brand manager edits candidates, records required/prohibited rules, approves
+**Outcome:** A client manager edits candidates, records required/prohibited rules, approves
 one exact profile version, and production APIs reject every unapproved or superseded
 version.
 
@@ -374,7 +374,7 @@ journey and approval audit.
 
 ### V0-P1: Explicit Blueprint Path Selection
 
-**Outcome:** A strategist chooses either an approved existing blueprint or new viral
+**Outcome:** A client manager chooses either an approved existing blueprint or new viral
 discovery; both paths create the same downstream blueprint-request contract.
 
 **Includes:** library list with bounded pagination, compatibility metadata, empty library
@@ -395,7 +395,7 @@ test.
 
 ### V0-P2: Viral Candidate Discovery And Immutable Metrics
 
-**Outcome:** A strategist searches a real-estate niche, reviews ranked candidates and
+**Outcome:** A client manager searches a real-estate niche, reviews ranked candidates and
 selects one candidate with source/right warnings and frozen metric evidence.
 
 **Includes:** Xpoz adapter, recorded fixtures, manual candidate fallback, bounded ranking,
@@ -485,7 +485,7 @@ lineage and ready-blueprint browser demo.
 
 ### V0-S1: Auditable Script Tournament
 
-**Outcome:** A strategist requests 10-20 brand/formula-constrained scripts and sees every
+**Outcome:** A client manager requests 10-20 brand/formula-constrained scripts and sees every
 variant with hook, cadence, CTA, claims, captions, provenance and evaluation.
 
 **Includes:** prompt/model versions, deterministic simulator, policy checks, brand-rule
@@ -506,7 +506,7 @@ and tournament browser journey.
 
 ### V0-S2: Immutable Selected Script
 
-**Outcome:** The strategist compares evaluated variants and selects one exact immutable
+**Outcome:** The client manager compares evaluated variants and selects one exact immutable
 script version for generation.
 
 **Includes:** comparison UI, explicit selection, approver identity, optimistic-version
@@ -552,8 +552,8 @@ enter a generation estimate or job.
 internationally and sees an append-only reconciled ledger.
 
 **Includes:** wallet creation, price/currency policy, checkout initiation, signed callback
-inbox, duplicate callback handling, purchase/refund/dispute status, finance-only
-adjustments, compensating ledger entries and finance ledger view.
+inbox, duplicate callback handling, purchase/refund/dispute status, Owner/Admin
+adjustments, compensating ledger entries and wallet ledger view.
 
 **Primary records:** `CreditWallet`, `CreditPurchase`, `CreditLedgerEntry`, `InboxEvent`.
 
@@ -565,7 +565,7 @@ success never create duplicate credit. Refunds, disputes and adjustments never e
 delete prior ledger entries.
 
 **Evidence:** signed callback fixtures, replay test, purchase/refund/dispute reconciliation
-tests, finance-role adjustment test and purchase browser journey using simulators.
+tests, Admin adjustment permission test and purchase browser journey using simulators.
 
 **Depends on:** V0-F5.  
 **Gate:** V0-G4.
@@ -754,7 +754,7 @@ calendar browser journey.
 
 ### V0-U2: Idempotent Meta Publication
 
-**Outcome:** An authorized operator publishes the approved calendar post to the intended
+**Outcome:** An authorized Owner, Admin or Client Manager publishes the approved calendar post to the intended
 Meta account and receives one external post identity or a recoverable uncertain state.
 
 **Includes:** Meta adapter/simulator, credential metadata, account confirmation,
@@ -776,7 +776,7 @@ simulator journey.
 
 ### V0-U3: Idempotent YouTube Shorts Publication
 
-**Outcome:** An authorized operator publishes the same approved contract to YouTube
+**Outcome:** An authorized Owner, Admin or Client Manager publishes the same approved contract to YouTube
 Shorts with quota-aware behavior and one external post identity.
 
 **Includes:** YouTube adapter/simulator, quota state, account confirmation, upload
@@ -884,7 +884,7 @@ This slice also proves:
 publication without manual intervention inside the pipeline, while V1 and V2 are absent.
 
 **Includes:** real/staging-approved providers, exact screenshots, stable IDs/hashes,
-ledger reconciliation, operator-time capture, first-video timing, revisions, cost and
+ledger reconciliation, manual-intervention time capture, first-video timing, revisions, cost and
 pilot scorecard evidence.
 
 **Primary records:** All V0 production records.
@@ -926,7 +926,7 @@ evidence.
 | `V0-F2` | Reusing an idempotency key with different input is accepted or malformed input creates state. | Generate OpenAPI and TypeScript client, implement RFC 9457 errors, cursor envelopes, idempotency records and contract-diff CI. | Red/green idempotency tests, duplicate-same-input proof, duplicate-different-input rejection, generated artifact reproducibility. |
 | `V0-F3` | A cross-tenant or expired signed URL can access an artifact, or a hash mismatch is accepted. | Implement private artifact records, signed upload/download, quarantine/clean/private storage adapters, media validation and lifecycle cleanup. | Upload-to-clean/rejected browser flows, cross-tenant signed URL tests, object-substitution test, local/B2 adapter fixtures. |
 | `V0-F4` | Duplicate delivery or worker crash creates two completions, loses work or accepts substituted output. | Add canonical PostgreSQL jobs, attempts, dependencies, events, outbox, BullMQ wake-ups, worker claim/heartbeat/complete/fail APIs and dead-letter visibility. | Redis-loss recovery, duplicate-delivery test, worker-crash replay test, job status UI and dead-letter evidence. |
-| `V0-F5` | An operator cannot trace or safely recover failed work, or recovery bypasses authorization/immutability. | Add OpenTelemetry propagation, structured metrics/logs, credential metadata, protected recovery controls, capability flags, restore drill and simulator modes. | End-to-end trace evidence, queue-age alert, capability-disable test, restore report preserving RLS/artifacts and secret/signed-URL log scan. |
+| `V0-F5` | An Owner/Admin cannot trace or safely recover failed work, or recovery bypasses authorization/immutability. | Add OpenTelemetry propagation, structured metrics/logs, credential metadata, protected recovery controls, capability flags, restore drill and simulator modes. | End-to-end trace evidence, queue-age alert, capability-disable test, restore report preserving RLS/artifacts and secret/signed-URL log scan. |
 
 ### Brand And Blueprint Execution Detail
 
@@ -948,7 +948,7 @@ evidence.
 | `V0-S1` | The tournament advances with fewer than 10 valid scripts, prohibited claims, schema-invalid output or missing evaluations. | Generate 10-20 variants through deterministic simulator/adapter, preserve prompt/model versions, evaluate hook/timing/CTA/claims/captions/tone and expose progress. | Variant-count boundary tests, prohibited-claim test, malformed/refusal tests and tournament browser journey. |
 | `V0-S2` | A stale, unevaluated, rejected, superseded or cross-workspace variant can be selected for generation. | Build comparison UI, explicit immutable selected-script record, optimistic-version guard, approver identity and idempotent selection. | Stale/double-select tests, immutable identity proof and selection audit. |
 | `V0-G1` | Expired, revoked, missing-evidence or wrong-workspace avatar can enter a generation estimate. | Build avatar catalog, consent evidence, likeness/voice scope, expiry/revocation checks, brand/workspace eligibility and unavailable reasons. | Revocation/expiry tests, cross-workspace test and avatar-selection browser journey. |
-| `V0-G2` | Forged/replayed payment callback or amount/currency mismatch creates duplicate credit or edits ledger history. | Implement wallet, purchase, signed callback inbox, refunds/disputes, finance adjustments and append-only ledger view for Razorpay/Stripe simulators. | Signed callback fixtures, replay rejection, purchase/refund/dispute reconciliation and finance-role adjustment test. |
+| `V0-G2` | Forged/replayed payment callback or amount/currency mismatch creates duplicate credit or edits ledger history. | Implement wallet, purchase, signed callback inbox, refunds/disputes, Admin adjustments and append-only ledger view for Razorpay/Stripe simulators. | Signed callback fixtures, replay rejection, purchase/refund/dispute reconciliation and Admin adjustment permission test. |
 | `V0-G3` | Stale estimate, insufficient balance, changed input, double-click or concurrent confirmation creates over-reservation or duplicate generation. | Implement price versions, estimate expiry, balance checks, maximum authorization, confirmation UI and transactional credit reservation. | Concurrent reservation test, stale-price test, insufficient-credit UI and one-reservation ledger proof. |
 | `V0-G4` | Timeout after possible HeyGen acceptance is retried blindly or creates a second provider operation. | Persist provider operation before network I/O, handle request hashes, external IDs, callbacks, polling, concurrency limits, cancellation and `unknown`. | Crash-window test, timeout-to-unknown test, callback replay test, concurrency test and provider-operation audit. |
 | `V0-G5` | Crash between media retention and settlement causes orphaned capture, duplicate release or untrusted provider media. | Copy provider media to private storage, validate/hash it, create generated assets, reconcile provider cost and settle reservation exactly once. | Success capture proof, failure release proof, crash-window reconciliation, media hash and provider-total comparison. |
@@ -1049,7 +1049,7 @@ immutable predecessor identity they consume.
 | OpenAPI, generated client, errors and idempotency | F2 |
 | Private B2 artifacts, quarantine and signed access | F3 |
 | PostgreSQL jobs, BullMQ wake-ups and private workers | F4 |
-| Telemetry, credentials, operator recovery and restore | F5, A2 |
+| Telemetry, credentials, Admin recovery and restore | F5, A2 |
 | URL/file brand intake and crawl safety | B1 |
 | Evidence-backed brand extraction | B2 |
 | Human-approved versioned brand truth | B3 |
@@ -1147,12 +1147,9 @@ The slices must not implement:
 
 | Role | Slice outcomes exercised |
 |---|---|
-| Owner/Admin | Workspace, credentials, operations, export/deletion and all approval paths |
-| Brand Manager | B1-B3, P1-P5, S1-S2, G1, G3, R1-R2, U1-U4 |
-| Strategist | P1-P5, S1-S2, G3, R1, U1-U4 |
+| Owner/Admin | Workspace, credentials, recovery, reconciliation, export/deletion and all approval paths |
+| Client Manager | B1-B3, P1-P5, S1-S2, G1-G3, R1-R2 and U1-U4 production, wallet and publishing paths |
 | Reviewer | R1 comments and read-only review evidence |
-| Operator | Job recovery, approved production, publishing and reconciliation |
-| Finance | G2 ledger, refunds, disputes, adjustments and reconciliation |
 
 Role access never bypasses brand approval, consent, credit, exact-version review or
 publication verification.

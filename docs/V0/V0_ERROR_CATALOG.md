@@ -23,13 +23,13 @@ Provider payloads, secrets, internal paths and protected resource existence are 
 
 - `info`: expected user/business conflict.
 - `warn`: malformed, unauthorised, transient or policy-blocked request.
-- `error`: internal failure requiring operator investigation.
+- `error`: internal failure requiring Admin investigation.
 - `critical`: zero-tolerance security, duplicate paid work, wrong publication or data
   integrity incident.
 
 ## 3. Foundation, Auth and Contract Errors
 
-| Code | HTTP | User message | Retry | Operator action | Log | Hide existence |
+| Code | HTTP | User message | Retry | Admin action | Log | Hide existence |
 |---|---:|---|---|---|---|:---:|
 | `AUTH_REQUIRED` | 401 | Sign in to continue. | After sign-in | None | info | No |
 | `AUTH_TOKEN_INVALID` | 401 | Your session is not valid. Sign in again. | Yes | Investigate spikes | warn | No |
@@ -46,7 +46,7 @@ Provider payloads, secrets, internal paths and protected resource existence are 
 
 ## 4. Artifact and Crawl Errors
 
-| Code | HTTP | User message | Retry | Operator action | Log | Hide |
+| Code | HTTP | User message | Retry | Admin action | Log | Hide |
 |---|---:|---|---|---|---|:---:|
 | `UPLOAD_URL_EXPIRED` | 410 | This upload link expired. Start the upload again. | Yes | None | info | No |
 | `ASSET_TOO_LARGE` | 413 | This file is larger than the allowed limit. | No | None | info | No |
@@ -64,7 +64,7 @@ Provider payloads, secrets, internal paths and protected resource existence are 
 
 ## 5. Brand and Blueprint Errors
 
-| Code | HTTP | User message | Retry | Operator action | Log |
+| Code | HTTP | User message | Retry | Admin action | Log |
 |---|---:|---|---|---|---|
 | `BRAND_APPROVAL_REQUIRED` | 409 | Approve an exact brand profile before continuing. | No | None | info |
 | `BRAND_PROFILE_CONFLICT` | 409 | Another profile version is already active. Review the latest profile. | No | Investigate constraint only if unexpected | warn |
@@ -81,7 +81,7 @@ Provider payloads, secrets, internal paths and protected resource existence are 
 
 ## 6. AI and Script Errors
 
-| Code | HTTP | User message | Retry | Operator action | Log |
+| Code | HTTP | User message | Retry | Admin action | Log |
 |---|---:|---|---|---|---|
 | `AI_OUTPUT_EMPTY` | 422 | The AI service returned no usable result. | Conditional | Provider/model review | warn |
 | `AI_OUTPUT_SCHEMA_INVALID` | 422 | The AI result did not match the required structure. | Conditional | Prompt/schema review | error |
@@ -93,13 +93,13 @@ Provider payloads, secrets, internal paths and protected resource existence are 
 
 ## 7. Avatar, Payment and Generation Errors
 
-| Code | HTTP | User message | Retry | Operator action | Log |
+| Code | HTTP | User message | Retry | Admin action | Log |
 |---|---:|---|---|---|---|
 | `AVATAR_CONSENT_REQUIRED` | 409 | Valid likeness and voice consent is required. | No | Consent review | warn |
 | `AVATAR_CONSENT_EXPIRED` | 409 | This avatar consent expired. Renew it before generation. | No | None | info |
 | `AVATAR_CONSENT_REVOKED` | 409 | This avatar can no longer be used. | No | Audit future-use block | critical if bypass attempted |
 | `PAYMENT_SIGNATURE_INVALID` | 401 | The payment update could not be verified. | No | Payment/security incident | critical |
-| `PAYMENT_AMOUNT_MISMATCH` | 409 | The payment amount or currency did not match the purchase. | No | Finance reconciliation | critical |
+| `PAYMENT_AMOUNT_MISMATCH` | 409 | The payment amount or currency did not match the purchase. | No | Admin reconciliation | critical |
 | `PAYMENT_PENDING` | 202 | Payment confirmation is still pending. | Yes later | Reconcile ageing purchase | info |
 | `CREDIT_BALANCE_INSUFFICIENT` | 409 | Add creator credits before generating this video. | No | None | info |
 | `CREDIT_RESERVATION_CONFLICT` | 409 | Credits are already reserved for this generation. | No | Reconcile if inconsistent | warn |
@@ -109,12 +109,12 @@ Provider payloads, secrets, internal paths and protected resource existence are 
 | `PROVIDER_SUBMISSION_UNKNOWN` | 202 | We are checking whether the provider accepted this request. Do not submit again. | No manual retry | Reconcile | warn |
 | `PROVIDER_CALLBACK_INVALID` | 401 | The provider update could not be verified. | No | Security/provider incident | critical |
 | `PROVIDER_OUTPUT_INVALID` | 422 | The generated media failed validation and was not accepted. | Conditional | Inspect provider/artifact | error |
-| `PROVIDER_COST_EXCEEDS_AUTHORIZATION` | 409 | The provider cost exceeded the authorised maximum. Settlement is blocked. | No | Finance/provider escalation | critical |
+| `PROVIDER_COST_EXCEEDS_AUTHORIZATION` | 409 | The provider cost exceeded the authorised maximum. Settlement is blocked. | No | Admin/provider escalation | critical |
 | `GENERATION_CANCEL_UNCERTAIN` | 202 | Cancellation is requested. We must check the submitted provider operation first. | No manual retry | Reconcile | warn |
 
 ## 8. Composition and Review Errors
 
-| Code | HTTP | User message | Retry | Operator action | Log |
+| Code | HTTP | User message | Retry | Admin action | Log |
 |---|---:|---|---|---|---|
 | `AE_PLAN_SCHEMA_INVALID` | 422 | The composition plan is not valid. | Conditional | Planner/schema review | error |
 | `AE_ASSET_MISSING` | 422 | A referenced media asset is missing or unavailable. | No | Restore/reselect asset | warn |
@@ -127,7 +127,7 @@ Provider payloads, secrets, internal paths and protected resource existence are 
 
 ## 9. Publishing and Verification Errors
 
-| Code | HTTP | User message | Retry | Operator action | Log |
+| Code | HTTP | User message | Retry | Admin action | Log |
 |---|---:|---|---|---|---|
 | `PUBLISH_ACCOUNT_UNAUTHORISED` | 409 | Reconnect or select an authorised publishing account. | No | Credential review | warn |
 | `PUBLISH_SCHEDULE_INVALID` | 422 | Choose a valid future date and time. | No | None | info |
@@ -141,11 +141,10 @@ Provider payloads, secrets, internal paths and protected resource existence are 
 | `VERIFY_MANUAL_URL_REQUIRED` | 409 | Add the live post URL before verification. | After input | None | info |
 | `NOTIFICATION_DUPLICATE_BLOCKED` | 409 | This notification was already sent. | No | None | info |
 
-## 10. Operator Rules
+## 10. Admin Recovery Rules
 
 - Retry only when `retryable=true` and the owning policy permits it.
 - `unknown` paid/publishing operations reconcile; they are not manually resubmitted.
 - Critical errors open an incident and preserve raw evidence in protected storage.
 - User messages remain stable within `/api/v0`; wording changes that alter meaning require
   contract review and UI tests.
-

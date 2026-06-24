@@ -3,3 +3,7 @@ packages:
   - "packages/*"
   - "workers/*"
   - "tests"
+allowBuilds:
+  '@prisma/client': true
+  '@prisma/engines': true
+  prisma: true

@@ -19,14 +19,25 @@ const textExtensions = new Set([
   ".npmrc"
 ]);
 
+const ignoredFiles = new Set(["CLAUDE.md"]);
+const ignoredPrefixes = [".claude/", "graphify-out/"];
+
 export async function listTrackedTextFiles() {
   const { stdout } = await execFileAsync("git", ["ls-files", "--cached", "--others", "--exclude-standard"]);
   return stdout
     .split(/\r?\n/)
     .filter(Boolean)
-    .filter((file) => {
-      const dotIndex = file.lastIndexOf(".");
-      const extension = dotIndex >= 0 ? file.slice(dotIndex) : file;
-      return textExtensions.has(extension);
-    });
+    .filter(shouldIncludeTextFile);
+}
+
+export function shouldIncludeTextFile(file) {
+  if (ignoredFiles.has(file)) {
+    return false;
+  }
+  if (ignoredPrefixes.some((prefix) => file.startsWith(prefix))) {
+    return false;
+  }
+  const dotIndex = file.lastIndexOf(".");
+  const extension = dotIndex >= 0 ? file.slice(dotIndex) : file;
+  return textExtensions.has(extension);
 }

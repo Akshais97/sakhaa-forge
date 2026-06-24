@@ -21,7 +21,7 @@ vertical slices, not as many disconnected subsystems.
 | Dimension | Score | Judgment |
 |---|---:|---|
 | Problem and wedge | 9.3 | India-first real estate is specific and operationally testable |
-| Target user and job | 9.0 | Brand/operator workflow is clear; buyer evidence remains empirical |
+| Target user and job | 9.0 | Client production and Admin recovery workflow is clear; buyer evidence remains empirical |
 | End-to-end customer value | 9.5 | Produces a verified outcome, not merely generated media |
 | Scope and version boundaries | 9.6 | V0/V1/V2 ownership is now explicit |
 | Differentiation and data asset | 9.0 | Approved brand memory and creative lineage compound |
@@ -46,7 +46,7 @@ vertical slices, not as many disconnected subsystems.
 6. **Tests:** The plan now includes malformed AI output, duplicate paid actions, AE drift,
    contract diffs, backlog recovery and full end-to-end evidence.
 7. **Performance:** Benchmarks are required instead of invented targets. Actual p95/p99,
-   cost and operator-time budgets must be set from Gate 0/Gate 8 evidence.
+   cost and manual-intervention budgets must be set from Gate 0/Gate 8 evidence.
 8. **Observability:** Traceable jobs, audit events, queue age, unknown operations, ledger
    mismatch and publication verification provide a viable day-one operating model.
 9. **Deployment:** Additive migrations, canary workspace, provider simulators, rollback
@@ -63,7 +63,7 @@ vertical slices, not as many disconnected subsystems.
 | Risk | Current control | Remaining evidence |
 |---|---|---|
 | “Virality” interpreted as a guarantee | Explicit non-guarantee claim boundary | Review product and sales copy |
-| Technically complete but service-heavy | Operator-time metric in pilot scorecard | Run controlled pilot |
+| Technically complete but service-heavy | Manual-intervention metric in pilot scorecard | Run controlled pilot |
 | Weak willingness to pay | Retainer plus creator-credit model | Measure paid pilot behavior |
 | Slow time to first value | Gate-based vertical implementation | Measure first approved video |
 | One reference customer overfit | Exportable contracts and adapters | Validate repeat use across pilots |

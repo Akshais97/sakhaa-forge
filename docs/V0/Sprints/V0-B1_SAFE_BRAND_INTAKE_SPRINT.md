@@ -2,7 +2,7 @@
 
 ## Sprint Objective
 
-Let a brand manager submit a website URL and approved files, preview crawl/upload scope
+Let a client manager submit a website URL and approved files, preview crawl/upload scope
 and receive a durable intake run without unsafe network access or unacknowledged rights.
 
 ## Source Contracts

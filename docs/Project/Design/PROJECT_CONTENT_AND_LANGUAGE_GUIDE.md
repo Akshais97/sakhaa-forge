@@ -1,7 +1,7 @@
 # Project Content and Language Guide
 
 **Status:** Canonical product-language contract  
-**Applies to:** Product UI, email, notifications, documentation and operator messages  
+**Applies to:** Product UI, email, notifications, documentation and Admin recovery messages
 **Brand authority:** `PROJECT_BRAND_GUIDELINES.md`
 
 ## 1. Voice
@@ -54,7 +54,7 @@ meaning.
 | `retry_wait` | Retrying | A temporary failure occurred; another attempt is scheduled |
 | `unknown` | Unknown — checking | The provider may have accepted the request; reconciliation is in progress |
 | `blocked` | Blocked | A required approval, right, input or capability is missing |
-| `failed` | Failed | Work stopped and needs a new action or operator review |
+| `failed` | Failed | Work stopped and needs a new action or Admin review |
 | `cancel_requested` | Cancelling | New work has stopped; submitted provider work may still reconcile |
 | `cancelled` | Cancelled | Work ended without completion |
 | `partial` | Partly complete | Some evidence exists, but the outcome is not ready |
@@ -95,7 +95,7 @@ Always distinguish:
 - **Reserved:** temporarily unavailable credits held for one operation.
 - **Captured:** final charge after the policy-defined successful outcome.
 - **Released:** reserved credits returned without charge.
-- **Adjustment:** append-only finance correction.
+- **Adjustment:** append-only Admin correction to credit or provider reconciliation.
 
 Required paid confirmation structure:
 

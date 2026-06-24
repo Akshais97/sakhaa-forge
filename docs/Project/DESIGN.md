@@ -535,11 +535,11 @@ state is still legible by icon + color + label when motion is off (§17).
 |---|---|---|
 | `sm` | 640 | large phone |
 | `md` | 768 | tablet |
-| `lg` | 1024 | laptop (primary operator target) |
+| `lg` | 1024 | laptop (primary production target) |
 | `xl` | 1280 | desktop |
 | `2xl` | 1536 | wide / multi-panel review |
 
-The **operator's primary context is `lg`+**; the product is desktop-first for the production
+The **primary production context is `lg`+**; the product is desktop-first for the production
 pipeline. Brand approval, review, and verification are usable down to `md`. Read-only status
 checking is usable on mobile (`sm`).
 
@@ -572,8 +572,8 @@ space for the stage spine and media.
 
 - **Workspace identity** (name + accent seed + avatar) is always top-left and in the document
   title. Switching is explicit (§2.5).
-- **Primary nav is role-aware** (per `V0_PERMISSIONS.md`): a Finance user sees Wallet/Ledger
-  prominently; a Reviewer sees Review; an Operator sees Pipeline/Jobs and runbook tools. Items a
+- **Primary nav is role-aware** (per `V0_PERMISSIONS.md`): a Client Manager sees the production
+  journey and Credits; a Reviewer sees Review; an Admin sees operations and recovery tools. Items a
   role cannot access are not rendered (not shown-disabled), except where hiding would confuse
   navigation, in which case they show with a lock and a one-line reason on hover.
 - The **stage spine** (§11.2) is the persistent backbone of any object moving through the pipeline.
@@ -585,7 +585,7 @@ space for the stage spine and media.
 - Back/refresh restore the same state; in-flight async work re-subscribes to live status on mount
   rather than showing a stale snapshot.
 - Document title reflects `workspace · object · state` so a person with many tabs (a very real
-  operator scenario) can find the right one: `Sunrise Estates · Render #4821 · running`.
+  support scenario) can find the right one: `Sunrise Estates · Render #4821 · running`.
 
 ---
 
@@ -629,7 +629,7 @@ Mapped 1:1 to backend enums. The design system owns presentation; it never inven
 | `failed` | Failed | error | x-octagon | none | retryable flag drives CTA |
 | `blocked` | Blocked | blocked | lock | none | precondition unmet; not a failure |
 | `unknown` | Unknown — checking | unknown | help (hatched) | none | provider-timeout; reconciliation pending |
-| `cancelled` | Cancelled | neutral | slash | none | user/operator stopped it |
+| `cancelled` | Cancelled | neutral | slash | none | user or administrator stopped it |
 | `expired` | Expired | neutral | hourglass-off | none | e.g., estimate/version no longer valid |
 
 ### 10.4 The `unknown` state in detail (product-critical)
@@ -900,7 +900,7 @@ purchase ─→ reserve (hold ₹480) ─→ ┬─ capture ₹420 (success)
 - Append-only entries table; each row: timestamp (IST), type (purchase/reserve/capture/release/
   refund/adjustment), reference (copyable op id), amount (tabular, signed), running balance.
 - A reconciliation banner shows when provider total and V0 ledger agree; a mismatch is a `warning`
-  with an operator escalation path (never silently hidden).
+  with an Admin escalation path (never silently hidden).
 
 ---
 

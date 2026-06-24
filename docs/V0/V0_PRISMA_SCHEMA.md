@@ -25,7 +25,7 @@ application. Prisma is the sole migration owner.
 ## Core Enums
 
 ```prisma
-enum MembershipRole { OWNER ADMIN BRAND_MANAGER STRATEGIST REVIEWER OPERATOR FINANCE }
+enum MembershipRole { OWNER ADMIN CLIENT_MANAGER REVIEWER }
 enum RecordStatus { ACTIVE ARCHIVED DELETED }
 enum ApprovalDecision { APPROVE REJECT REQUEST_CHANGES }
 enum JobStatus { CREATED QUEUED LEASED RUNNING RETRY_WAIT SUCCEEDED FAILED CANCEL_REQUESTED CANCELLED EXPIRED }
@@ -145,13 +145,35 @@ model CreditLedgerEntry {
   @@map("credit_ledger_entries")
 }
 
+model IdempotencyRecord {
+  id             String   @id @default(uuid()) @db.Uuid
+  workspaceId    String?  @map("workspace_id") @db.Uuid
+  actorUserId    String   @map("actor_user_id") @db.Uuid
+  operation      String   @db.VarChar(120)
+  idempotencyKey String   @map("idempotency_key") @db.VarChar(200)
+  requestHash    String   @map("request_hash") @db.Char(64)
+  responseStatus Int      @map("response_status")
+  responseBody   Json     @map("response_body")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  workspace      Workspace? @relation(fields: [workspaceId], references: [id])
+  actor          User     @relation(fields: [actorUserId], references: [id])
+  @@unique([workspaceId, operation, idempotencyKey])
+  @@unique([actorUserId, operation, idempotencyKey])
+  @@index([actorUserId, operation, createdAt])
+  @@map("idempotency_records")
+}
+
 model Job {
   id             String @id @default(uuid()) @db.Uuid
   workspaceId    String @db.Uuid
   type           String
+  resourceClass  String
   status         JobStatus @default(CREATED)
   priority       Int @default(0)
   inputHash      String
+  input          Json
+  outputArtifactId String?
+  lastErrorCode  String?
   nextRunAt      DateTime? @db.Timestamptz(6)
   maxAttempts    Int @default(5)
   createdAt      DateTime @default(now()) @db.Timestamptz(6)
@@ -161,6 +183,21 @@ model Job {
   childEdges     JobDependency[] @relation("JobChild")
   @@index([workspaceId, status, nextRunAt])
   @@map("jobs")
+}
+
+model OutboxEvent {
+  id            String @id @default(uuid()) @db.Uuid
+  workspaceId   String @db.Uuid
+  eventType     String
+  aggregateType String
+  aggregateId   String @db.Uuid
+  payload       Json
+  status        String @default("PENDING")
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+  publishedAt   DateTime? @db.Timestamptz(6)
+  workspace     Workspace @relation(fields: [workspaceId], references: [id])
+  @@index([workspaceId, status, createdAt])
+  @@map("outbox_events")
 }
 ```
 
@@ -189,6 +226,7 @@ Every high-volume tenant query starts with `workspace_id`. Required baseline ind
 (workspace_id, scheduled_at, id)
 (workspace_id, provider, external_id)
 unique(workspace_id, operation, idempotency_key)
+unique(actor_user_id, operation, idempotency_key) for pre-workspace mutations
 unique(provider, idempotency_key)
 ```
 

@@ -57,7 +57,7 @@ Browser -> Next.js -> NestJS/Fastify -> Supabase PostgreSQL
 | AI extraction/script | Empty, malformed, refusal, invalid schema | Bounded retry or blocked state | Stage failed/blocked; no fabricated output |
 | HeyGen submit | Timeout after possible acceptance | Mark `unknown`, reconcile | Processing delayed; no duplicate submission |
 | HeyGen rate limit | `429` plus `Retry-After` | Delayed retry within limit | Queued with updated timing |
-| Worker execution | Lease expiry or crash | Lease recovery and idempotent completion | Retrying or operator-visible failure |
+| Worker execution | Lease expiry or crash | Lease recovery and idempotent completion | Retrying or Admin-visible failure |
 | AE render | Capability drift | Reject before work; route compatible worker | Rendering unavailable with exact missing capability |
 | Payment callback | Replay or invalid signature | Reject or inbox dedupe | One financial transition |
 | Publish | Timeout or duplicate request | Idempotency and provider reconciliation | No duplicate post |
@@ -99,7 +99,7 @@ The architecture is appropriate for initial scale. The first limits will likely 
 external generation concurrency, AE rendering, media transfer and AI/video processing,
 not NestJS CRUD. Gate 0 must establish workload-shaped measurements for queue age,
 connection pools, B2 transfer, provider latency, AE render time, cost per verified post
-and operator time. No numeric SLO is claimed without evidence.
+and manual intervention time. No numeric SLO is claimed without evidence.
 
 ## Deployment And Rollback
 

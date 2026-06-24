@@ -252,7 +252,7 @@ When material values disagree:
 
 Approval requires:
 
-- actor with Owner/Admin/Brand Manager permission;
+- actor with Owner/Admin/Client Manager permission;
 - latest profile version;
 - all required fields resolved;
 - no critical unresolved conflict;
@@ -378,4 +378,3 @@ does not mutate the candidate evidence.
 - Golden fixtures validate backward compatibility.
 - Downstream generation receives only the immutable approved profile ID and selected
   fields required for that job.
-

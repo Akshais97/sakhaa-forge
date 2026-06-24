@@ -892,7 +892,7 @@ Approved video
   → Verify post identity, visibility, media, and publication state
   → VERIFIED → Mark published_verified + send "Posting completed" notification
   → NOT FOUND / INCOMPLETE → Retry with backoff
-  → RETRIES EXHAUSTED → Mark verification_failed + notify operator/client
+  → RETRIES EXHAUSTED → Mark verification_failed + notify Admin/Client Manager
 ```
 
 The publishing API response is not sufficient proof that a post is actually visible. The Audience Test Viewer is a separate verification step that checks the public or audience-facing result after publishing.
@@ -920,7 +920,7 @@ The viewer runs with the least-privileged audience context supported by the plat
 
 Use bounded retries with exponential backoff because platforms may acknowledge a post before media processing or public propagation is complete. A suggested Phase 1 policy is immediate verification, then retries at 1, 3, 7, and 15 minutes. The retry policy must be configurable per platform.
 
-For manual-export publishing, the system cannot automatically claim success. The user or operator must provide the live post URL; the Audience Test Viewer then runs the same verification before sending a completion notification.
+For manual-export publishing, the system cannot automatically claim success. The Client Manager, Admin or Owner must provide the live post URL; the Audience Test Viewer then runs the same verification before sending a completion notification.
 
 ### 16.3 Publishing Integration Priority
 
@@ -950,7 +950,7 @@ Build in this order:
 - Send success only after `published_verified`, never solely from an API acceptance response.
 - Success message: posting completed, platform/account, actual publish time, and public post link.
 - Processing message: posting accepted but audience visibility is still being verified.
-- Failure message: verification failed, reason, attempts made, post link if available, and required operator action.
+- Failure message: verification failed, reason, attempts made, post link if available, and required Admin or Client Manager action.
 - Notification delivery must be idempotent so retries do not send duplicate completion messages.
 
 ---
@@ -1196,7 +1196,7 @@ Must pass: intended platform account, matching platform post ID, audience-facing
 | Duplicate posting notifications | Idempotency key per calendar post + notification type |
 | YouTube quota constraints | Default to ~3 uploads/day/client; plan scaling explicitly |
 | Misleading thumbnail or claim | Clickbait/claim risk checks in thumbnail and script review |
-| Transcription failure producing empty blueprint | `low_confidence` flag; surface to operator, do not silently proceed |
+| Transcription failure producing empty blueprint | `low_confidence` flag; surface to Client Manager/Admin, do not silently proceed |
 | Vision LLM hallucination in scene analysis | Cross-reference with transcript timestamps; flag conflicts |
 | Cost overrun on LLM/generation calls | Per-job cost ceiling with hold-and-notify before auto-queue |
 

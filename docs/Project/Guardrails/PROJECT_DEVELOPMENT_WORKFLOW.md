@@ -7,7 +7,7 @@
 
 | Tool | Pinned policy |
 |---|---|
-| Node.js | `22.22.1` for V0 implementation |
+| Node.js | `24.15.0` for V0 implementation |
 | pnpm | Release line `11`; F0 resolves `pnpm@latest-11` and commits the exact version in root `packageManager` |
 | Python | `3.12.13` |
 | PostgreSQL | Supabase-supported PostgreSQL version, identical major in local/staging |
@@ -118,7 +118,7 @@ crash-window behaviour. Migration changes test forward, compatibility, RLS and r
 Every PR states:
 
 - owning V0 slice and gate;
-- user/operator outcome;
+- user or administrator outcome;
 - affected routes/contracts/models/jobs;
 - security and tenant impact;
 - migration and rollback/forward-recovery plan;

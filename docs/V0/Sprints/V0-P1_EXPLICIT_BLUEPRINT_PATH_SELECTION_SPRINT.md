@@ -2,7 +2,7 @@
 
 ## Sprint Objective
 
-Require a strategist to choose existing blueprint, new viral discovery or approved
+Require a client manager to choose existing blueprint, new viral discovery or approved
 default path explicitly, with the same downstream blueprint-request contract.
 
 ## Source Contracts

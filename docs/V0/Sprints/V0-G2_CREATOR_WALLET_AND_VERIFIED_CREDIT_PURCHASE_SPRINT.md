@@ -20,9 +20,9 @@ Stripe for international use, with append-only ledger reconciliation.
 - Initiate checkout for Razorpay and Stripe simulators.
 - Validate signed payment callbacks and replay protection.
 - Reconcile amount, currency, provider reference and workspace.
-- Model purchase, refund, dispute and finance adjustment entries.
-- Build finance ledger view with integer minor units only.
-- Restrict finance-only adjustments by role.
+- Model purchase, refund, dispute and Admin adjustment entries.
+- Build wallet ledger view with integer minor units only.
+- Restrict compensating adjustments to Owner/Admin.
 
 ## TDD And Verification Plan
 
@@ -35,7 +35,7 @@ Required tests:
 - Callback replay test.
 - Amount and currency mismatch tests.
 - Purchase/refund/dispute reconciliation tests.
-- Finance-role adjustment permission test.
+- Owner/Admin adjustment permission test.
 
 ## Security And Guardrails
 
@@ -47,5 +47,5 @@ Required tests:
 
 - Ledger records for purchase, refund/dispute and adjustment cases.
 - Callback verification and replay test output.
-- Finance ledger browser screenshot.
+- Wallet ledger browser screenshot.
 - Reconciliation proof against simulator totals.

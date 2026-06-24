@@ -16,7 +16,7 @@
 | AE environment/plugins unavailable | High | Supported-capability registry and readiness checks |
 | Backblaze cross-region latency/cost | Medium | Representative transfer benchmark and lifecycle policy |
 | Product promise interpreted as guaranteed virality | High | Claim boundary in product copy, review and sales material |
-| Workflow works technically but is uneconomic or service-heavy | High | Measured pilot scorecard for cost, operator time, repeat usage and willingness to pay |
+| Workflow works technically but is uneconomic or service-heavy | High | Measured pilot scorecard for cost, manual intervention time, repeat usage and willingness to pay |
 | V1/V2 unavailable | None for V0 | V0 contains no runtime call or required schema dependency |
 
 External provider approval may limit a route, but it must not block the entire V0
@@ -29,5 +29,5 @@ application: manual upload/export and approved primary-route fallbacks remain av
 - Security zero-tolerance tests pass.
 - Backup/restore and queue recovery pass.
 - Provider prices, terms and API contracts are refreshed before production.
-- Operator ownership and escalation paths are assigned.
+- Owner/Admin recovery ownership and escalation paths are assigned.
 - Founder approves the measured pilot/business scorecard before unrestricted launch.

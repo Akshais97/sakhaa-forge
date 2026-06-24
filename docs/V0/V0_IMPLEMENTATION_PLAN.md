@@ -81,7 +81,7 @@ to build every checklist item as one large technical-layer batch.
       intervention.
 - [ ] Reconcile provider charges with the V0 ledger.
 - [ ] Demonstrate V0 with V1 and V2 absent.
-- [ ] Complete security, recovery, performance and operator runbooks.
+- [ ] Complete security, recovery, performance and Admin recovery runbooks.
 
 V1 starts only after this gate passes. V2 is not part of this implementation plan.
 

@@ -41,6 +41,8 @@ created -> queued -> leased -> running -> succeeded
 ```
 
 PostgreSQL owns jobs, attempts, dependencies and leases. BullMQ carries opaque wake-ups.
+Outbox relay may fail while Redis is unavailable; that failure does not change canonical
+job state. The same pending outbox row must relay later without duplicating completion.
 
 ## Paid Provider State
 
@@ -81,6 +83,8 @@ idempotency key. Blind resubmission is prohibited.
 - Retry only classified transient errors with bounded exponential backoff and jitter.
 - Invalid media, policy failure and insufficient credits are non-retryable.
 - Lease expiry allows recovery but never two active workers.
+- A stale worker lease cannot complete or fail a requeued job.
 - Cancellation stops new children; uncertain provider operations reconcile first.
 - Unreferenced artifacts are lifecycle-cleaned.
-- Dead-letter jobs remain visible with an operator action and audit trail.
+- Exhausted or non-retryable jobs move to `failed`, retain `last_error_code`, emit
+  `job.dead_lettered` and remain visible with an Owner/Admin action and audit trail.
