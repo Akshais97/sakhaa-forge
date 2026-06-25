@@ -20,7 +20,7 @@ const textExtensions = new Set([
 ]);
 
 const ignoredFiles = new Set(["CLAUDE.md"]);
-const ignoredPrefixes = [".claude/", "graphify-out/"];
+const ignoredPrefixes = [".claude/", "graphify-out/", "firecrawl-main/"];
 
 export async function listTrackedTextFiles() {
   const { stdout } = await execFileAsync("git", ["ls-files", "--cached", "--others", "--exclude-standard"]);

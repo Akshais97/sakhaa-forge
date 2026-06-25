@@ -13,6 +13,8 @@
 5. Run Prisma migrations and seed two isolated workspaces.
 6. Start web, API, queue processor and fake provider/media workers.
 7. Run contract, RLS, ledger and end-to-end simulator suites.
+8. For F5 local proof, run capability-disable, trace, recovery, simulator-mode,
+   restore-drill and redaction-scan tests before starting product-domain slices.
 
 ## Staging
 
@@ -23,6 +25,9 @@
 5. Configure secret manager entries and workload identities.
 6. Run callback signature, unknown-provider, duplicate-charge and audience-verification
    drills.
+7. Run F5 operational drills: trace failed jobs, requeue a dead-lettered simulator job,
+   record a restore drill, verify credential metadata contains only secret-manager
+   references and run redaction scans over sample logs.
 
 ## Production
 

@@ -24,7 +24,7 @@ const server = http.createServer((_request, response) => {
         margin: 0;
       }
       main {
-        max-width: 920px;
+        max-width: 1040px;
         margin: 0 auto;
         padding: 32px 20px;
       }
@@ -54,9 +54,81 @@ const server = http.createServer((_request, response) => {
         border: 0;
         border-radius: 6px;
         padding: 0 14px;
-        background: #6557f5;
+        background: #3f5b7a;
         color: #ffffff;
         font-weight: 650;
+      }
+      .candidate-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+        margin-block-start: 12px;
+      }
+      .candidate {
+        border: 1px solid #d4d1ca;
+        border-radius: 8px;
+        padding: 12px;
+        min-height: 120px;
+        background: #fafaf8;
+      }
+      .candidate h3 {
+        font-size: 1rem;
+        margin: 0 0 8px;
+      }
+      .candidate p {
+        margin: 0 0 8px;
+      }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        border-radius: 6px;
+        padding: 0 8px;
+        font-size: 0.875rem;
+        font-weight: 650;
+      }
+      [data-state="partial"] {
+        background: #fbf1da;
+        color: #6d4b00;
+      }
+      [data-state="low-confidence"] {
+        background: #fbf1da;
+        color: #6d4b00;
+      }
+      .source {
+        color: #5d574e;
+        font-size: 0.875rem;
+      }
+      .diff-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+        margin-block: 12px;
+      }
+      .diff-item {
+        border-inline-start: 4px solid #3f5b7a;
+        padding: 10px 12px;
+        background: #fafaf8;
+      }
+      .diff-item strong {
+        display: block;
+        margin-block-end: 4px;
+      }
+      [data-state="superseded"] {
+        background: #ece8df;
+        color: #5d574e;
+      }
+      [data-state="stale"] {
+        background: #fbf1da;
+        color: #6d4b00;
+      }
+      [data-state="provider-outage"] {
+        background: #fcebea;
+        color: #8f1d14;
+      }
+      [data-state="blocked"] {
+        background: #efebf3;
+        color: #5b2b76;
       }
     </style>
   </head>
@@ -83,6 +155,183 @@ const server = http.createServer((_request, response) => {
         <select id="workspace-select" data-testid="workspace-switcher">
           <option>No workspace selected</option>
         </select>
+      </section>
+      <section aria-labelledby="candidate-review-title" data-testid="brand-candidate-review">
+        <h2 id="candidate-review-title">Brand candidate review</h2>
+        <p>Extracted values wait for human approval before becoming brand truth.</p>
+        <div class="candidate-grid">
+          <article class="candidate">
+            <h3>Summary</h3>
+            <p>Aster Heights offers practical homes in Bengaluru for urban professionals and families.</p>
+            <p class="source" data-testid="candidate-provenance">Source: https://aster.example.com/projects/ · page section summary · excerpt hash retained</p>
+            <span class="status" data-state="partial">Partly complete</span>
+          </article>
+          <article class="candidate">
+            <h3>USP</h3>
+            <p>Metro-connected location</p>
+            <p class="source">Source: https://aster.example.com/projects/ · page section USPs · confidence 0.84</p>
+            <span class="status" data-state="candidate">Candidate</span>
+          </article>
+          <article class="candidate">
+            <h3>Audience</h3>
+            <p>Urban professionals and families</p>
+            <p class="source">Source: page title and visible copy · confidence 0.76</p>
+            <span class="status" data-state="low-confidence">Low confidence</span>
+          </article>
+          <article class="candidate">
+            <h3>Prohibited claim</h3>
+            <p>Guaranteed appreciation</p>
+            <p class="source">Source: avoided-claim copy · approval blocked until reviewed</p>
+            <span class="status" data-state="candidate">Candidate</span>
+          </article>
+        </div>
+      </section>
+      <section aria-labelledby="profile-approval-title" data-testid="brand-profile-approval">
+        <h2 id="profile-approval-title">Brand profile approval</h2>
+        <p>Production uses only the active approved version.</p>
+        <div class="diff-grid" data-testid="profile-version-diff">
+          <article class="diff-item">
+            <strong>Version 1</strong>
+            <p>Public name: Aster Heights</p>
+            <p>Positioning: Premium, practical homes for urban professionals and families.</p>
+            <span class="status" data-state="approved">Approved</span>
+          </article>
+          <article class="diff-item">
+            <strong>Changed fields</strong>
+            <p>CTA confirmed as Book a site visit.</p>
+            <p>Flexible-colour decision retained for production templates.</p>
+            <span class="status" data-state="superseded">Superseded</span>
+          </article>
+        </div>
+        <div class="candidate-grid">
+          <article class="candidate">
+            <h3>Required rule</h3>
+            <p>Terms and availability apply</p>
+            <p class="source">Scope: scripts and captions · severity warning</p>
+          </article>
+          <article class="candidate">
+            <h3>Prohibited rule</h3>
+            <p>Guaranteed appreciation</p>
+            <p class="source">Unsupported claim · severity critical</p>
+          </article>
+        </div>
+        <button type="button">Approve this profile</button>
+      </section>
+      <section aria-labelledby="blueprint-path-title" data-testid="blueprint-path-selection">
+        <h2 id="blueprint-path-title">Choose blueprint path</h2>
+        <p>No reusable blueprints match this approved brand profile. Choose new discovery or use the approved default formula.</p>
+        <div class="candidate-grid">
+          <article class="candidate">
+            <h3>Existing blueprint</h3>
+            <p>Select a ready reusable structure only when it matches the active brand profile and objective.</p>
+            <p class="source" data-testid="blueprint-compatibility">Compatible with brand profile v1 · real estate · Bengaluru · site visit</p>
+            <span class="status" data-state="approved">Ready</span>
+          </article>
+          <article class="candidate">
+            <h3>New viral discovery</h3>
+            <p>Create a new request for source discovery and evidence-backed extraction.</p>
+            <span class="status" data-state="running">Explicit choice</span>
+          </article>
+          <article class="candidate">
+            <h3>Approved default formula</h3>
+            <p>Use the approved default formula while binding the same brand profile version.</p>
+            <span class="status" data-state="running">Explicit choice</span>
+          </article>
+          <article class="candidate">
+            <h3>Stale selection</h3>
+            <p>Review the latest profile version before continuing.</p>
+            <span class="status" data-state="stale">Blocked</span>
+          </article>
+        </div>
+      </section>
+      <section aria-labelledby="viral-search-title" data-testid="viral-candidate-search">
+        <h2 id="viral-search-title">Viral candidate discovery</h2>
+        <p>Observed metrics are retained as immutable snapshots with source and rights warnings.</p>
+        <div class="candidate-grid">
+          <article class="candidate">
+            <h3>Site visit proof before price discussion</h3>
+            <p>Rank 1 · observed 24 Jun 2026, 2:30 pm IST · snapshot locked</p>
+            <p class="source">Source: Xpoz simulator · metrics snapshot retained · analysis only until acquisition rights are recorded</p>
+            <span class="status" data-state="approved">Ready</span>
+          </article>
+          <article class="candidate">
+            <h3>Provider delayed</h3>
+            <p>Viral discovery is unavailable. Add a candidate manually or try later.</p>
+            <p class="source">No candidate is created from an empty, malformed or timed-out provider result.</p>
+            <span class="status" data-state="provider-outage">Failed</span>
+          </article>
+          <article class="candidate">
+            <h3>Manual candidate</h3>
+            <p>Manual fallback keeps actor, source URL and rights basis as provenance.</p>
+            <p class="source">Source rights warning stays visible before extraction.</p>
+            <span class="status" data-state="partial">Partly complete</span>
+          </article>
+        </div>
+      </section>
+      <section aria-labelledby="media-acquisition-title" data-testid="media-acquisition-blueprint">
+        <h2 id="media-acquisition-title">Media acquisition and thumbnail blueprint</h2>
+        <p>Source media is retained only when rights allow internal structural analysis.</p>
+        <div class="candidate-grid">
+          <article class="candidate">
+            <h3>Authorised analysis copy</h3>
+            <p>Retained private artifact · source hash traced · thumbnail blueprint ready</p>
+            <p class="source">Rights basis: platform terms review and internal analysis · object key hidden</p>
+            <span class="status" data-state="approved">Ready</span>
+          </article>
+          <article class="candidate">
+            <h3>Rights blocked</h3>
+            <p>This source media cannot be acquired under the current policy.</p>
+            <p class="source">Reference-only sources do not create retained analysis copies.</p>
+            <span class="status" data-state="blocked">Blocked</span>
+          </article>
+          <article class="candidate">
+            <h3>OCR needs review</h3>
+            <p>The blueprint is not ready. Review the incomplete stages.</p>
+            <p class="source">Low-confidence OCR remains visible and stops dependent blueprint stages.</p>
+            <span class="status" data-state="low-confidence">Low confidence</span>
+          </article>
+        </div>
+      </section>
+      <section aria-labelledby="scene-blueprint-title" data-testid="scene-blueprint-stages">
+        <h2 id="scene-blueprint-title">Scene blueprint stages</h2>
+        <p>Scene detection, transcript, keyframes, vision and OCR progress independently before scene-level blueprint evidence can be used.</p>
+        <div class="candidate-grid">
+          <article class="candidate">
+            <h3>Stage graph</h3>
+            <p>scene_detect → transcribe · keyframe_extract → vision_analyze · ocr_extract</p>
+            <p class="source">CPU and GPU queues stay isolated; workers receive no database or Redis credentials.</p>
+            <span class="status" data-state="running">Running</span>
+          </article>
+          <article class="candidate">
+            <h3>Scene evidence</h3>
+            <p>Transcript, shots, motion and on-screen text are retained with artifact hashes.</p>
+            <p class="source">Replacement guidance uses approved brand CTA and avoids unsupported property claims.</p>
+            <span class="status" data-state="approved">Ready</span>
+          </article>
+          <article class="candidate">
+            <h3>Partial stage</h3>
+            <p>The blueprint is not ready. Review the incomplete stages.</p>
+            <p class="source">Empty transcript, malformed model JSON, timeout and OOM never report a complete blueprint.</p>
+            <span class="status" data-state="blocked">Blocked</span>
+          </article>
+        </div>
+      </section>
+      <section aria-labelledby="ready-blueprint-title" data-testid="ready-blueprint-contract">
+        <h2 id="ready-blueprint-title">Ready blueprint contract</h2>
+        <p>Extracted and approved default formula paths produce the same script input contract before script generation.</p>
+        <div class="candidate-grid">
+          <article class="candidate">
+            <h3>Immutable ready blueprint</h3>
+            <p>Formula derivation and provider-neutral director prompt are retained with lineage.</p>
+            <p class="source">Schema v0.script-input.1 · formula v0.formula.1 · prompt v0.director-prompt.1</p>
+            <span class="status" data-state="approved">Ready</span>
+          </article>
+          <article class="candidate">
+            <h3>Incomplete source</h3>
+            <p>Missing stage evidence or invalid formula slots block readiness.</p>
+            <span class="status" data-state="blocked">Blocked</span>
+          </article>
+        </div>
       </section>
     </main>
   </body>

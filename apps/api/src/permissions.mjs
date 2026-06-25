@@ -4,6 +4,10 @@ const roleCapabilities = {
   OWNER: [
     "manage_workspace_members",
     "manage_provider_credentials",
+    "manage_workspace_capabilities",
+    "view_operations",
+    "run_restore_drills",
+    "manage_simulator_modes",
     "approve_brand_profile",
     "select_blueprint_and_run_scripts",
     "confirm_paid_generation",
@@ -20,6 +24,10 @@ const roleCapabilities = {
   ADMIN: [
     "manage_workspace_members",
     "manage_provider_credentials",
+    "manage_workspace_capabilities",
+    "view_operations",
+    "run_restore_drills",
+    "manage_simulator_modes",
     "approve_brand_profile",
     "select_blueprint_and_run_scripts",
     "confirm_paid_generation",

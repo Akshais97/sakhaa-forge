@@ -43,7 +43,7 @@ The executable schema must implement these models with UUID/ULID-style string ID
 
 ```text
 Identity:
-  User, Workspace, Membership, ServiceCredential
+  User, Workspace, Membership, ServiceCredential, WorkspaceCapability
 
 Brand:
   BrandProfile, BrandCrawlRun, BrandCandidate, BrandAsset, BrandApproval, BrandRule
@@ -51,7 +51,7 @@ Brand:
 Discovery/Blueprint:
   ViralCandidate, MetricSnapshot, MediaAcquisition, ThumbnailBlueprint,
   VideoBlueprint, BlueprintScene, FormulaDerivation, DirectorPrompt,
-  BlueprintLibraryEntry
+  BlueprintLibraryEntry, BlueprintRequest
 
 Scripts:
   ScriptTournament, ScriptVariant, ScriptEvaluation, SelectedScript
@@ -88,6 +88,151 @@ model Workspace {
   @@map("workspaces")
 }
 
+model WorkspaceCapability {
+  id              String    @id @default(uuid()) @db.Uuid
+  workspaceId     String    @db.Uuid
+  capability      String    @db.VarChar(120)
+  enabled         Boolean   @default(true)
+  disabledReason  String?   @db.VarChar(500)
+  updatedByUserId String    @db.Uuid
+  createdAt       DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(6)
+  workspace       Workspace @relation(fields: [workspaceId], references: [id])
+  updatedBy       User      @relation(fields: [updatedByUserId], references: [id])
+  @@unique([workspaceId, capability])
+  @@index([workspaceId, enabled])
+  @@map("workspace_capabilities")
+}
+
+model ServiceCredential {
+  id              String   @id @default(uuid()) @db.Uuid
+  workspaceId     String   @db.Uuid
+  provider        String   @db.VarChar(120)
+  purpose         String   @db.VarChar(120)
+  environment     String   @db.VarChar(80)
+  secretRef       String   @db.VarChar(300)
+  rotationStatus  String   @db.VarChar(80)
+  updatedByUserId String?  @db.Uuid
+  lastRotatedAt   DateTime? @db.Timestamptz(6)
+  createdAt       DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(6)
+  workspace       Workspace @relation(fields: [workspaceId], references: [id])
+  updatedBy       User?     @relation(fields: [updatedByUserId], references: [id])
+  @@index([workspaceId, provider, environment])
+  @@map("service_credentials")
+}
+
+model BrandCrawlRun {
+  id                 String    @id @default(uuid()) @db.Uuid
+  workspaceId        String    @db.Uuid
+  sourceUrl          String    @db.VarChar(1000)
+  normalizedUrl      String    @db.VarChar(500)
+  status             JobStatus @default(QUEUED)
+  rightsAcknowledged Boolean
+  crawlScope         Json
+  robotsPolicy       Json?
+  jobId              String?   @db.Uuid
+  createdAt          DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @db.Timestamptz(6)
+  workspace          Workspace @relation(fields: [workspaceId], references: [id])
+  brandAssets        BrandAsset[]
+  @@index([workspaceId, status, createdAt])
+  @@map("brand_crawl_runs")
+}
+
+model BrandAsset {
+  id           String        @id @default(uuid()) @db.Uuid
+  workspaceId  String        @db.Uuid
+  crawlRunId   String        @db.Uuid
+  artifactId   String        @db.Uuid
+  rightsBasis  String        @db.VarChar(240)
+  permittedUse String        @db.VarChar(240)
+  status       RecordStatus  @default(ACTIVE)
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id])
+  crawlRun     BrandCrawlRun @relation(fields: [crawlRunId], references: [id])
+  artifact     Artifact      @relation(fields: [artifactId], references: [id])
+  @@unique([workspaceId, artifactId, crawlRunId])
+  @@index([workspaceId, status, createdAt])
+  @@map("brand_assets")
+}
+
+model BrandCandidate {
+  id                String   @id @default(uuid()) @db.Uuid
+  workspaceId       String   @db.Uuid
+  crawlRunId        String   @db.Uuid
+  fieldType         String   @db.VarChar(120)
+  value             Json
+  confidence        Decimal  @db.Decimal(4, 3)
+  decision          String   @default("candidate") @db.VarChar(80)
+  extractionState   String   @db.VarChar(80)
+  sourceEvidence    Json
+  conflict          Boolean  @default(false)
+  sourceFingerprint String   @db.Char(64)
+  @@unique([workspaceId, crawlRunId, fieldType, sourceFingerprint])
+  @@index([workspaceId, crawlRunId, fieldType])
+  @@map("brand_candidates")
+}
+
+model BrandProfile {
+  id               String @id @default(uuid()) @db.Uuid
+  workspaceId      String @db.Uuid
+  brandId          String @db.Uuid
+  crawlRunId       String @db.Uuid
+  schemaVersion    String @db.VarChar(80)
+  version          Int
+  status           String @db.VarChar(40)
+  active           Boolean @default(false)
+  profile          Json
+  sourceSummary    Json
+  approvedByUserId String @db.Uuid
+  approvedAt       DateTime @db.Timestamptz(6)
+  @@unique([workspaceId, brandId, version])
+  @@index([workspaceId, brandId, status, active])
+  @@map("brand_profiles")
+}
+
+model BrandApproval {
+  id             String @id @default(uuid()) @db.Uuid
+  workspaceId    String @db.Uuid
+  brandProfileId String @db.Uuid
+  brandId        String @db.Uuid
+  actorUserId    String @db.Uuid
+  decision       String @db.VarChar(40)
+  reason         String? @db.VarChar(500)
+  @@index([workspaceId, brandId, createdAt])
+  @@map("brand_approvals")
+}
+
+model BrandRule {
+  id             String @id @default(uuid()) @db.Uuid
+  workspaceId    String @db.Uuid
+  brandProfileId String @db.Uuid
+  brandId        String @db.Uuid
+  type           String @db.VarChar(80)
+  value          String @db.VarChar(500)
+  severity       String @db.VarChar(40)
+  rationale      String @db.VarChar(500)
+  status         RecordStatus @default(ACTIVE)
+  @@unique([workspaceId, brandProfileId, type, value])
+  @@index([workspaceId, brandId, status])
+  @@map("brand_rules")
+}
+
+model GenerationEstimate {
+  id                     String @id @default(uuid()) @db.Uuid
+  workspaceId            String @db.Uuid
+  brandProfileId         String @db.Uuid
+  status                 String @db.VarChar(40)
+  provider               String @db.VarChar(80)
+  priceVersion           String @db.VarChar(80)
+  maximumAuthorizedMinor BigInt
+  currency               String @db.VarChar(3)
+  selectedScriptId       String @db.Uuid
+  avatarProfileId        String @db.Uuid
+  @@index([workspaceId, brandProfileId, status])
+  @@map("generation_estimates")
+}
+
 model GenerationJob {
   id               String   @id @default(uuid()) @db.Uuid
   workspaceId      String   @db.Uuid
@@ -105,6 +250,168 @@ model GenerationJob {
   @@unique([workspaceId, idempotencyKey])
   @@index([workspaceId, status, createdAt])
   @@map("generation_jobs")
+}
+
+model BlueprintLibraryEntry {
+  id              String @id @default(uuid()) @db.Uuid
+  workspaceId     String @db.Uuid
+  brandProfileId  String @db.Uuid
+  title           String @db.VarChar(200)
+  status          String @db.VarChar(40)
+  compatibility   Json
+  createdByUserId String @db.Uuid
+  @@index([workspaceId, status, createdAt])
+  @@map("blueprint_library_entries")
+}
+
+model BlueprintRequest {
+  id                      String @id @default(uuid()) @db.Uuid
+  workspaceId             String @db.Uuid
+  path                    String @db.VarChar(40)
+  brandProfileId          String @db.Uuid
+  brandProfileVersion     Int
+  blueprintLibraryEntryId String? @db.Uuid
+  objectiveType           String @db.VarChar(120)
+  objective               String @db.VarChar(500)
+  status                  String @db.VarChar(40)
+  createdByUserId         String @db.Uuid
+  @@index([workspaceId, status, createdAt])
+  @@map("blueprint_requests")
+}
+
+model FormulaDerivation {
+  id                      String @id @default(uuid()) @db.Uuid
+  workspaceId             String @db.Uuid
+  blueprintLibraryEntryId String @db.Uuid
+  blueprintRequestId      String @db.Uuid
+  status                  String @db.VarChar(40)
+  formulaVersion          String @db.VarChar(80)
+  slots                   Json
+  replacementInstructions Json
+  lineage                 Json
+  @@unique([workspaceId, blueprintLibraryEntryId])
+  @@index([workspaceId, status, createdAt])
+  @@map("formula_derivations")
+}
+
+model DirectorPrompt {
+  id                      String @id @default(uuid()) @db.Uuid
+  workspaceId             String @db.Uuid
+  blueprintLibraryEntryId String @db.Uuid
+  formulaDerivationId     String @db.Uuid
+  blueprintRequestId      String @db.Uuid
+  status                  String @db.VarChar(40)
+  promptVersion           String @db.VarChar(80)
+  replacementSlots        Json
+  prompt                  String @db.Text
+  lineage                 Json
+  @@unique([workspaceId, blueprintLibraryEntryId])
+  @@index([workspaceId, status, createdAt])
+  @@map("director_prompts")
+}
+
+model ViralCandidate {
+  id                 String @id @default(uuid()) @db.Uuid
+  workspaceId        String @db.Uuid
+  blueprintRequestId String @db.Uuid
+  provider           String @db.VarChar(80)
+  sourceIdentity     String @db.VarChar(240)
+  sourceUrl          String @db.VarChar(1000)
+  title              String @db.VarChar(240)
+  creatorHandle      String @db.VarChar(160)
+  niche              String @db.VarChar(240)
+  market             String @db.VarChar(120)
+  objectiveType      String @db.VarChar(120)
+  rank               Int
+  score              Int
+  selectionState     String @db.VarChar(40)
+  rightsWarnings     Json
+  metadata           Json
+  provenance         Json
+  sourceHash         String @db.Char(64)
+  @@unique([workspaceId, blueprintRequestId, sourceHash])
+  @@index([workspaceId, blueprintRequestId, rank])
+  @@map("viral_candidates")
+}
+
+model MetricSnapshot {
+  id               String @id @default(uuid()) @db.Uuid
+  workspaceId      String @db.Uuid
+  viralCandidateId String @db.Uuid
+  provider         String @db.VarChar(80)
+  observedAt       DateTime @db.Timestamptz(6)
+  metrics          Json
+  sourceHash       String @db.Char(64)
+  immutable        Boolean @default(true)
+  @@unique([workspaceId, viralCandidateId, sourceHash])
+  @@index([workspaceId, observedAt, id])
+  @@map("metric_snapshots")
+}
+
+model MediaAcquisition {
+  id               String @id @default(uuid()) @db.Uuid
+  workspaceId      String @db.Uuid
+  viralCandidateId String @db.Uuid
+  artifactId       String? @db.Uuid
+  status           String @db.VarChar(40)
+  retrievalPolicy  String @db.VarChar(80)
+  acquisitionMode  String @db.VarChar(80)
+  rightsDecision   Json
+  sourceHash       String @db.Char(64)
+  blockedReason    String? @db.VarChar(160)
+  @@index([workspaceId, viralCandidateId, createdAt])
+  @@map("media_acquisitions")
+}
+
+model ThumbnailBlueprint {
+  id                 String @id @default(uuid()) @db.Uuid
+  workspaceId        String @db.Uuid
+  viralCandidateId   String @db.Uuid
+  mediaAcquisitionId String @db.Uuid
+  artifactId         String? @db.Uuid
+  status             String @db.VarChar(40)
+  ocr                Json
+  composition        Json
+  hookHypothesis     String @db.VarChar(500)
+  directorGuidance   Json
+  quality            Json
+  sourceHash         String @db.Char(64)
+  @@index([workspaceId, viralCandidateId, createdAt])
+  @@map("thumbnail_blueprints")
+}
+
+model VideoBlueprint {
+  id                   String @id @default(uuid()) @db.Uuid
+  workspaceId          String @db.Uuid
+  viralCandidateId     String @db.Uuid
+  mediaAcquisitionId   String @db.Uuid
+  thumbnailBlueprintId String @db.Uuid
+  status               String @db.VarChar(40)
+  durationMs           Int
+  stageStates          Json
+  stageArtifactIds     Json
+  sourceHash           String @db.Char(64)
+  @@index([workspaceId, viralCandidateId, createdAt])
+  @@index([workspaceId, status, createdAt])
+  @@map("video_blueprints")
+}
+
+model BlueprintScene {
+  id               String @id @default(uuid()) @db.Uuid
+  workspaceId      String @db.Uuid
+  videoBlueprintId String @db.Uuid
+  index            Int
+  startMs          Int
+  endMs            Int
+  formulaSlot      String @db.VarChar(80)
+  shot             Json
+  motion           Json
+  transcript       Json
+  ocr              Json
+  replacements     Json
+  @@unique([workspaceId, videoBlueprintId, index])
+  @@index([workspaceId, videoBlueprintId, index])
+  @@map("blueprint_scenes")
 }
 
 model ProviderOperation {
@@ -207,6 +514,9 @@ Prisma cannot express every required PostgreSQL control. Prisma migrations must 
 reviewed SQL for:
 
 - RLS enablement and workspace policies;
+- workspace capability controls with Owner/Admin write policy and tenant-scoped reads;
+- service credential metadata RLS with Owner/Admin-only access and no plaintext secret
+  columns;
 - partial unique indexes for one active lease/reservation/approved profile;
 - check constraints for positive money/duration and valid state combinations;
 - append-only ledger and audit protections;

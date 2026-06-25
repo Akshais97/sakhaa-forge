@@ -28,6 +28,9 @@
 - Source media is used for structural analysis only unless rights explicitly permit more.
 - Publishing verifies target account, media identity and audience visibility.
 - Logs omit tokens, signed URLs, scripts, raw media and unnecessary personal data.
+- Operational trace, restore, simulator and recovery endpoints are Owner/Admin-only and
+  workspace-scoped. Service credential records store only secret-manager references, never
+  plaintext API keys or provider tokens.
 
 ## Zero-Tolerance Failures
 

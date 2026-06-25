@@ -17,16 +17,28 @@ Long operations return `202 Accepted` with a canonical job.
 
 ```text
 POST   /workspaces                 Idempotency-Key required
-POST   /brands/crawl-runs
+POST   /workspaces/{workspace_id}/capabilities  Owner/Admin capability control
+GET    /workspaces/{workspace_id}/operations/metrics  Owner/Admin operational metrics
+POST   /workspaces/{workspace_id}/service-credentials  Owner/Admin credential metadata
+POST   /workspaces/{workspace_id}/simulator-mode       Local/staging simulator control
+POST   /workspaces/{workspace_id}/restore-drills       Owner/Admin restore evidence
+POST   /workspaces/{workspace_id}/redaction-scan       Owner/Admin log redaction proof
+POST   /brands/crawl-runs       Idempotency-Key required; B1 safe brand intake
+GET    /brands/crawl-runs/{crawl_run_id}/candidates
 POST   /brands/assets/uploads      Idempotency-Key required
 POST   /brands/assets/uploads/{artifact_id}/complete
 POST   /artifacts/{artifact_id}/downloads
 POST   /jobs/simulated-media-processing  Idempotency-Key required; local deterministic F4 round trip
 POST   /jobs/dead-letter          Owner/Admin-visible failed job recovery list
 POST   /brands/{brand_id}/approvals
-GET    /blueprints
+POST   /generation-estimates      Requires active approved brand profile
+GET    /blueprints                Bounded reusable blueprint library for an approved brand profile
+POST   /blueprints/library-entries  Approved reusable blueprint entry creation
+POST   /blueprint-requests        Explicit existing/discovery/default path choice
+POST   /blueprint-requests/{blueprint_request_id}/ready-blueprint
 POST   /viral-candidates/search
 POST   /viral-candidates/{candidate_id}/extract-blueprint
+POST   /viral-candidates/{candidate_id}/scene-blueprint
 POST   /script-tournaments
 POST   /script-tournaments/{id}/select
 GET    /avatars
@@ -45,7 +57,93 @@ POST   /credit-purchases
 GET    /credit-wallets/{id}/ledger
 GET    /jobs/{id}
 GET    /jobs/{id}/events
+GET    /jobs/{id}/trace
+POST   /jobs/{id}/recover
 ```
+
+`POST /brands/crawl-runs` creates the V0-B1 durable intake record. The API normalizes a
+public `http` or `https` website URL, rejects private, link-local, localhost and metadata
+targets with `CRAWL_SSRF_BLOCKED`, requires source rights acknowledgement with
+`SOURCE_RIGHTS_REQUIRED`, associates clean uploaded artifacts with retained rights basis
+and permitted use, then creates `BrandCrawlRun`, `BrandAsset`, `Job` (`brand_crawl`) and
+`OutboxEvent` records in one authenticated tenant-scoped operation.
+
+`GET /brands/crawl-runs/{crawl_run_id}/candidates` returns V0-B2 extracted candidates
+for one crawl run. Candidates are not approved brand truth. Each candidate keeps
+`fieldType`, `value`, `confidence`, `decision: candidate`, `extractionState` and
+`sourceEvidence`. Worker completion for `brand_crawl` accepts deterministic Firecrawl-like
+scrape output containing page text plus branding facts such as colors, typography, logo
+candidates, page title, target audience, CTA and USP text. Refused, empty, schema-invalid
+or evidence-free extraction output is rejected with `PROVIDER_OUTPUT_INVALID`.
+
+`POST /brands/{brand_id}/approvals` creates V0-B3 approved brand truth. The request must
+name the workspace, crawl run, optimistic profile version, complete required brand
+fields, rights attestation and required/prohibited rules. Owner, Admin and Client Manager
+may approve. Approval creates immutable `BrandProfile`, `BrandApproval`, `BrandRule` and
+`AuditEvent` rows in one tenant-scoped operation, superseding any prior active profile.
+Stale optimistic versions return `RESOURCE_VERSION_STALE`, which prevents concurrent
+approvals from creating two active profiles.
+
+`POST /generation-estimates` is the first downstream production guard for B3. It accepts
+only the active approved brand-profile version for the workspace. Draft, rejected,
+revoked, missing or superseded profile IDs return `BRAND_PROFILE_NOT_APPROVED`; historical
+lineage may still reference old profiles, but new production cannot use them.
+
+`GET /blueprints` returns the V0-P1 reusable blueprint library for one workspace and one
+active approved brand profile. Results are bounded by `limit` with a cursor, include
+compatibility metadata and expose an empty state that requires the user to choose either
+new discovery or the approved default formula. Cross-workspace resources use
+existence-hiding `WORKSPACE_ACCESS_DENIED`.
+
+`POST /blueprints/library-entries` creates an approved reusable blueprint entry that can
+be selected explicitly by an authorised Owner, Admin or Client Manager. The entry stores
+workspace, approved brand-profile binding, status and compatibility metadata. Archived
+entries are retained but are not eligible for new downstream requests.
+
+`POST /blueprint-requests` creates the downstream request identity for exactly one
+explicit path: `existing_blueprint`, `new_discovery` or `default_formula`. Every path
+binds the same `workspaceId`, active `brandProfileId`, exact `brandProfileVersion`,
+objective type and objective. Existing-blueprint requests reject archived,
+incompatible or cross-workspace entries with `BLUEPRINT_INCOMPATIBLE` or hidden 404.
+Stale brand-profile versions return `RESOURCE_VERSION_STALE`.
+
+`POST /viral-candidates/search` implements V0-P2 viral candidate discovery for a
+`new_discovery` blueprint request. The Xpoz provider is behind a deterministic simulator;
+raw provider payloads stay adapter-private. Successful searches return bounded ranked
+`ViralCandidate` records, source/right warnings and immutable `MetricSnapshot` records
+with observation timestamps and source hashes. Provider timeout, outage, empty result or
+malformed payload returns `DISCOVERY_PROVIDER_UNAVAILABLE` and creates no fabricated
+candidates. Manual fallback creates a candidate only when provenance, source URL, metrics
+and rights basis are provided.
+
+`POST /viral-candidates/{candidate_id}/extract-blueprint` implements V0-P3 media
+acquisition and thumbnail deciphering. The request must name the workspace, rights
+decision, approved retrieval policy and expected source hash. When rights permit a
+retained analysis copy, the API creates `MediaAcquisition`, private clean `Artifact`,
+`ThumbnailBlueprint`, `media_acquire` job and audit rows. Reference-only rights,
+unsupported retrieval, source-hash mismatch and low-confidence OCR return the stable
+blocked errors from the catalog and do not mark blueprint input ready.
+
+`POST /viral-candidates/{candidate_id}/scene-blueprint` implements V0-P4 multimodal
+scene blueprinting after a successful authorised P3 extraction. The request names the
+workspace, media acquisition, thumbnail blueprint and expected source hash. The API
+creates separate `scene_detect`, `transcribe`, `keyframe_extract`, `vision_analyze` and
+`ocr_extract` stage jobs, dependency edges, stage artifacts with hashes and scene-level
+`VideoBlueprint`/`BlueprintScene` records. Empty transcript returns
+`BLUEPRINT_STAGE_INCOMPLETE`; malformed model JSON returns `AI_OUTPUT_SCHEMA_INVALID`;
+worker timeout or OOM returns `BLUEPRINT_STAGE_FAILED`. These states include the stage
+evidence and never report a complete blueprint.
+
+`POST /blueprint-requests/{blueprint_request_id}/ready-blueprint` implements V0-P5
+ready blueprint creation. The request names the workspace and either an extracted
+`VideoBlueprint`, an existing ready library entry or the approved default formula path.
+Extracted sources must have all required P4 stages succeeded and valid formula slots.
+Default and extracted paths return the same `v0.script-input.1` contract with immutable
+`BlueprintLibraryEntry`, `FormulaDerivation` and `DirectorPrompt` identities plus
+`blueprint_merge`, `formula_derive` and `director_prompt_generate` job evidence. Missing
+stage evidence returns `BLUEPRINT_STAGE_INCOMPLETE`; invalid or incomplete formula slots
+return `BLUEPRINT_FORMULA_INVALID`; a second ready creation for the same request returns
+`RESOURCE_VERSION_STALE`.
 
 ## Provider Callbacks
 
@@ -100,6 +198,16 @@ authorizes work.
 - V0-F4 lease expiry requeues canonical work, rejects stale worker completion and records
   job events. Exhausted or non-retryable worker failure remains visible in the dead-letter
   list with a stable error code.
+- V0-F5 workspace capability controls let Owner/Admin disable unfinished or temporarily
+  unavailable capabilities such as `media_processing`; disabled capabilities return
+  `CAPABILITY_DISABLED` with hidden 404 semantics and create no new job state.
+- V0-F5 operations endpoints are Owner/Admin protected. Job trace links request, outbox,
+  worker attempts, job events and retained artifacts. Recovery requeues failed canonical
+  jobs only when no completion artifact exists. Credential endpoints retain secret-manager
+  references, never plaintext secret values. Simulator controls are limited to local,
+  test and staging environments. Redaction scans must redact API keys and signed URLs.
+- V0-B3 approval endpoints require human approval, optimistic version checks and one
+  active approved brand profile per workspace/brand before downstream production use.
 - Request body size, upload size, string length, enum and provider-specific limits are
   explicit in validation schemas.
 - V0 APIs do not require a V1 or V2 endpoint.

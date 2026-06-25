@@ -44,6 +44,34 @@ PostgreSQL owns jobs, attempts, dependencies and leases. BullMQ carries opaque w
 Outbox relay may fail while Redis is unavailable; that failure does not change canonical
 job state. The same pending outbox row must relay later without duplicating completion.
 
+`brand_crawl` receives deterministic Firecrawl-like scrape output at worker completion.
+The worker payload must include page source text and any available branding facts needed
+for later script generation: summary material, USPs, CTAs, target audiences, prohibited
+claim language, colors, fonts and logo candidates. The API stores only evidence-backed
+`BrandCandidate` rows. Empty, refused, prompt-injected-without-isolation, malformed or
+evidence-free output is rejected and cannot become approved brand truth.
+
+`media_acquire` receives only authorised candidate source references and rights decision
+metadata. It may retain a private analysis copy only when the recorded rights decision
+allows internal structural analysis. Source-hash mismatch, unsupported retrieval and
+reference-only rights are non-retryable blocked states. Low-confidence OCR keeps the
+thumbnail stage blocked/partial and stops dependent blueprint stages.
+
+`scene_detect`, `transcribe`, `keyframe_extract`, `vision_analyze` and `ocr_extract`
+process the retained P3 analysis copy as independent V0-P4 stages. `transcribe` and
+`keyframe_extract` depend on `scene_detect`; `vision_analyze` and `ocr_extract` depend on
+`keyframe_extract`. `vision_analyze` uses the GPU resource class; the other P4 stages use
+CPU. Each stage output is retained as a private artifact with a schema version and hash.
+Empty transcript is `BLUEPRINT_STAGE_INCOMPLETE`; malformed model JSON is
+`AI_OUTPUT_SCHEMA_INVALID`; worker timeout and OOM are `BLUEPRINT_STAGE_FAILED`. Partial
+or failed stages cannot be promoted to a complete `VideoBlueprint`.
+
+`blueprint_merge`, `formula_derive` and `director_prompt_generate` are V0-P5 canonical
+evidence jobs for ready blueprint creation. They validate complete extracted stage
+evidence or the approved default formula, derive formula slots and replacement
+instructions, and retain a provider-neutral director prompt. Missing required stages
+remain `BLUEPRINT_STAGE_INCOMPLETE`; invalid slots remain `BLUEPRINT_FORMULA_INVALID`.
+
 ## Paid Provider State
 
 ```text

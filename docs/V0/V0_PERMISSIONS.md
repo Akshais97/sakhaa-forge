@@ -21,6 +21,7 @@ control actions, not normal client workflow actions.
 |---|:---:|:---:|:---:|:---:|
 | Manage workspace/members | Yes | Yes | No | No |
 | Manage provider credentials | Yes | Yes | No | No |
+| Manage workspace capabilities | Yes | Yes | No | No |
 | Approve brand profile/assets | Yes | Yes | Yes | No |
 | Select blueprint and run scripts | Yes | Yes | Yes | No |
 | Confirm paid generation | Yes | Yes | Yes | No |
@@ -33,6 +34,9 @@ control actions, not normal client workflow actions.
 | View provider/financial reconciliation | Yes | Yes | No | No |
 | Retry/reconcile provider jobs | Yes | Yes | No | No |
 | Export/delete workspace | Yes | Yes | No | No |
+| View operational traces and metrics | Yes | Yes | No | No |
+| Run restore drills | Yes | Yes | No | No |
+| Configure simulator modes | Yes | Yes | No | No |
 
 Every action remains workspace-scoped and audited. Ownership does not bypass consent,
 brand approval, credit, review or publication gates. Break-glass access requires a

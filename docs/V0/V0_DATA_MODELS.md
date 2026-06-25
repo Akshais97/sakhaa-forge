@@ -12,30 +12,58 @@ implementation mapping is `V0_PRISMA_SCHEMA.md`. Product V2's separate model rem
 - `Workspace`: client/brand tenant and policy boundary.
 - `Membership`: user role and status within a workspace.
 - `ServiceCredential`: encrypted metadata for provider credentials; secrets stay in a
-  secret manager.
+  secret manager. V0 stores the secret-manager reference, provider, purpose, environment
+  and rotation status only.
+- `WorkspaceCapability`: workspace-scoped capability switch for unfinished or temporarily
+  disabled V0 behaviours. Owner/Admin updates are audited; disabled capabilities do not
+  create new downstream job state.
 
 ## Brand Intelligence
 
-- `BrandProfile`: versioned approved brand memory.
-- `BrandCrawlRun`: crawl request, scope, status, robots/policy result and evidence.
-- `BrandCandidate`: extracted logo, color, font, copy, CTA, social link or document.
-- `BrandAsset`: uploaded or approved media with object hash and usage status.
-- `BrandApproval`: actor decision that activates a profile/version.
-- `BrandRule`: approved claim, required phrase, prohibited term or visual restriction.
+- `BrandProfile`: immutable versioned approved brand memory. One active approved profile
+  version is allowed per workspace/brand; corrections create a later version and
+  supersede the previous active one for new production use.
+- `BrandCrawlRun`: crawl request, normalized public URL, scope, status,
+  rights acknowledgement, robots/policy result and queued crawl job reference.
+- `BrandCandidate`: extracted logo, color, font, summary, USP, CTA, audience,
+  prohibited-claim or document fact with confidence, extraction state and source
+  evidence. Candidates remain unapproved until B3.
+- `BrandAsset`: uploaded or approved media linked to a clean `Artifact` with retained
+  rights basis, permitted use and usage status.
+- `BrandApproval`: append-only actor decision that activates, rejects or requests changes
+  for an exact profile/version and records actor, timestamp and reason.
+- `BrandRule`: approved claim, required phrase, prohibited term or visual restriction
+  bound to the exact approved profile version.
 
 No production workflow may use unapproved candidates as approved brand truth.
+No new production workflow may use draft, rejected, revoked, missing or superseded brand
+profiles. Historical lineage keeps the exact profile version originally used.
 
 ## Viral Discovery and Blueprinting
 
-- `ViralCandidate`: Xpoz/source identity, URLs, niche, metadata and current selection state.
-- `MetricSnapshot`: immutable source metrics at a point in time.
-- `MediaAcquisition`: attempted source retrieval and retained-object identity.
-- `ThumbnailBlueprint`: OCR, composition, hook hypothesis and quality.
-- `VideoBlueprint`: immutable scene-level structural analysis.
-- `BlueprintScene`: timing, formula slot, shot, motion, transcript, OCR and replacements.
+- `ViralCandidate`: Xpoz/source or manual identity, URLs, niche, metadata, deterministic
+  rank, selection state, source hash, provenance and source/right warnings.
+- `MetricSnapshot`: immutable source metrics at a point in time, with observation time,
+  provider, source hash and no in-place mutation.
+- `MediaAcquisition`: attempted source retrieval, rights decision, retrieval policy,
+  source hash, retained analysis artifact identity when authorised and blocked reason
+  when acquisition cannot proceed.
+- `ThumbnailBlueprint`: OCR, composition, hook hypothesis, director replacement
+  guidance, quality and source hash. Low-confidence OCR remains blocked/partial rather
+  than becoming ready blueprint input.
+- `VideoBlueprint`: immutable scene-level structural analysis with source hash, stage
+  states and stage artifact identities for scene detection, transcription, keyframes,
+  vision and OCR.
+- `BlueprintScene`: timing, formula slot, shot, motion, transcript, OCR/on-screen text
+  and brand-safe replacement guidance.
 - `FormulaDerivation`: versioned structural formula.
 - `DirectorPrompt`: versioned provider-neutral prompt with replacement slots.
 - `BlueprintLibraryEntry`: reusable approved blueprint and compatibility metadata.
+- `BlueprintRequest`: downstream identity created from one explicit path choice:
+  existing blueprint, new viral discovery or approved default formula. It binds the
+  exact active approved brand-profile version and objective before P2/P5 continue.
+  P5 completes it once into an immutable ready library entry, formula derivation,
+  director prompt and common script input contract.
 
 ## Script Tournament
 
@@ -104,6 +132,17 @@ V0 may create export-ready events, but delivery to V2 is not required for V0 acc
 - `JobDependency`: parent/child edge.
 - `JobEvent`: append-only progress and transitions.
 
+## F5 Operations
+
+- Job traces are derived from `Job`, `OutboxEvent`, `JobAttempt`, `JobEvent` and retained
+  `Artifact` rows using propagated `requestId` and trace IDs.
+- Queue-age, retry, lease-expiry, dead-letter and artifact-validation metrics are derived
+  from canonical PostgreSQL state.
+- Restore drills are retained as audit/evidence records and must verify RLS and artifact
+  references.
+- Simulator modes are local/staging operational controls and do not create production
+  provider dependencies.
+
 ## Required Constraints
 
 - Every tenant row contains `workspace_id`.
@@ -114,6 +153,23 @@ V0 may create export-ready events, but delivery to V2 is not required for V0 acc
 - One active credit reservation per generation job.
 - One active lease per job.
 - One active approved brand-profile version per workspace/brand.
+- Existing-blueprint requests reference only compatible, ready, same-workspace library
+  entries; discovery and default requests do not carry a blueprint-library entry ID.
+- Viral discovery can create candidates only for same-workspace `new_discovery`
+  blueprint requests. Provider outage, empty result, malformed result and timeout do not
+  fabricate candidate rows. Manual fallback keeps actor/source provenance and rights basis.
+- Metric snapshots are immutable; later observations create new rows rather than editing
+  existing metric evidence.
+- Media acquisition creates retained analysis artifacts only when rights allow internal
+  structural analysis. Reference-only sources, unsupported retrieval, source-hash mismatch
+  and low-confidence OCR block dependent blueprint stages with visible evidence.
+- Scene blueprints cannot become complete when any required stage is empty, malformed,
+  timed out, OOM-killed or missing. Each stage keeps an independent job, dependency edge,
+  artifact hash and stage state; blocked or failed stages remain visible.
+- Ready blueprint creation requires either a complete extracted scene blueprint or the
+  approved default formula. Extracted and default paths must produce the same
+  `v0.script-input.1` contract shape. Formula and director-prompt records are immutable;
+  creating readiness twice for the same blueprint request is rejected.
 - Immutable final-video, blueprint, script and ledger records after publication/capture.
 - Domain mutation and outbox event commit together.
 - Published success requires a verified `PostVerification`.

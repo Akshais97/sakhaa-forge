@@ -26,19 +26,19 @@ to build every checklist item as one large technical-layer batch.
 
 ## Gate 1: Brand Intelligence
 
-- [ ] Implement safe crawl scope, URL policy and uploads.
-- [ ] Extract brand candidates and retain source evidence.
-- [ ] Implement approval, versioning, rules and active brand memory.
-- [ ] Block production work without an approved exact brand-profile version.
+- [x] Implement safe crawl scope, URL policy and uploads.
+- [x] Extract brand candidates and retain source evidence.
+- [x] Implement approval, versioning, rules and active brand memory.
+- [x] Block production work without an approved exact brand-profile version.
 
 ## Gate 2: Discovery and Blueprint
 
-- [ ] Implement the required existing-blueprint/new-discovery choice.
-- [ ] Integrate Xpoz candidate search and immutable metric snapshots.
-- [ ] Implement safe acquisition, thumbnail analysis, scene detection, transcription,
+- [x] Implement the required existing-blueprint/new-discovery choice.
+- [x] Integrate Xpoz candidate search and immutable metric snapshots.
+- [x] Implement safe acquisition, thumbnail analysis, scene detection, transcription,
       keyframes, vision/OCR, merge, formula and director-prompt artifacts.
-- [ ] Implement the approved default formula when no extracted blueprint is used.
-- [ ] Preserve low-confidence and blocked states.
+- [x] Implement the approved default formula when no extracted blueprint is used.
+- [x] Preserve low-confidence and blocked states.
 
 ## Gate 3: Script Tournament
 

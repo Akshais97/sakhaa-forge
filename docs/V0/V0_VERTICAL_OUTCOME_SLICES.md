@@ -1082,10 +1082,10 @@ immutable predecessor identity they consume.
 | Model group | Owning slices |
 |---|---|
 | `User`, `Workspace`, `Membership` | F1 |
-| `ServiceCredential` | F5 |
+| `ServiceCredential`, `WorkspaceCapability`, derived trace/metrics/restore evidence | F5 |
 | `BrandProfile`, `BrandCrawlRun`, `BrandCandidate`, `BrandAsset`, `BrandApproval`, `BrandRule` | B1-B3 |
 | `ViralCandidate`, `MetricSnapshot`, `MediaAcquisition`, `ThumbnailBlueprint` | P2-P3 |
-| `VideoBlueprint`, `BlueprintScene`, `FormulaDerivation`, `DirectorPrompt`, `BlueprintLibraryEntry` | P1, P4-P5 |
+| `VideoBlueprint`, `BlueprintScene`, `FormulaDerivation`, `DirectorPrompt`, `BlueprintLibraryEntry`, `BlueprintRequest` | P1, P4-P5 |
 | `ScriptTournament`, `ScriptVariant`, `ScriptEvaluation`, `SelectedScript` | S1-S2 |
 | `AvatarProfile`, `AvatarConsent` | G1 |
 | `GenerationEstimate`, `GenerationJob`, `ProviderOperation`, `GeneratedSegment`, `GeneratedAsset` | G3-G5 |

@@ -22,6 +22,10 @@ Use structured JSON logs and OpenTelemetry traces. Never log scripts, customer m
 API keys, signed URLs, or raw provider payloads without redaction. Store audit records
 separately from diagnostic logs.
 
+V0-F5 local evidence uses generated API trace records to prove `request_id` propagation
+through job creation, outbox relay, worker attempts, job events and retained artifacts
+before broader OpenTelemetry exporter wiring is introduced.
+
 ## Alerts
 
 Page on tenant-isolation failures, data corruption, persistent scoring invalidity, restore

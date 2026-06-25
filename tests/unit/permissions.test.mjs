@@ -11,6 +11,13 @@ test("client manager can use production and wallet capabilities but cannot use a
   assert.equal(canPerform("CLIENT_MANAGER", "select_blueprint_and_run_scripts"), true);
   assert.equal(canPerform("CLIENT_MANAGER", "confirm_paid_generation"), true);
   assert.equal(canPerform("CLIENT_MANAGER", "purchase_credits_and_view_wallet_ledger"), true);
+  assert.equal(canPerform("CLIENT_MANAGER", "manage_workspace_capabilities"), false);
+  assert.equal(canPerform("OWNER", "manage_workspace_capabilities"), true);
+  assert.equal(canPerform("ADMIN", "manage_workspace_capabilities"), true);
+  assert.equal(canPerform("CLIENT_MANAGER", "view_operations"), false);
+  assert.equal(canPerform("OWNER", "view_operations"), true);
+  assert.equal(canPerform("ADMIN", "run_restore_drills"), true);
+  assert.equal(canPerform("REVIEWER", "manage_simulator_modes"), false);
   assert.equal(canPerform("CLIENT_MANAGER", "retry_reconcile_provider_jobs"), false);
   assert.equal(canPerform("CLIENT_MANAGER", "adjust_credits"), false);
 });

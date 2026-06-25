@@ -47,12 +47,65 @@ export class V0Client {
     return this.#get(\`/workspaces/\${encodeURIComponent(workspaceId)}\`);
   }
 
+  async setWorkspaceCapability(workspaceId, input) {
+    return this.#post(\`/workspaces/\${encodeURIComponent(workspaceId)}/capabilities\`, input);
+  }
+
   async initiateBrandAssetUpload(input, options = {}) {
     return this.#post("/brands/assets/uploads", input, options);
   }
 
   async completeBrandAssetUpload(artifactId, input) {
     return this.#post(\`/brands/assets/uploads/\${encodeURIComponent(artifactId)}/complete\`, input);
+  }
+
+  async createBrandCrawlRun(input, options = {}) {
+    return this.#post("/brands/crawl-runs", input, options);
+  }
+
+  async listBrandCandidates(crawlRunId) {
+    return this.#get(\`/brands/crawl-runs/\${encodeURIComponent(crawlRunId)}/candidates\`);
+  }
+
+  async approveBrandProfile(brandId, input) {
+    return this.#post(\`/brands/\${encodeURIComponent(brandId)}/approvals\`, input);
+  }
+
+  async createGenerationEstimate(input) {
+    return this.#post("/generation-estimates", input);
+  }
+
+  async listBlueprints(input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    params.set("brandProfileId", input.brandProfileId);
+    if (input.limit !== undefined) params.set("limit", String(input.limit));
+    if (input.cursor) params.set("cursor", input.cursor);
+    return this.#get(\`/blueprints?\${params.toString()}\`);
+  }
+
+  async seedBlueprintLibraryEntry(input) {
+    return this.#post("/blueprints/library-entries", input);
+  }
+
+  async createBlueprintRequest(input) {
+    return this.#post("/blueprint-requests", input);
+  }
+
+  async createReadyBlueprint(blueprintRequestId, input) {
+    return this.#post(\`/blueprint-requests/\${encodeURIComponent(blueprintRequestId)}/ready-blueprint\`, input);
+  }
+
+  async searchViralCandidates(input) {
+    return this.#post("/viral-candidates/search", input);
+  }
+
+  async extractViralCandidateBlueprint(candidateId, input) {
+    return this.#post(\`/viral-candidates/\${encodeURIComponent(candidateId)}/extract-blueprint\`, input);
+  }
+
+  async createSceneBlueprint(candidateId, input) {
+    return this.#post(\`/viral-candidates/\${encodeURIComponent(candidateId)}/scene-blueprint\`, input);
   }
 
   async createArtifactDownload(artifactId, input) {
@@ -69,6 +122,34 @@ export class V0Client {
 
   async listJobEvents(jobId) {
     return this.#get(\`/jobs/\${encodeURIComponent(jobId)}/events\`);
+  }
+
+  async getJobTrace(jobId) {
+    return this.#get(\`/jobs/\${encodeURIComponent(jobId)}/trace\`);
+  }
+
+  async recoverJob(jobId, input) {
+    return this.#post(\`/jobs/\${encodeURIComponent(jobId)}/recover\`, input);
+  }
+
+  async getWorkspaceOperationalMetrics(workspaceId) {
+    return this.#get(\`/workspaces/\${encodeURIComponent(workspaceId)}/operations/metrics\`);
+  }
+
+  async createServiceCredential(workspaceId, input) {
+    return this.#post(\`/workspaces/\${encodeURIComponent(workspaceId)}/service-credentials\`, input);
+  }
+
+  async setSimulatorMode(workspaceId, input) {
+    return this.#post(\`/workspaces/\${encodeURIComponent(workspaceId)}/simulator-mode\`, input);
+  }
+
+  async recordRestoreDrill(workspaceId, input) {
+    return this.#post(\`/workspaces/\${encodeURIComponent(workspaceId)}/restore-drills\`, input);
+  }
+
+  async runRedactionScan(workspaceId, input) {
+    return this.#post(\`/workspaces/\${encodeURIComponent(workspaceId)}/redaction-scan\`, input);
   }
 
   async listDeadLetterJobs(workspaceId) {

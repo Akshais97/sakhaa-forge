@@ -13,6 +13,10 @@
 
 Terminal: `blocked`, `failed`, `archived`
 
+V0-P4 uses `ocr_done` only when all required scene, transcript, keyframe, vision and OCR
+stage evidence is valid. Empty, malformed, timed-out, OOM or missing stage outputs stay
+`blocked` or `failed` and must not be shown as complete.
+
 ## Script Tournament
 
 `draft`, `generating`, `evaluating`, `ready_for_selection`, `selected`, `failed`,
