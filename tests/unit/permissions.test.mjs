@@ -27,3 +27,10 @@ test("reviewer can submit comments only", () => {
   assert.equal(canPerform("REVIEWER", "approve_reject_final_video"), false);
   assert.equal(canPerform("REVIEWER", "schedule_publish_approved_media"), false);
 });
+
+test("avatar consent management is restricted to owner, admin and client manager", () => {
+  assert.equal(canPerform("OWNER", "manage_avatars_consent"), true);
+  assert.equal(canPerform("ADMIN", "manage_avatars_consent"), true);
+  assert.equal(canPerform("CLIENT_MANAGER", "manage_avatars_consent"), true);
+  assert.equal(canPerform("REVIEWER", "manage_avatars_consent"), false);
+});

@@ -28,6 +28,20 @@ stage evidence is valid. Empty, malformed, timed-out, OOM or missing stage outpu
 `submitting`, `accepted`, `unknown`, `generating`, `generated`, `failed`,
 `cancel_requested`, `cancelled`
 
+## Avatars and Consent
+
+Avatar and consent eligibility is derived, not stored as a separate enum. An
+`AvatarProfile` carries `kind` (`generic`, `brand_ambassador`, `real_person`),
+`likenessScope` and `voiceScope` (`internal`, `campaign`, `limited`) and
+`serviceFulfillmentState` (`not_required`, `pending`, `fulfilled`). The linked
+`AvatarConsent` carries `evidenceRef` (a secret-manager style reference, never
+public), `expiresAt` and `revokedAt`. Derived `eligibility.reason` values are
+`eligible`, `consent_required`, `consent_expired`, `consent_revoked` and
+`service_pending`, checked in that blocking order. Consent revocation blocks future
+use immediately and historical audit records remain. UI labels follow the content
+guide (`expired` → "Expired", `revoked` → "Revoked"). No V0 enum collapses these
+derived states into a single stored status.
+
 ## Composition
 
 `draft`, `planning`, `validation_failed`, `validated`, `rendering`, `rendered`, `failed`,

@@ -403,6 +403,47 @@ selected script records a real approving user. The unique `tournamentId` and
 `variantId` constraints enforce one selection per tournament and one selection per
 variant; changes require a new tournament and a new selection.
 
+model AvatarProfile {
+  id                     String   @id @default(uuid()) @db.Uuid
+  workspaceId            String   @map("workspace_id") @db.Uuid
+  brandProfileId         String   @map("brand_profile_id") @db.Uuid
+  kind                   String   @db.VarChar(40)
+  displayName            String   @map("display_name") @db.VarChar(160)
+  likenessScope          String   @map("likeness_scope") @db.VarChar(40)
+  voiceScope             String   @map("voice_scope") @db.VarChar(40)
+  serviceFulfillmentState String   @map("service_fulfillment_state") @db.VarChar(40)
+  workspace              Workspace @relation(fields: [workspaceId], references: [id])
+  brandProfile           BrandProfile @relation(fields: [brandProfileId], references: [id])
+  consent                AvatarConsent?
+  @@unique([workspaceId, brandProfileId, displayName])
+  @@index([workspaceId, brandProfileId, createdAt])
+  @@map("avatar_profiles")
+}
+
+model AvatarConsent {
+  id              String   @id @default(uuid()) @db.Uuid
+  workspaceId     String   @map("workspace_id") @db.Uuid
+  avatarProfileId String   @unique @map("avatar_profile_id") @db.Uuid
+  evidenceRef     String   @map("evidence_ref") @db.VarChar(300)
+  likenessScope   String   @map("likeness_scope") @db.VarChar(40)
+  voiceScope      String   @map("voice_scope") @db.VarChar(40)
+  expiresAt       DateTime? @map("expires_at") @db.Timestamptz(6)
+  revokedAt       DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokedByUserId String?   @map("revoked_by_user_id") @db.Uuid
+  workspace       Workspace @relation(fields: [workspaceId], references: [id])
+  avatarProfile   AvatarProfile @relation(fields: [avatarProfileId], references: [id])
+  @@index([workspaceId, avatarProfileId])
+  @@map("avatar_consents")
+}
+
+`AvatarProfile` is bound to one approved `BrandProfile`. Eligibility is derived from
+the one-to-one `AvatarConsent` (evidence, expiry, revocation) and the avatar's
+`serviceFulfillmentState`; it is never stored as a separate enum. `evidenceRef` is a
+secret-manager style reference and never reaches public responses or analytics.
+Migration `0019_v0_g1_consent_safe_avatar_selection` creates both tables with
+workspace-isolation RLS policies, `kind`/`scope`/`service_fulfillment_state` CHECK
+constraints and a non-empty `evidence_ref` CHECK constraint.
+
 model ViralCandidate {
   id                 String @id @default(uuid()) @db.Uuid
   workspaceId        String @db.Uuid

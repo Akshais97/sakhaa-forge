@@ -84,11 +84,20 @@ attributes; selection is never optimistic and is confirmed before the irreversib
 
 | Screen | Route | Roles | Entry / exit | Primary/destructive actions | State requirements |
 |---|---|---|---|---|---|
-| Avatar catalogue | `/avatars` | Owner/Admin/Client Manager | Approved brand | Select/manage allowed avatar | empty, consent missing, expiring, expired, revoked |
+| Avatar catalogue | `/avatars` | Owner/Admin/Client Manager | Approved brand | Select/manage allowed avatar | empty, consent missing, expiring, expired, revoked, service pending, forbidden, cross-workspace hidden |
 | Credits | `/credits` | Owner/Admin/Client Manager | Workspace wallet | View ledger/purchase | loading, zero balance, pending purchase, reconciliation mismatch |
 | Purchase credits | `/credits/purchase` | Owner/Admin/Client Manager | Wallet | Start payment | amount invalid, provider pending, callback delayed, failed, succeeded |
 | New generation | `/generate/new` | Owner/Admin/Client Manager | Selected script + eligible avatar | Estimate, confirm reservation | estimating, stale estimate, insufficient credit, price changed |
 | Generation detail | `/generations/{id}` | Owner/Admin/Client Manager | Generation created | Observe/cancel where safe | queued, submitting, accepted, unknown-checking, generating, generated, failed, cancel requested |
+
+The web shell implements the avatar catalogue workflow at
+`apps/web/src/avatar-workflow.mjs`. A Client Manager loads the catalogue for an
+approved brand profile through the generated `V0Client.listAvatars`, the workflow
+renders eligible, expired, revoked, consent-missing and service-pending avatars as
+`data-state` attributes, and ineligible avatars render a disabled Select control and
+never advance. There is no V0 public avatar mutation endpoint, so selection is a
+local client-side decision for the next generation step and is never an optimistic
+paid or publishing action. Consent evidence is never rendered.
 
 ## 7. Composition and Review Screens
 

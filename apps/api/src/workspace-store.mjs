@@ -46,6 +46,9 @@ export function createWorkspaceStore() {
   const scriptVariants = new Map();
   const scriptEvaluations = new Map();
   const selectedScripts = new Map();
+  const avatarProfiles = new Map();
+  const avatarConsents = new Map();
+  const avatarCatalogsMaterialized = new Set();
   const viralCandidates = new Map();
   const metricSnapshots = new Map();
   const mediaAcquisitions = new Map();
@@ -651,6 +654,63 @@ export function createWorkspaceStore() {
         emptyState: items.length === 0 ? { action: "choose_new_discovery_or_default" } : null
       }
     };
+  }
+
+  function listAvatars(actor, input) {
+    if (!getWorkspaceForActor(actor, input.workspaceId)) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    // A brand profile that is missing or belongs to another workspace is hidden
+    // behind the same existence-hiding 404 used for all cross-workspace reads.
+    const profile = brandProfiles.get(input.brandProfileId);
+    if (!profile || profile.workspaceId !== input.workspaceId) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    if (!isActiveApprovedProfile(profile, input.workspaceId)) {
+      return {
+        ok: false,
+        problem: problem("BRAND_PROFILE_NOT_APPROVED", 409, "Brand profile not approved", "Approve the current brand profile before using it for production.")
+      };
+    }
+    ensureAvatarCatalog(input.workspaceId, input.brandProfileId);
+    const limit = normalizeLimit(input.limit);
+    const entries = [...avatarProfiles.values()]
+      .filter((avatar) => avatar.workspaceId === input.workspaceId && avatar.brandProfileId === input.brandProfileId)
+      .sort((left, right) => `${right.createdAt}:${right.id}`.localeCompare(`${left.createdAt}:${left.id}`));
+    const start = input.cursor ? entries.findIndex((avatar) => avatar.id === input.cursor) + 1 : 0;
+    const offset = Math.max(start, 0);
+    const now = Date.now();
+    const items = entries.slice(offset, offset + limit).map((avatar) => publicAvatar(avatar, avatarConsents.get(avatar.id), now));
+    const hasMore = entries.length > offset + limit;
+    return {
+      ok: true,
+      response: {
+        items,
+        page: { limit, nextCursor: hasMore && items.length > 0 ? items[items.length - 1].id : null },
+        emptyState: items.length === 0 ? { action: "await_brand_or_consent_setup" } : null
+      }
+    };
+  }
+
+  function ensureAvatarCatalog(workspaceId, brandProfileId) {
+    const key = `${workspaceId}:${brandProfileId}`;
+    if (avatarCatalogsMaterialized.has(key)) {
+      return;
+    }
+    const seed = buildAvatarCatalogSeed(workspaceId, brandProfileId, Date.now());
+    for (const entry of seed) {
+      avatarProfiles.set(entry.profile.id, entry.profile);
+      if (entry.consent) {
+        avatarConsents.set(entry.profile.id, entry.consent);
+      }
+    }
+    avatarCatalogsMaterialized.add(key);
   }
 
   function seedBlueprintLibraryEntry(actor, input) {
@@ -1973,6 +2033,7 @@ export function createWorkspaceStore() {
     failJob,
     expireJobLeases,
     relayOutbox,
+    listAvatars,
     disconnect: () => {}
   };
 }
@@ -2739,6 +2800,97 @@ export function createPrismaWorkspaceStore(env = process.env) {
       },
       input.workspaceId
     );
+  }
+
+  async function listAvatars(actor, input) {
+    const access = await getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    return withActor(
+      actor,
+      async (tx) => {
+        // RLS plus the workspaceId predicate hide a missing or cross-workspace
+        // brand profile behind the same existence-hiding 404.
+        const profile = await tx.brandProfile.findFirst({
+          where: { id: input.brandProfileId, workspaceId: input.workspaceId }
+        });
+        if (!profile) {
+          return {
+            ok: false,
+            problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          };
+        }
+        if (profile.status !== "approved" || profile.active !== true) {
+          return {
+            ok: false,
+            problem: problem("BRAND_PROFILE_NOT_APPROVED", 409, "Brand profile not approved", "Approve the current brand profile before using it for production.")
+          };
+        }
+        await ensurePrismaAvatarCatalog(tx, input.workspaceId, input.brandProfileId);
+        const limit = normalizeLimit(input.limit);
+        const where = { workspaceId: input.workspaceId, brandProfileId: input.brandProfileId };
+        const entries = await tx.avatarProfile.findMany({
+          where,
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: limit + 1,
+          include: { consent: true },
+          ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {})
+        });
+        const pageItems = entries.slice(0, limit);
+        const hasMore = entries.length > limit;
+        const now = Date.now();
+        return {
+          ok: true,
+          response: {
+            items: pageItems.map((avatar) => publicAvatar(avatar, avatar.consent, now)),
+            page: { limit, nextCursor: hasMore && pageItems.length > 0 ? pageItems[pageItems.length - 1].id : null },
+            emptyState: pageItems.length === 0 ? { action: "await_brand_or_consent_setup" } : null
+          }
+        };
+      },
+      input.workspaceId
+    );
+  }
+
+  async function ensurePrismaAvatarCatalog(tx, workspaceId, brandProfileId) {
+    const existing = await tx.avatarProfile.count({ where: { workspaceId, brandProfileId } });
+    if (existing > 0) {
+      return;
+    }
+    const seed = buildAvatarCatalogSeed(workspaceId, brandProfileId, Date.now());
+    for (const entry of seed) {
+      await tx.avatarProfile.create({
+        data: {
+          id: entry.profile.id,
+          workspaceId,
+          brandProfileId,
+          kind: entry.profile.kind,
+          displayName: entry.profile.displayName,
+          likenessScope: entry.profile.likenessScope,
+          voiceScope: entry.profile.voiceScope,
+          serviceFulfillmentState: entry.profile.serviceFulfillmentState
+        }
+      });
+      if (entry.consent) {
+        await tx.avatarConsent.create({
+          data: {
+            id: entry.consent.id,
+            workspaceId,
+            avatarProfileId: entry.profile.id,
+            evidenceRef: entry.consent.evidenceRef,
+            likenessScope: entry.consent.likenessScope,
+            voiceScope: entry.consent.voiceScope,
+            expiresAt: entry.consent.expiresAt,
+            revokedAt: entry.consent.revokedAt,
+            revokedByUserId: entry.consent.revokedByUserId
+          }
+        });
+      }
+    }
   }
 
   async function seedBlueprintLibraryEntry(actor, input) {
@@ -4269,6 +4421,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
     failJob,
     expireJobLeases,
     relayOutbox,
+    listAvatars,
     disconnect: () => prisma.$disconnect()
   };
 }
@@ -4885,6 +5038,155 @@ function stageFailureFor(simulatorMode, response) {
 
 function isActiveApprovedProfile(profile, workspaceId) {
   return profile?.workspaceId === workspaceId && profile.status === "approved" && profile.active === true;
+}
+
+// V0-G1 consent-safe avatar selection. The deterministic consent simulator
+// materializes one brand-bound catalog per approved brand profile: an eligible
+// generic avatar, an eligible brand ambassador, and real-person avatars that are
+// expired, revoked, missing consent evidence or pending service fulfillment.
+// Eligibility is derived from consent fields and fulfillment state; consent
+// evidence never reaches the public response or analytics.
+function buildAvatarCatalogSeed(workspaceId, brandProfileId, nowMs) {
+  const day = 24 * 60 * 60 * 1000;
+  const createdAt = new Date(nowMs).toISOString();
+  const profileId = (suffix) => deterministicUuid(`${workspaceId}:${brandProfileId}:${suffix}`);
+  const consentId = (avatarId) => deterministicUuid(`${avatarId}:consent`);
+  const consent = (avatarId, evidenceRef, likenessScope, voiceScope, expiresAtMs, revokedAtMs) => ({
+    id: consentId(avatarId),
+    workspaceId,
+    avatarProfileId: avatarId,
+    evidenceRef,
+    likenessScope,
+    voiceScope,
+    expiresAt: expiresAtMs === null ? null : new Date(expiresAtMs).toISOString(),
+    revokedAt: revokedAtMs === null ? null : new Date(revokedAtMs).toISOString(),
+    revokedByUserId: null,
+    createdAt,
+    updatedAt: createdAt
+  });
+  const profile = (suffix, kind, displayName, likenessScope, voiceScope, serviceFulfillmentState) => ({
+    id: profileId(suffix),
+    workspaceId,
+    brandProfileId,
+    kind,
+    displayName,
+    likenessScope,
+    voiceScope,
+    serviceFulfillmentState,
+    createdAt,
+    updatedAt: createdAt
+  });
+
+  const generic = profile("generic", "generic", "Forge Studio Presenter", "campaign", "campaign", "not_required");
+  const ambassador = profile(
+    "ambassador",
+    "brand_ambassador",
+    "Aster Heights Ambassador",
+    "campaign",
+    "campaign",
+    "fulfilled"
+  );
+  const expired = profile("real-expired", "real_person", "Customer Story Host - Priya", "campaign", "campaign", "fulfilled");
+  const revoked = profile("real-revoked", "real_person", "Customer Voice - Arjun", "campaign", "limited", "fulfilled");
+  const missing = profile("real-missing", "real_person", "Pending Talent - Meera", "campaign", "campaign", "fulfilled");
+  const customPending = profile(
+    "custom-pending",
+    "real_person",
+    "Custom Avatar - Builder Series",
+    "campaign",
+    "campaign",
+    "pending"
+  );
+
+  return [
+    {
+      profile: generic,
+      consent: consent(generic.id, "consent://generic-library-license/forge-studio-presenter", "campaign", "campaign", null, null)
+    },
+    {
+      profile: ambassador,
+      consent: consent(ambassador.id, "consent://ambassador/aster-heights", "campaign", "campaign", nowMs + 365 * day, null)
+    },
+    {
+      profile: expired,
+      consent: consent(expired.id, "consent://real-person/priya", "campaign", "campaign", nowMs - 30 * day, null)
+    },
+    {
+      profile: revoked,
+      consent: consent(revoked.id, "consent://real-person/arjun", "campaign", "limited", nowMs + 180 * day, nowMs - 2 * day)
+    },
+    { profile: missing, consent: null },
+    {
+      profile: customPending,
+      consent: consent(customPending.id, "consent://real-person/builder-series", "campaign", "campaign", nowMs + 90 * day, null)
+    }
+  ];
+}
+
+// Eligibility is derived, never stored as a separate enum. Revocation blocks
+// first, then missing evidence, then expiry, then service-fulfillment state.
+function deriveAvatarEligibility(avatar, consent, nowMs) {
+  if (consent && consent.revokedAt) {
+    return {
+      eligible: false,
+      reason: "consent_revoked",
+      consentExpiresAt: toIso(consent.expiresAt),
+      consentRevokedAt: toIso(consent.revokedAt)
+    };
+  }
+  if (!consent || !consent.evidenceRef || String(consent.evidenceRef).trim() === "") {
+    return {
+      eligible: false,
+      reason: "consent_required",
+      consentExpiresAt: null,
+      consentRevokedAt: null
+    };
+  }
+  if (consent.expiresAt && new Date(consent.expiresAt).getTime() < nowMs) {
+    return {
+      eligible: false,
+      reason: "consent_expired",
+      consentExpiresAt: toIso(consent.expiresAt),
+      consentRevokedAt: null
+    };
+  }
+  if (avatar.serviceFulfillmentState === "pending") {
+    return {
+      eligible: false,
+      reason: "service_pending",
+      consentExpiresAt: toIso(consent.expiresAt),
+      consentRevokedAt: null
+    };
+  }
+  return {
+    eligible: true,
+    reason: "eligible",
+    consentExpiresAt: toIso(consent.expiresAt),
+    consentRevokedAt: null
+  };
+}
+
+// Public avatar contract. Consent evidence (evidenceRef) is never included; only
+// the derived eligibility and the non-sensitive consent timing are exposed.
+function publicAvatar(avatar, consent, nowMs) {
+  return {
+    id: avatar.id,
+    workspaceId: avatar.workspaceId,
+    brandProfileId: avatar.brandProfileId,
+    kind: avatar.kind,
+    displayName: avatar.displayName,
+    likenessScope: avatar.likenessScope,
+    voiceScope: avatar.voiceScope,
+    serviceFulfillmentState: avatar.serviceFulfillmentState,
+    eligibility: deriveAvatarEligibility(avatar, consent, nowMs),
+    createdAt: toIso(avatar.createdAt),
+    updatedAt: toIso(avatar.updatedAt)
+  };
+}
+
+function deterministicUuid(seed) {
+  const hash = createHash("sha256").update(seed).digest("hex");
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
 }
 
 function isBlueprintCompatible(entry, profile, objectiveType) {

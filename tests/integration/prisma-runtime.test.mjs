@@ -6,7 +6,7 @@ import { createHash, createHmac, randomUUID } from "node:crypto";
 import { V0Client } from "../../packages/contracts/generated/v0-client.mjs";
 import { loadApiEnv } from "../helpers/env.mjs";
 import { withApiServer } from "../helpers/server.mjs";
-import { prepareReadyTournament } from "../helpers/script-tournament-fixtures.mjs";
+import { prepareReadyTournament, prepareApprovedBrand } from "../helpers/script-tournament-fixtures.mjs";
 
 const jwtSecret = "test-supabase-jwt-secret";
 
@@ -272,6 +272,75 @@ test("prisma runtime persists S1 script tournament and S2 selected script and is
         `SELECT count(*)::text FROM selected_scripts WHERE tournament_id = '${raced.tournamentId}'::uuid`
       );
       assert.equal(raceSelectedCount, "1");
+    }
+  );
+});
+
+test("prisma runtime materializes V0-G1 avatar catalogue with derived consent eligibility", {
+  timeout: 30000,
+  skip: process.env.V0_RUNTIME_DB_PROOF === "1" ? false : "Run through pnpm verify runtime proof step."
+}, async () => {
+  const env = loadApiEnv();
+  if (!env.DATABASE_URL) {
+    throw new Error("DATABASE_URL required for prisma runtime G1 write proof.");
+  }
+
+  const userId = randomUUID();
+
+  await withApiServer(
+    {
+      ...env,
+      APP_ENV: "test",
+      APP_VERSION: "test",
+      V0_RUNTIME_DB: "prisma",
+      V0_EXPOSE_TEST_ERRORS: "1",
+      V0_INTERNAL_WORKER_TOKEN: "runtime-worker-token",
+      SUPABASE_JWT_SECRET: jwtSecret
+    },
+    async ({ baseUrl }) => {
+      const client = new V0Client({ baseUrl, authToken: signJwt(userId) });
+      const prepared = await prepareApprovedBrand(client, "Runtime G1");
+
+      const listed = await client.listAvatars({
+        workspaceId: prepared.workspaceId,
+        brandProfileId: prepared.brandProfileId,
+        limit: 50
+      });
+      assert.equal(listed.status, 200, JSON.stringify(listed.body));
+      assert.ok(listed.body.items.length >= 5);
+      // Consent evidence never reaches the public response.
+      assert.equal(/evidence_ref|evidenceRef/i.test(JSON.stringify(listed.body)), false);
+
+      const reasons = new Set(listed.body.items.map((avatar) => avatar.eligibility.reason));
+      assert.ok(reasons.has("eligible"));
+      assert.ok(reasons.has("consent_expired"));
+      assert.ok(reasons.has("consent_revoked"));
+      assert.ok(reasons.has("consent_required"));
+      assert.ok(reasons.has("service_pending"));
+
+      // Avatar profiles and consents are persisted under RLS with the workspace.
+      // Six avatars materialize; five carry a consent record (the missing-evidence
+      // avatar has none).
+      const avatarState = queryScalar(
+        env.DIRECT_DATABASE_URL || env.DATABASE_URL,
+        `
+          SELECT count(*)::text || ':' || count(c.id)::text
+          FROM avatar_profiles p
+          LEFT JOIN avatar_consents c ON c.avatar_profile_id = p.id
+          WHERE p.workspace_id = '${prepared.workspaceId}'::uuid
+            AND p.brand_profile_id = '${prepared.brandProfileId}'::uuid
+        `
+      );
+      assert.equal(avatarState, "6:5");
+
+      // A cross-workspace brand profile hides existence behind the same 404.
+      const other = await prepareApprovedBrand(client, "Runtime G1 other");
+      const cross = await client.listAvatars({
+        workspaceId: prepared.workspaceId,
+        brandProfileId: other.brandProfileId
+      });
+      assert.equal(cross.status, 404);
+      assert.equal(cross.body.code, "WORKSPACE_ACCESS_DENIED");
     }
   );
 });

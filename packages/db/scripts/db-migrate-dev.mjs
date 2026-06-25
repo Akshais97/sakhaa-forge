@@ -77,6 +77,10 @@ const migrations = [
   {
     path: "packages/db/prisma/migrations/0018_v0_s2_selected_script_approver_fk/migration.sql",
     sentinel: "SELECT COUNT(*) > 0 FROM pg_constraint WHERE conname = 'selected_scripts_approver_user_id_fkey'"
+  },
+  {
+    path: "packages/db/prisma/migrations/0019_v0_g1_consent_safe_avatar_selection/migration.sql",
+    sentinel: "SELECT to_regclass('public.avatar_profiles') IS NOT NULL AND to_regclass('public.avatar_consents') IS NOT NULL"
   }
 ];
 
@@ -95,7 +99,7 @@ const databaseUrl = process.env.DIRECT_DATABASE_URL || process.env.DATABASE_URL;
 
 if (!databaseUrl) {
   console.log(
-    "V0-F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2 db:migrate:dev dry-run: DIRECT_DATABASE_URL and DATABASE_URL are not set; migration SQL validated but not applied."
+    "V0-F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1 db:migrate:dev dry-run: DIRECT_DATABASE_URL and DATABASE_URL are not set; migration SQL validated but not applied."
   );
   process.exit(0);
 }
@@ -130,7 +134,7 @@ for (const migration of migrations) {
   }
 }
 
-console.log("V0-F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2 migrations applied.");
+console.log("V0-F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1 migrations applied.");
 
 function isMigrationApplied(psqlCommand, databaseUrl, sentinel) {
   const result = spawnSync(psqlCommand, [databaseUrl, "-t", "-A", "-v", "ON_ERROR_STOP=1", "-c", sentinel], {

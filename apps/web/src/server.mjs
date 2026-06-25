@@ -7,6 +7,7 @@ const port = Number.parseInt(process.env.PORT || "3000", 10);
 const here = dirname(fileURLToPath(import.meta.url));
 const v0ClientPath = join(here, "..", "..", "..", "packages", "contracts", "generated", "v0-client.mjs");
 const workflowPath = join(here, "script-tournament-workflow.mjs");
+const avatarWorkflowPath = join(here, "avatar-workflow.mjs");
 
 const page = `<!doctype html>
 <html lang="en-IN">
@@ -164,6 +165,34 @@ const page = `<!doctype html>
         color: #2c5b2c;
       }
       [data-state="already-selected"] {
+        background: #fbf1da;
+        color: #6d4b00;
+      }
+      [data-state="expired"] {
+        background: #fbf1da;
+        color: #6d4b00;
+      }
+      [data-state="revoked"] {
+        background: #fcebea;
+        color: #8f1d14;
+      }
+      [data-state="consent-missing"] {
+        background: #efebf3;
+        color: #5b2b76;
+      }
+      [data-state="service-pending"] {
+        background: #e7eef5;
+        color: #2c4a6b;
+      }
+      [data-state="forbidden"] {
+        background: #fcebea;
+        color: #8f1d14;
+      }
+      [data-state="blocked-hidden"] {
+        background: #ece8df;
+        color: #5d574e;
+      }
+      [data-state="blocked-brand"] {
         background: #fbf1da;
         color: #6d4b00;
       }
@@ -410,8 +439,24 @@ const page = `<!doctype html>
           </article>
         </div>
       </section>
+      <section aria-labelledby="avatar-catalog-title" data-testid="avatar-catalog-contract">
+        <h2 id="avatar-catalog-title">Avatar catalogue</h2>
+        <p>Generic, brand-ambassador and consented real-person avatars are bound to the approved brand profile. Eligibility is derived from consent evidence, expiry, revocation and service-fulfillment state; expired, revoked, missing-evidence or service-pending avatars cannot enter a generation estimate or job. Consent evidence itself is never shown.</p>
+        <form data-testid="avatar-catalog-form" id="avatar-catalog-form">
+          <label for="av-workspace">Workspace id</label>
+          <input id="av-workspace" name="workspaceId" autocomplete="off" required>
+          <label for="av-brand-profile">Approved brand profile id</label>
+          <input id="av-brand-profile" name="brandProfileId" autocomplete="off" required>
+          <label for="av-token">Session token</label>
+          <input id="av-token" name="sessionToken" type="password" autocomplete="off" placeholder="Supabase JWT">
+          <button type="submit">Load avatar catalogue</button>
+        </form>
+        <p class="status workflow-status" data-testid="avatar-catalog-status" data-state="empty">No avatar catalogue loaded.</p>
+        <div class="candidate-grid" data-testid="avatar-catalog-grid"></div>
+      </section>
     </main>
     <script type="module" src="/script-tournament-workflow.mjs"></script>
+    <script type="module" src="/avatar-workflow.mjs"></script>
   </body>
 </html>
 `;
@@ -420,6 +465,9 @@ const server = http.createServer(async (request, response) => {
   const url = request.url.split("?")[0];
   if (url === "/script-tournament-workflow.mjs") {
     return serveModule(response, workflowPath);
+  }
+  if (url === "/avatar-workflow.mjs") {
+    return serveModule(response, avatarWorkflowPath);
   }
   if (url === "/v0-client.mjs") {
     return serveModule(response, v0ClientPath);

@@ -87,8 +87,16 @@ profiles. Historical lineage keeps the exact profile version originally used.
 
 ## Avatars and Generation
 
-- `AvatarProfile`: generic, brand ambassador or real-person avatar metadata.
-- `AvatarConsent`: likeness/voice scope, evidence, expiry and revocation.
+- `AvatarProfile`: generic, brand ambassador or real-person avatar metadata, bound
+  to one approved brand profile. Carries `kind` (`generic`, `brand_ambassador`,
+  `real_person`), `likenessScope` and `voiceScope` (`internal`, `campaign`,
+  `limited`), `serviceFulfillmentState` (`not_required`, `pending`, `fulfilled`) and
+  a one-to-one `AvatarConsent`. Generic avatars are labelled honestly by kind with
+  no performance claims.
+- `AvatarConsent`: likeness/voice scope, evidence, expiry and revocation. Evidence
+  is held as a secret-manager style `evidenceRef` and never appears in public
+  responses or analytics. `expiresAt` and `revokedAt` drive derived eligibility;
+  revocation blocks future use immediately while historical audit records remain.
 - `GenerationEstimate`: provider, route, price version, maximum authorized cost.
 - `GenerationJob`: V0 production aggregate and current workflow state.
 - `ProviderOperation`: durable provider request, idempotency key, external ID and

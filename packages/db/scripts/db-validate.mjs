@@ -73,6 +73,10 @@ const s2ApproverFkMigration = await readFile(
   "packages/db/prisma/migrations/0018_v0_s2_selected_script_approver_fk/migration.sql",
   "utf8"
 );
+const g1Migration = await readFile(
+  "packages/db/prisma/migrations/0019_v0_g1_consent_safe_avatar_selection/migration.sql",
+  "utf8"
+);
 
 if (!schema.includes("provider = \"postgresql\"")) {
   throw new Error("Prisma datasource must use PostgreSQL.");
@@ -115,7 +119,9 @@ for (const required of [
   "model ScriptTournament",
   "model ScriptVariant",
   "model ScriptEvaluation",
-  "model SelectedScript"
+  "model SelectedScript",
+  "model AvatarProfile",
+  "model AvatarConsent"
 ]) {
   if (!schema.includes(required)) {
     throw new Error(`Missing required schema block: ${required}`);
@@ -444,6 +450,26 @@ if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migra
 }
 
 for (const required of [
+  "CREATE TABLE IF NOT EXISTS avatar_profiles",
+  "CREATE TABLE IF NOT EXISTS avatar_consents",
+  "evidence_ref VARCHAR(300) NOT NULL",
+  "ALTER TABLE avatar_profiles ENABLE ROW LEVEL SECURITY;",
+  "ALTER TABLE avatar_consents ENABLE ROW LEVEL SECURITY;",
+  "CREATE POLICY avatar_profiles_workspace_isolation",
+  "CREATE POLICY avatar_consents_workspace_isolation",
+  "avatar_profiles_kind_check",
+  "avatar_consents_evidence_ref_check"
+]) {
+  if (!g1Migration.includes(required)) {
+    throw new Error(`Missing required G1 consent-safe avatar migration statement: ${required}`);
+  }
+}
+
+if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}\n${s1Migration}\n${s2Migration}\n${s2ApproverFkMigration}\n${g1Migration}`)) {
+  throw new Error("Runtime roles must not receive BYPASSRLS.");
+}
+
+for (const required of [
   "ADD COLUMN last_error_code",
   "CREATE INDEX jobs_workspace_failed_updated_idx"
 ]) {
@@ -452,4 +478,4 @@ for (const required of [
   }
 }
 
-console.log("Database contract valid for V0-F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2 identity, idempotency, artifacts, jobs, outbox, capability controls, service credentials, brand intake, brand candidates, brand memory, blueprint path selection, viral candidate metrics, media acquisition, thumbnail blueprints, scene blueprints, formula derivations, director prompts, script tournaments, selected scripts, selected-script approver lineage FK and RLS.");
+console.log("Database contract valid for V0-F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1 identity, idempotency, artifacts, jobs, outbox, capability controls, service credentials, brand intake, brand candidates, brand memory, blueprint path selection, viral candidate metrics, media acquisition, thumbnail blueprints, scene blueprints, formula derivations, director prompts, script tournaments, selected scripts, selected-script approver lineage FK, consent-safe avatar profiles and consents, and RLS.");

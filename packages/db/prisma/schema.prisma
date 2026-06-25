@@ -102,6 +102,8 @@ model Workspace {
   scriptVariants ScriptVariant[]
   scriptEvaluations ScriptEvaluation[]
   selectedScripts SelectedScript[]
+  avatars AvatarProfile[]
+  avatarConsents AvatarConsent[]
   inboxEvents InboxEvent[]
   jobs Job[]
   jobAttempts JobAttempt[]
@@ -315,6 +317,7 @@ model BrandProfile {
   blueprintLibraryEntries BlueprintLibraryEntry[]
   blueprintRequests BlueprintRequest[]
   scriptTournaments ScriptTournament[]
+  avatars AvatarProfile[]
 
   @@unique([workspaceId, brandId, version])
   @@index([workspaceId, brandId, status, active])
@@ -584,6 +587,52 @@ model SelectedScript {
 
   @@index([workspaceId, createdAt])
   @@map("selected_scripts")
+}
+
+// V0-G1 consent-safe avatar selection: a generic, brand-ambassador or
+// consented real-person avatar bound to one approved brand profile. Eligibility
+// is derived from the linked AvatarConsent (evidence/expiry/revocation) and the
+// avatar's service-fulfillment state; it is never stored as a separate enum.
+// Consent evidence lives only in AvatarConsent.evidenceRef (a secret-manager
+// style reference) and never reaches public responses or analytics.
+model AvatarProfile {
+  id                     String        @id @default(uuid()) @db.Uuid
+  workspaceId            String        @map("workspace_id") @db.Uuid
+  brandProfileId         String        @map("brand_profile_id") @db.Uuid
+  kind                   String        @db.VarChar(40)
+  displayName            String        @map("display_name") @db.VarChar(160)
+  likenessScope          String        @map("likeness_scope") @db.VarChar(40)
+  voiceScope             String        @map("voice_scope") @db.VarChar(40)
+  serviceFulfillmentState String        @map("service_fulfillment_state") @db.VarChar(40)
+  createdAt              DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace              Workspace     @relation(fields: [workspaceId], references: [id])
+  brandProfile           BrandProfile  @relation(fields: [brandProfileId], references: [id])
+  consent                AvatarConsent?
+
+  @@unique([workspaceId, brandProfileId, displayName])
+  @@index([workspaceId, brandProfileId, createdAt])
+  @@index([workspaceId, updatedAt, id])
+  @@map("avatar_profiles")
+}
+
+model AvatarConsent {
+  id              String      @id @default(uuid()) @db.Uuid
+  workspaceId     String      @map("workspace_id") @db.Uuid
+  avatarProfileId String      @unique @map("avatar_profile_id") @db.Uuid
+  evidenceRef     String      @map("evidence_ref") @db.VarChar(300)
+  likenessScope   String      @map("likeness_scope") @db.VarChar(40)
+  voiceScope      String      @map("voice_scope") @db.VarChar(40)
+  expiresAt       DateTime?   @map("expires_at") @db.Timestamptz(6)
+  revokedAt       DateTime?   @map("revoked_at") @db.Timestamptz(6)
+  revokedByUserId String?     @map("revoked_by_user_id") @db.Uuid
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace       Workspace    @relation(fields: [workspaceId], references: [id])
+  avatarProfile   AvatarProfile @relation(fields: [avatarProfileId], references: [id])
+
+  @@index([workspaceId, avatarProfileId])
+  @@map("avatar_consents")
 }
 
 model ViralCandidate {

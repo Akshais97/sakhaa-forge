@@ -727,6 +727,45 @@
         }
       }
     },
+    "/avatars": {
+      "get": {
+        "operationId": "listAvatars",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "brandProfileId",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 50 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "V0-G1 consent-safe avatar catalogue with derived eligibility and hidden consent evidence; expired, revoked, missing-evidence and service-pending avatars cannot enter a generation estimate or job." },
+          "401": { "description": "Authentication is required." },
+          "403": { "description": "Only Owner, Admin or Client Manager can view the avatar catalogue." },
+          "404": { "description": "Workspace or brand profile is hidden by tenant isolation." },
+          "409": { "description": "The brand profile is not active or approved." }
+        }
+      }
+    },
     "/viral-candidates/search": {
       "post": {
         "operationId": "searchViralCandidates",

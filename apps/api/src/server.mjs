@@ -344,6 +344,24 @@ function createF0Controller(env, store, prefix) {
       return result.response;
     }
 
+    async listAvatars(request, query) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      await assertWorkspacePermission(store, auth.actor, query?.workspaceId, "manage_avatars_consent");
+      const result = await store.listAvatars(auth.actor, {
+        workspaceId: query.workspaceId,
+        brandProfileId: query.brandProfileId,
+        limit: query.limit ? Number.parseInt(query.limit, 10) : undefined,
+        cursor: query.cursor
+      });
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
     async seedBlueprintLibraryEntry(request) {
       const auth = authenticateRequest(request.headers, env);
       if (!auth.ok) {
@@ -782,6 +800,7 @@ function createF0Controller(env, store, prefix) {
   postRoute("brands/:brandId/approvals", F0Controller, "approveBrandProfile", [Req(), Param("brandId")], 201);
   postRoute("generation-estimates", F0Controller, "createGenerationEstimate", [Req()], 202);
   route("blueprints", F0Controller, "listBlueprints", [Req(), Query()], 200);
+  route("avatars", F0Controller, "listAvatars", [Req(), Query()], 200);
   postRoute("blueprints/library-entries", F0Controller, "seedBlueprintLibraryEntry", [Req()], 201);
   postRoute("blueprint-requests", F0Controller, "createBlueprintRequest", [Req()], 202);
   postRoute("blueprint-requests/:blueprintRequestId/ready-blueprint", F0Controller, "createReadyBlueprint", [Req(), Param("blueprintRequestId")], 202);

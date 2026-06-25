@@ -185,6 +185,23 @@ different `Idempotency-Key` values retain exactly one selected script and return
 `Idempotency-Key` return the same selection. The endpoint requires an `Idempotency-Key` and the
 `select_blueprint_and_run_scripts` capability.
 
+`GET /avatars` returns the V0-G1 consent-safe avatar catalogue for one workspace and
+one active approved brand profile. Results are bounded by `limit` with a cursor and
+expose generic, brand-ambassador and real-person avatars bound to that brand profile.
+Each avatar carries a derived `eligibility` object (`eligible`, `reason`,
+`consentExpiresAt`, `consentRevokedAt`) computed from the linked `AvatarConsent`
+(evidence, expiry, revocation) and the avatar's service-fulfillment state; eligibility
+is never stored as a separate enum. Revoked, expired, missing-evidence or
+service-pending avatars are returned with `eligible: false` and a stable reason
+(`consent_revoked`, `consent_expired`, `consent_required`, `service_pending`) so the
+UI can show why an avatar is unavailable without exposing consent evidence, which is
+sensitive and never appears in the response or analytics. A missing or cross-workspace
+brand profile is hidden behind `WORKSPACE_ACCESS_DENIED` (404), never a 409 that leaks
+existence. The endpoint requires the `manage_avatars_consent` capability (Owner, Admin,
+Client Manager). The deterministic consent simulator idempotently materializes the
+brand-bound catalogue on first read; V0 defines no public avatar creation or
+revocation endpoint, so no client can mutate consent state through `/api/v0`.
+
 ## Provider Callbacks
 
 ```text

@@ -84,6 +84,15 @@ export class V0Client {
     return this.#get(\`/blueprints?\${params.toString()}\`);
   }
 
+  async listAvatars(input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    params.set("brandProfileId", input.brandProfileId);
+    if (input.limit !== undefined) params.set("limit", String(input.limit));
+    if (input.cursor) params.set("cursor", input.cursor);
+    return this.#get(\`/avatars?\${params.toString()}\`);
+  }
+
   async seedBlueprintLibraryEntry(input) {
     return this.#post("/blueprints/library-entries", input);
   }
