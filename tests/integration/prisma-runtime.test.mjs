@@ -6,6 +6,7 @@ import { createHash, createHmac, randomUUID } from "node:crypto";
 import { V0Client } from "../../packages/contracts/generated/v0-client.mjs";
 import { loadApiEnv } from "../helpers/env.mjs";
 import { withApiServer } from "../helpers/server.mjs";
+import { prepareReadyTournament } from "../helpers/script-tournament-fixtures.mjs";
 
 const jwtSecret = "test-supabase-jwt-secret";
 
@@ -159,6 +160,118 @@ test("prisma runtime persists workspace and idempotency records in Supabase", {
       assert.equal(heartbeat.status, 200);
       assert.equal(completedJob.status, 200, JSON.stringify(completedJob.body));
       assert.match(jobEvidence, /^SUCCEEDED:[1-9][0-9]*:1$/);
+    }
+  );
+});
+
+test("prisma runtime persists S1 script tournament and S2 selected script and is concurrency-safe", {
+  timeout: 60000,
+  skip: process.env.V0_RUNTIME_DB_PROOF === "1" ? false : "Run through pnpm verify runtime proof step."
+}, async () => {
+  const env = loadApiEnv();
+  if (!env.DATABASE_URL) {
+    throw new Error("DATABASE_URL required for prisma runtime S1/S2 write proof.");
+  }
+
+  const userId = randomUUID();
+
+  await withApiServer(
+    {
+      ...env,
+      APP_ENV: "test",
+      APP_VERSION: "test",
+      V0_RUNTIME_DB: "prisma",
+      V0_EXPOSE_TEST_ERRORS: "1",
+      V0_INTERNAL_WORKER_TOKEN: "runtime-worker-token",
+      SUPABASE_JWT_SECRET: jwtSecret
+    },
+    async ({ baseUrl }) => {
+      const client = new V0Client({ baseUrl, authToken: signJwt(userId) });
+      const ready = await prepareReadyTournament(client, "Runtime S1S2", { variantCount: 12 });
+
+      // S1 persistence: tournament, variants and evaluations are retained under Prisma.
+      const tournamentState = queryScalar(
+        env.DIRECT_DATABASE_URL || env.DATABASE_URL,
+        `
+          SELECT status::text || ':' || valid_variant_count::text
+          FROM script_tournaments
+          WHERE id = '${ready.tournamentId}'::uuid
+            AND workspace_id = '${ready.workspaceId}'::uuid
+            AND created_by_user_id = '${userId}'::uuid
+        `
+      );
+      assert.equal(tournamentState, "ready_for_selection:12");
+
+      const variantEvaluationCounts = queryScalar(
+        env.DIRECT_DATABASE_URL || env.DATABASE_URL,
+        `
+          SELECT count(DISTINCT v.id)::text || ':' || count(DISTINCT e.id)::text
+          FROM script_variants v
+          LEFT JOIN script_evaluations e ON e.variant_id = v.id
+          WHERE v.tournament_id = '${ready.tournamentId}'::uuid
+            AND v.workspace_id = '${ready.workspaceId}'::uuid
+        `
+      );
+      assert.match(variantEvaluationCounts, /^12:12$/);
+
+      const target = ready.variants[0];
+      const selection = await client.selectScriptVariant(
+        ready.tournamentId,
+        {
+          workspaceId: ready.workspaceId,
+          tournamentId: ready.tournamentId,
+          variantId: target.id,
+          optimisticTournamentVersion: ready.optimisticTournamentVersion,
+          humanOverride: false
+        },
+        { idempotencyKey: `runtime-s2-select-${userId}` }
+      );
+      assert.equal(selection.status, 200, JSON.stringify(selection.body));
+      assert.equal(selection.body.selectedScript.approverUserId, userId);
+      assert.equal(selection.body.selectedScript.immutable, true);
+
+      // S2 persistence: one immutable selected_script with approver lineage and a
+      // tournament advanced to selected. The approver FK to users(id) is enforced.
+      const selectedEvidence = queryScalar(
+        env.DIRECT_DATABASE_URL || env.DATABASE_URL,
+        `
+          SELECT ss.version::text || ':' || ss.human_override::text || ':' || st.status::text || ':' || count(*)::text
+          FROM selected_scripts ss
+          JOIN script_tournaments st ON st.id = ss.tournament_id
+          WHERE ss.tournament_id = '${ready.tournamentId}'::uuid
+            AND ss.workspace_id = '${ready.workspaceId}'::uuid
+            AND ss.approver_user_id = '${userId}'::uuid
+            AND ss.variant_id = '${target.id}'::uuid
+          GROUP BY ss.version, ss.human_override, st.status
+        `
+      );
+      assert.equal(selectedEvidence, "1:false:selected:1");
+
+      // Concurrency proof: two reviewers select the same ready tournament at the
+      // same time with different idempotency keys. The atomic claim keeps exactly
+      // one selected_scripts row; the loser receives SCRIPT_ALREADY_SELECTED, not
+      // a 500 or a duplicate.
+      const raced = await prepareReadyTournament(client, "Runtime race", { variantCount: 10 });
+      const raceBody = {
+        workspaceId: raced.workspaceId,
+        tournamentId: raced.tournamentId,
+        variantId: raced.variants[0].id,
+        optimisticTournamentVersion: raced.optimisticTournamentVersion
+      };
+      const [first, second] = await Promise.all([
+        client.selectScriptVariant(raced.tournamentId, raceBody, { idempotencyKey: `runtime-race-a-${randomUUID()}` }),
+        client.selectScriptVariant(raced.tournamentId, raceBody, { idempotencyKey: `runtime-race-b-${randomUUID()}` })
+      ]);
+      const statuses = [first.status, second.status].sort();
+      assert.deepEqual(statuses, [200, 409], JSON.stringify([first.body, second.body]));
+      const failed = first.status === 409 ? first : second;
+      assert.equal(failed.body.code, "SCRIPT_ALREADY_SELECTED");
+
+      const raceSelectedCount = queryScalar(
+        env.DIRECT_DATABASE_URL || env.DATABASE_URL,
+        `SELECT count(*)::text FROM selected_scripts WHERE tournament_id = '${raced.tournamentId}'::uuid`
+      );
+      assert.equal(raceSelectedCount, "1");
     }
   );
 });

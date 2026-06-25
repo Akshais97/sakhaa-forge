@@ -1,13 +1,14 @@
 import http from "node:http";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 const port = Number.parseInt(process.env.PORT || "3000", 10);
+const here = dirname(fileURLToPath(import.meta.url));
+const v0ClientPath = join(here, "..", "..", "..", "packages", "contracts", "generated", "v0-client.mjs");
+const workflowPath = join(here, "script-tournament-workflow.mjs");
 
-const server = http.createServer((_request, response) => {
-  response.writeHead(200, {
-    "content-type": "text/html; charset=utf-8",
-    "cache-control": "no-store"
-  });
-  response.end(`<!doctype html>
+const page = `<!doctype html>
 <html lang="en-IN">
   <head>
     <meta charset="utf-8">
@@ -58,6 +59,10 @@ const server = http.createServer((_request, response) => {
         color: #ffffff;
         font-weight: 650;
       }
+      button[disabled] {
+        background: #b4b0a7;
+        color: #5d574e;
+      }
       .candidate-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -83,9 +88,13 @@ const server = http.createServer((_request, response) => {
         align-items: center;
         min-height: 28px;
         border-radius: 6px;
-        padding: 0 8px;
+        padding: 4px 10px;
         font-size: 0.875rem;
         font-weight: 650;
+        margin-block: 12px;
+      }
+      .workflow-status {
+        display: block;
       }
       [data-state="partial"] {
         background: #fbf1da;
@@ -129,6 +138,34 @@ const server = http.createServer((_request, response) => {
       [data-state="blocked"] {
         background: #efebf3;
         color: #5b2b76;
+      }
+      [data-state="empty"] {
+        background: #ece8df;
+        color: #5d574e;
+      }
+      [data-state="loading"] {
+        background: #e7eef5;
+        color: #2c4a6b;
+      }
+      [data-state="ready"] {
+        background: #e6efe6;
+        color: #2c5b2c;
+      }
+      [data-state="error"] {
+        background: #fcebea;
+        color: #8f1d14;
+      }
+      [data-state="invalid"] {
+        background: #efebf3;
+        color: #5b2b76;
+      }
+      [data-state="success"] {
+        background: #e6efe6;
+        color: #2c5b2c;
+      }
+      [data-state="already-selected"] {
+        background: #fbf1da;
+        color: #6d4b00;
       }
     </style>
   </head>
@@ -335,29 +372,25 @@ const server = http.createServer((_request, response) => {
       </section>
       <section aria-labelledby="script-tournament-title" data-testid="script-tournament-contract">
         <h2 id="script-tournament-title">Script tournament contract</h2>
-        <p>Ten to twenty formula- and brand-constrained variants are generated, evaluated and retained; raw prompts and script text never enter analytics.</p>
-        <div class="candidate-grid">
-          <article class="candidate">
-            <h3>Ready for selection</h3>
-            <p>Every variant keeps hook, body, CTA, captions, claims, formula slots and prompt/model provenance with a source hash.</p>
-            <p class="source">Prompt v0.director-prompt.1 · model v0.script-model.1 · analytics buckets only</p>
-            <span class="status" data-state="approved">Ready for selection</span>
-          </article>
-          <article class="candidate">
-            <h3>Insufficient valid variants</h3>
-            <p>Fewer than ten valid scripts after prohibited-claim or brand-rule refusal stops advancement; refused variants stay visible.</p>
-            <span class="status" data-state="blocked">Blocked</span>
-          </article>
-          <article class="candidate">
-            <h3>Draft blueprint guard</h3>
-            <p>An unapproved brand profile or a draft blueprint cannot enter script generation.</p>
-            <span class="status" data-state="blocked">Blocked</span>
-          </article>
-        </div>
+        <p>Ten to twenty formula- and brand-constrained variants are generated, evaluated and retained; raw prompts and script text never enter analytics. Fewer than ten valid scripts after prohibited-claim or brand-rule refusal stops advancement. An unapproved brand profile or a draft blueprint cannot enter script generation. Prompt v0.director-prompt.1 · model v0.script-model.1 · prompt/model provenance with a source hash · analytics buckets only.</p>
+        <form data-testid="script-tournament-form" id="script-tournament-form">
+          <label for="st-workspace">Workspace id</label>
+          <input id="st-workspace" name="workspaceId" autocomplete="off" required>
+          <label for="st-blueprint">Ready blueprint request id</label>
+          <input id="st-blueprint" name="blueprintRequestId" autocomplete="off" required>
+          <label for="st-variant-count">Variant count (10-20)</label>
+          <input id="st-variant-count" name="variantCount" type="number" min="10" max="20" value="10">
+          <label for="st-token">Session token</label>
+          <input id="st-token" name="sessionToken" type="password" autocomplete="off" placeholder="Supabase JWT">
+          <button type="submit">Run script tournament</button>
+        </form>
+        <p class="status workflow-status" data-testid="script-tournament-status" data-state="empty">No tournament loaded.</p>
+        <div class="candidate-grid" data-testid="script-tournament-variants"></div>
       </section>
       <section aria-labelledby="script-selection-title" data-testid="script-selection-contract">
         <h2 id="script-selection-title">Script selection contract</h2>
-        <p>The client manager compares evaluated variants and selects one exact immutable script version for generation.</p>
+        <p>The client manager compares evaluated variants and selects one exact immutable script version for generation. One canonical, immutable selected script is retained per tournament with actor, tournament, variant and version provenance. An optimistic-version guard rejects a selection made from a stale comparison tab. An unevaluated, refused, superseded or cross-workspace variant cannot be selected; selection never implies generation approval or credit reservation. Schema v0.selected-script.1 · analytics script_selected bucket only.</p>
+        <p class="status workflow-status" data-testid="script-selection-status" data-state="empty">No selection made.</p>
         <div class="candidate-grid">
           <article class="candidate">
             <h3>Selected immutable script</h3>
@@ -378,10 +411,39 @@ const server = http.createServer((_request, response) => {
         </div>
       </section>
     </main>
+    <script type="module" src="/script-tournament-workflow.mjs"></script>
   </body>
 </html>
-`);
+`;
+
+const server = http.createServer(async (request, response) => {
+  const url = request.url.split("?")[0];
+  if (url === "/script-tournament-workflow.mjs") {
+    return serveModule(response, workflowPath);
+  }
+  if (url === "/v0-client.mjs") {
+    return serveModule(response, v0ClientPath);
+  }
+  response.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store"
+  });
+  response.end(page);
 });
+
+async function serveModule(response, filePath) {
+  try {
+    const body = await readFile(filePath, "utf8");
+    response.writeHead(200, {
+      "content-type": "text/javascript; charset=utf-8",
+      "cache-control": "no-store"
+    });
+    response.end(body);
+  } catch (error) {
+    response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    response.end(error.code === "ENOENT" ? "Module not found." : "Module could not be read.");
+  }
+}
 
 server.listen(port, () => {
   console.log(`Sakhaa Forge web shell listening on http://localhost:${port}`);

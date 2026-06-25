@@ -260,6 +260,58 @@ test("web shell renders S2 script selection immutable, stale and ineligible stat
   }
 });
 
+test("web shell renders the real S1/S2 workflow form, state banners and variant container", async () => {
+  const port = 3927;
+  const child = spawn(process.execPath, ["apps/web/src/server.mjs"], {
+    env: { ...process.env, PORT: String(port) },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForServer(`http://127.0.0.1:${port}`);
+    const response = await fetch(`http://127.0.0.1:${port}`);
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /data-testid="script-tournament-form"/);
+    assert.match(html, /Run script tournament/);
+    assert.match(html, /name="blueprintRequestId"/);
+    assert.match(html, /name="variantCount"/);
+    assert.match(html, /data-testid="script-tournament-status" data-state="empty"/);
+    assert.match(html, /data-testid="script-selection-status" data-state="empty"/);
+    assert.match(html, /data-testid="script-tournament-variants"/);
+    assert.match(html, /<script type="module" src="\/script-tournament-workflow\.mjs"><\/script>/);
+  } finally {
+    child.kill();
+  }
+});
+
+test("web shell serves the workflow and generated client modules", async () => {
+  const port = 3928;
+  const child = spawn(process.execPath, ["apps/web/src/server.mjs"], {
+    env: { ...process.env, PORT: String(port) },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForServer(`http://127.0.0.1:${port}`);
+    const workflow = await fetch(`http://127.0.0.1:${port}/script-tournament-workflow.mjs`);
+    assert.equal(workflow.status, 200);
+    assert.match(workflow.headers.get("content-type"), /javascript/);
+    const workflowText = await workflow.text();
+    assert.match(workflowText, /export function deriveWorkflowState/);
+    assert.match(workflowText, /selectScriptVariant/);
+
+    const client = await fetch(`http://127.0.0.1:${port}/v0-client.mjs`);
+    assert.equal(client.status, 200);
+    assert.match(client.headers.get("content-type"), /javascript/);
+    const clientText = await client.text();
+    assert.match(clientText, /export class V0Client/);
+  } finally {
+    child.kill();
+  }
+});
+
 async function waitForServer(url) {
   const started = Date.now();
   while (Date.now() - started < 5000) {

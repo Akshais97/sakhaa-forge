@@ -722,7 +722,8 @@
           "401": { "description": "Authentication is required." },
           "403": { "description": "Only Owner, Admin or Client Manager can select a script." },
           "404": { "description": "Workspace or tournament is hidden by tenant isolation." },
-          "409": { "description": "Stale comparison tab, ineligible variant or already-selected tournament cannot be selected." }
+          "409": { "description": "Stale comparison tab, ineligible variant or already-selected tournament cannot be selected." },
+          "422": { "description": "The path tournamentId and the request body tournamentId must match." }
         }
       }
     },

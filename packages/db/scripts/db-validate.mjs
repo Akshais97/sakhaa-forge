@@ -69,6 +69,10 @@ const s2Migration = await readFile(
   "packages/db/prisma/migrations/0017_v0_s2_selected_script/migration.sql",
   "utf8"
 );
+const s2ApproverFkMigration = await readFile(
+  "packages/db/prisma/migrations/0018_v0_s2_selected_script_approver_fk/migration.sql",
+  "utf8"
+);
 
 if (!schema.includes("provider = \"postgresql\"")) {
   throw new Error("Prisma datasource must use PostgreSQL.");
@@ -426,6 +430,20 @@ if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migra
 }
 
 for (const required of [
+  "ALTER TABLE selected_scripts",
+  "ADD CONSTRAINT selected_scripts_approver_user_id_fkey",
+  "FOREIGN KEY (approver_user_id) REFERENCES users(id)"
+]) {
+  if (!s2ApproverFkMigration.includes(required)) {
+    throw new Error(`Missing required S2 approver FK migration statement: ${required}`);
+  }
+}
+
+if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}\n${s1Migration}\n${s2Migration}\n${s2ApproverFkMigration}`)) {
+  throw new Error("Runtime roles must not receive BYPASSRLS.");
+}
+
+for (const required of [
   "ADD COLUMN last_error_code",
   "CREATE INDEX jobs_workspace_failed_updated_idx"
 ]) {
@@ -434,4 +452,4 @@ for (const required of [
   }
 }
 
-console.log("Database contract valid for V0-F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2 identity, idempotency, artifacts, jobs, outbox, capability controls, service credentials, brand intake, brand candidates, brand memory, blueprint path selection, viral candidate metrics, media acquisition, thumbnail blueprints, scene blueprints, formula derivations, director prompts, script tournaments, selected scripts and RLS.");
+console.log("Database contract valid for V0-F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2 identity, idempotency, artifacts, jobs, outbox, capability controls, service credentials, brand intake, brand candidates, brand memory, blueprint path selection, viral candidate metrics, media acquisition, thumbnail blueprints, scene blueprints, formula derivations, director prompts, script tournaments, selected scripts, selected-script approver lineage FK and RLS.");

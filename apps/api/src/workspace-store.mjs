@@ -3139,7 +3139,19 @@ export function createPrismaWorkspaceStore(env = process.env) {
           }
         });
 
-        const body = scriptTournamentResponseBody(tournament, variants, evaluations, jobInput, outboxEventsList, audit);
+        // The response must carry the database's authoritative updatedAt so a later
+        // optimistic-version guard on selection compares like-for-like. Prisma's
+        // @updatedAt sets the row timestamp at create time, which can differ from
+        // the in-memory now captured above, so re-fetch and align the record.
+        const persistedTournament = await tx.scriptTournament.findUnique({ where: { id: tournament.id } });
+        const body = scriptTournamentResponseBody(
+          { ...tournament, updatedAt: persistedTournament.updatedAt, createdAt: persistedTournament.createdAt },
+          variants,
+          evaluations,
+          jobInput,
+          outboxEventsList,
+          audit
+        );
         if (tournamentStatus === "ready_for_selection") {
           return { ok: true, response: body };
         }
@@ -3209,6 +3221,18 @@ export function createPrismaWorkspaceStore(env = process.env) {
         const now = new Date();
         const nowIso = now.toISOString();
         const selectedScriptId = randomUUID();
+        // Concurrency-safe claim: atomically advance the tournament from
+        // ready_for_selection to selected. Two concurrent selections cannot
+        // both win — the UPDATE locks the row, so the loser sees zero rows
+        // updated and receives SCRIPT_ALREADY_SELECTED without writing a
+        // selected_script row or risking a unique-constraint violation.
+        const claimed = await tx.scriptTournament.updateMany({
+          where: { id: tournament.id, workspaceId: input.workspaceId, status: "ready_for_selection" },
+          data: { status: "selected" }
+        });
+        if (claimed.count === 0) {
+          return { ok: false, problem: problem("SCRIPT_ALREADY_SELECTED", 409, "Script already selected", "This tournament already has a selected script.") };
+        }
         const validVariants = await tx.scriptVariant.findMany({
           where: { tournamentId: tournament.id, workspaceId: input.workspaceId, status: "generated" }
         });
@@ -3227,10 +3251,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
           now: nowIso
         });
         await tx.selectedScript.create({ data: { id: selectedScript.id, ...prismaSelectedScript(selectedScript) } });
-        const updatedTournament = await tx.scriptTournament.update({
-          where: { id: tournament.id },
-          data: { status: "selected" }
-        });
+        const updatedTournament = await tx.scriptTournament.findUnique({ where: { id: tournament.id } });
         const outbox = selectedScriptOutboxEvent(input.workspaceId, tournament.id, selectedScript.id, rank, nowIso);
         await tx.outboxEvent.create({
           data: {

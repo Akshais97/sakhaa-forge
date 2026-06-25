@@ -72,6 +72,14 @@ surface.
 | Tournament detail | `/scripts/{id}` | Creation roles | Tournament exists | Observe variants/evaluations | generating, partial-valid, evaluating, failed |
 | Script comparison | `/scripts/{id}/compare` | Owner/Admin/Client Manager | Ready for selection | Compare/select exact variant | no valid variants, stale selection, already selected |
 
+The web shell implements the script tournament and script comparison workflow at
+`apps/web/src/script-tournament-workflow.mjs`. A Client Manager runs a ready blueprint
+tournament through the generated `V0Client.createScriptTournament`, the workflow renders
+10-20 variants with evaluations and eligibility, and a confirmed selection calls
+`V0Client.selectScriptVariant`. The workflow exposes empty, loading, error, stale,
+disabled (ineligible variant), already-selected and success states as `data-state`
+attributes; selection is never optimistic and is confirmed before the irreversible call.
+
 ## 6. Avatar, Credits and Generation Screens
 
 | Screen | Route | Roles | Entry / exit | Primary/destructive actions | State requirements |

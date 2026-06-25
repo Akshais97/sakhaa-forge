@@ -240,6 +240,72 @@ test("S2 hides cross-workspace selection behind WORKSPACE_ACCESS_DENIED", async 
   );
 });
 
+test("S2 rejects a path/body tournamentId mismatch with VALIDATION_FAILED", async () => {
+  await withApiServer(
+    {
+      APP_ENV: "test",
+      APP_VERSION: "test",
+      SUPABASE_JWT_SECRET: jwtSecret,
+      V0_INTERNAL_WORKER_TOKEN: workerToken
+    },
+    async ({ baseUrl }) => {
+      const client = new V0Client({ baseUrl, authToken: signJwt("s2-path-body") });
+      const ready = await prepareReadyTournament(client, "S2 path body", { variantCount: 10 });
+
+      // The path tournamentId is authoritative. A body that names a different
+      // tournament must not select it from another tournament's URL.
+      const mismatched = await client.selectScriptVariant(
+        ready.tournamentId,
+        {
+          workspaceId: ready.workspaceId,
+          tournamentId: randomUUID(),
+          variantId: ready.variants[0].id,
+          optimisticTournamentVersion: ready.optimisticTournamentVersion
+        },
+        { idempotencyKey: `s2-path-body-${randomUUID()}` }
+      );
+      assert.equal(mismatched.status, 422, JSON.stringify(mismatched.body));
+      assert.equal(mismatched.body.code, "VALIDATION_FAILED");
+    }
+  );
+});
+
+test("S2 concurrent double-selection with different idempotency keys selects once and refuses the other", async () => {
+  await withApiServer(
+    {
+      APP_ENV: "test",
+      APP_VERSION: "test",
+      SUPABASE_JWT_SECRET: jwtSecret,
+      V0_INTERNAL_WORKER_TOKEN: workerToken
+    },
+    async ({ baseUrl }) => {
+      const client = new V0Client({ baseUrl, authToken: signJwt("s2-race") });
+      const ready = await prepareReadyTournament(client, "S2 race", { variantCount: 10 });
+      const body = {
+        workspaceId: ready.workspaceId,
+        tournamentId: ready.tournamentId,
+        variantId: ready.variants[0].id,
+        optimisticTournamentVersion: ready.optimisticTournamentVersion
+      };
+
+      // Two reviewers select the same tournament at the same time with different
+      // idempotency keys. Exactly one selection is retained; the other receives a
+      // stable SCRIPT_ALREADY_SELECTED, never a 500 or a duplicate selection.
+      const [first, second] = await Promise.all([
+        client.selectScriptVariant(ready.tournamentId, body, { idempotencyKey: `s2-race-a-${randomUUID()}` }),
+        client.selectScriptVariant(ready.tournamentId, body, { idempotencyKey: `s2-race-b-${randomUUID()}` })
+      ]);
+
+      const statuses = [first.status, second.status].sort();
+      assert.deepEqual(statuses, [200, 409], JSON.stringify([first.body, second.body]));
+      const failed = first.status === 409 ? first : second;
+      assert.equal(failed.body.code, "SCRIPT_ALREADY_SELECTED");
+      const succeeded = first.status === 200 ? first : second;
+      assert.equal(succeeded.body.selectedScript.immutable, true);
+    }
+  );
+});
+
 test("S2 requires an idempotency key for selection", async () => {
   await withApiServer(
     {

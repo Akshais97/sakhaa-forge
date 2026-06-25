@@ -65,6 +65,7 @@ model User {
   idempotencyRecords IdempotencyRecord[] @relation("IdempotencyActor")
   updatedWorkspaceCapabilities WorkspaceCapability[]
   serviceCredentialsUpdated ServiceCredential[]
+  selectedScriptsAsApprover SelectedScript[] @relation("SelectedScriptApprover")
 
   @@map("users")
 }
@@ -579,6 +580,7 @@ model SelectedScript {
   workspace       Workspace @relation(fields: [workspaceId], references: [id])
   tournament      ScriptTournament @relation(fields: [tournamentId], references: [id])
   variant         ScriptVariant @relation(fields: [variantId], references: [id])
+  approver        User @relation("SelectedScriptApprover", fields: [approverUserId], references: [id])
 
   @@index([workspaceId, createdAt])
   @@map("selected_scripts")

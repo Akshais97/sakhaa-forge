@@ -73,12 +73,20 @@ const migrations = [
   {
     path: "packages/db/prisma/migrations/0017_v0_s2_selected_script/migration.sql",
     sentinel: "SELECT to_regclass('public.selected_scripts') IS NOT NULL"
+  },
+  {
+    path: "packages/db/prisma/migrations/0018_v0_s2_selected_script_approver_fk/migration.sql",
+    sentinel: "SELECT COUNT(*) > 0 FROM pg_constraint WHERE conname = 'selected_scripts_approver_user_id_fkey'"
   }
 ];
 
 for (const migration of migrations) {
   const sql = await readFile(migration.path, "utf8");
-  if (!sql.includes("ENABLE ROW LEVEL SECURITY") && !sql.includes("ALTER TABLE jobs")) {
+  if (
+    !sql.includes("ENABLE ROW LEVEL SECURITY") &&
+    !sql.includes("ALTER TABLE jobs") &&
+    !sql.includes("ALTER TABLE selected_scripts")
+  ) {
     throw new Error(`${migration.path} must enable RLS or extend an already RLS-protected table before it can run.`);
   }
 }

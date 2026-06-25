@@ -165,7 +165,10 @@ the `select_blueprint_and_run_scripts` capability.
 `POST /script-tournaments/{id}/select` implements V0-S2 immutable selected script
 creation. The request names the workspace, tournament, an eligible `variantId` and the
 `optimisticTournamentVersion` captured by the comparison tab; an optional `humanOverride`
-boolean attests a human choice. Selection is a synchronous durable decision: one canonical,
+boolean attests a human choice. The path `{id}` is the authoritative tournament; if the
+request body carries a `tournamentId` it must match the path, otherwise the request fails
+with `VALIDATION_FAILED` (422) so a malformed or buggy client cannot select tournament B
+from tournament A's URL. Selection is a synchronous durable decision: one canonical,
 immutable `SelectedScript` is retained per tournament with the actor, tournament, variant,
 version and timestamp. The response exposes the selected script, tournament, variant,
 evaluation, audit and a bucketed `script_selected` analytics event
@@ -175,8 +178,11 @@ returns `RESOURCE_VERSION_STALE` (409); an unevaluated, refused, superseded or f
 variant returns `SCRIPT_SELECTION_INVALID` (409); a tournament that already has a selected
 script returns `SCRIPT_ALREADY_SELECTED` (409) before the stale-version guard, so a retried
 tab never overwrites a selection; a cross-workspace tournament is hidden with
-`WORKSPACE_ACCESS_DENIED` (404). Retries with the same `Idempotency-Key` return the same
-selection. The endpoint requires an `Idempotency-Key` and the
+`WORKSPACE_ACCESS_DENIED` (404). The claim is concurrency-safe: the tournament is atomically
+advanced from `ready_for_selection` to `selected`, so two concurrent selections with
+different `Idempotency-Key` values retain exactly one selected script and return
+`SCRIPT_ALREADY_SELECTED` to the other, never a duplicate or a 500. Retries with the same
+`Idempotency-Key` return the same selection. The endpoint requires an `Idempotency-Key` and the
 `select_blueprint_and_run_scripts` capability.
 
 ## Provider Callbacks

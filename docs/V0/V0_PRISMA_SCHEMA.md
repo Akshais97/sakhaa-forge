@@ -389,9 +389,19 @@ model SelectedScript {
   approverUserId  String   @db.Uuid
   version         Int
   humanOverride   Boolean
+  workspace       Workspace @relation(fields: [workspaceId], references: [id])
+  tournament      ScriptTournament @relation(fields: [tournamentId], references: [id])
+  variant         ScriptVariant @relation(fields: [variantId], references: [id])
+  approver        User @relation("SelectedScriptApprover", fields: [approverUserId], references: [id])
   @@index([workspaceId, createdAt])
   @@map("selected_scripts")
 }
+
+The `approverUserId` foreign key to `users(id)` (migration
+`0018_v0_s2_selected_script_approver_fk`) enforces actor lineage integrity: every
+selected script records a real approving user. The unique `tournamentId` and
+`variantId` constraints enforce one selection per tournament and one selection per
+variant; changes require a new tournament and a new selection.
 
 model ViralCandidate {
   id                 String @id @default(uuid()) @db.Uuid

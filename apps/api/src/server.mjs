@@ -446,15 +446,32 @@ function createF0Controller(env, store, prefix) {
         );
       }
 
+      // The path tournamentId is authoritative. If the body carries a tournamentId
+      // it must match the path so a malformed or buggy client cannot select
+      // tournament B from tournament A's URL and produce a confusing audit trail.
+      const bodyTournamentId = request.body?.tournamentId;
+      if (bodyTournamentId !== undefined && bodyTournamentId !== tournamentId) {
+        throw new HttpException(
+          problem(
+            "VALIDATION_FAILED",
+            422,
+            "Validation failed",
+            "The tournament in the URL and the request body must match."
+          ),
+          422
+        );
+      }
+      const reconciledInput = { ...(request.body ?? {}), tournamentId };
+
       const result = await store.runIdempotent(
         {
           actor: auth.actor,
           operation: "script.variant.select",
           idempotencyKey: idempotencyKey.trim(),
-          input: request.body ?? {}
+          input: reconciledInput
         },
         async () => {
-          const selected = await store.selectScriptVariant(auth.actor, request.body ?? {});
+          const selected = await store.selectScriptVariant(auth.actor, reconciledInput);
           if (!selected.ok) {
             throw new HttpException(selected.problem, selected.problem.status);
           }
