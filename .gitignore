@@ -45,6 +45,7 @@ __pycache__/
 *.db
 
 # Legacy research and exploratory folders kept out of the new product repo
+db_backups/
 ad-brain-scorer/
 cache/
 cache_validation_output/

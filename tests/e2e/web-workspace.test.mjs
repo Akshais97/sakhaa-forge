@@ -207,6 +207,32 @@ test("web shell renders P5 ready blueprint script input contract states", async 
   }
 });
 
+test("web shell renders S1 script tournament variant, evaluation and guard states", async () => {
+  const port = 3925;
+  const child = spawn(process.execPath, ["apps/web/src/server.mjs"], {
+    env: { ...process.env, PORT: String(port) },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForServer(`http://127.0.0.1:${port}`);
+    const response = await fetch(`http://127.0.0.1:${port}`);
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /data-testid="script-tournament-contract"/);
+    assert.match(html, /Script tournament contract/);
+    assert.match(html, /Ten to twenty formula- and brand-constrained variants are generated, evaluated and retained/);
+    assert.match(html, /raw prompts and script text never enter analytics/);
+    assert.match(html, /prompt\/model provenance with a source hash/);
+    assert.match(html, /analytics buckets only/);
+    assert.match(html, /Fewer than ten valid scripts after prohibited-claim or brand-rule refusal stops advancement/);
+    assert.match(html, /An unapproved brand profile or a draft blueprint cannot enter script generation/);
+  } finally {
+    child.kill();
+  }
+});
+
 async function waitForServer(url) {
   const started = Date.now();
   while (Date.now() - started < 5000) {

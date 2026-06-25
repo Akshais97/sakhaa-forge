@@ -96,6 +96,10 @@ export class V0Client {
     return this.#post(\`/blueprint-requests/\${encodeURIComponent(blueprintRequestId)}/ready-blueprint\`, input);
   }
 
+  async createScriptTournament(input, options = {}) {
+    return this.#post("/script-tournaments", input, options);
+  }
+
   async searchViralCandidates(input) {
     return this.#post("/viral-candidates/search", input);
   }

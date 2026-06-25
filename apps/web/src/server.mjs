@@ -333,6 +333,28 @@ const server = http.createServer((_request, response) => {
           </article>
         </div>
       </section>
+      <section aria-labelledby="script-tournament-title" data-testid="script-tournament-contract">
+        <h2 id="script-tournament-title">Script tournament contract</h2>
+        <p>Ten to twenty formula- and brand-constrained variants are generated, evaluated and retained; raw prompts and script text never enter analytics.</p>
+        <div class="candidate-grid">
+          <article class="candidate">
+            <h3>Ready for selection</h3>
+            <p>Every variant keeps hook, body, CTA, captions, claims, formula slots and prompt/model provenance with a source hash.</p>
+            <p class="source">Prompt v0.director-prompt.1 · model v0.script-model.1 · analytics buckets only</p>
+            <span class="status" data-state="approved">Ready for selection</span>
+          </article>
+          <article class="candidate">
+            <h3>Insufficient valid variants</h3>
+            <p>Fewer than ten valid scripts after prohibited-claim or brand-rule refusal stops advancement; refused variants stay visible.</p>
+            <span class="status" data-state="blocked">Blocked</span>
+          </article>
+          <article class="candidate">
+            <h3>Draft blueprint guard</h3>
+            <p>An unapproved brand profile or a draft blueprint cannot enter script generation.</p>
+            <span class="status" data-state="blocked">Blocked</span>
+          </article>
+        </div>
+      </section>
     </main>
   </body>
 </html>

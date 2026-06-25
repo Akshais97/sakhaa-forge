@@ -61,6 +61,10 @@ const p5Migration = await readFile(
   "packages/db/prisma/migrations/0015_v0_p5_ready_blueprint_formula_prompt/migration.sql",
   "utf8"
 );
+const s1Migration = await readFile(
+  "packages/db/prisma/migrations/0016_v0_s1_script_tournament/migration.sql",
+  "utf8"
+);
 
 if (!schema.includes("provider = \"postgresql\"")) {
   throw new Error("Prisma datasource must use PostgreSQL.");
@@ -99,7 +103,10 @@ for (const required of [
   "model VideoBlueprint",
   "model BlueprintScene",
   "model FormulaDerivation",
-  "model DirectorPrompt"
+  "model DirectorPrompt",
+  "model ScriptTournament",
+  "model ScriptVariant",
+  "model ScriptEvaluation"
 ]) {
   if (!schema.includes(required)) {
     throw new Error(`Missing required schema block: ${required}`);
@@ -370,7 +377,31 @@ for (const required of [
   }
 }
 
-if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}`)) {
+if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}\n${s1Migration}`)) {
+  throw new Error("Runtime roles must not receive BYPASSRLS.");
+}
+
+for (const required of [
+  "CREATE TABLE IF NOT EXISTS script_tournaments",
+  "CREATE TABLE IF NOT EXISTS script_variants",
+  "CREATE TABLE IF NOT EXISTS script_evaluations",
+  "ALTER TABLE script_tournaments ENABLE ROW LEVEL SECURITY;",
+  "ALTER TABLE script_variants ENABLE ROW LEVEL SECURITY;",
+  "ALTER TABLE script_evaluations ENABLE ROW LEVEL SECURITY;",
+  "CREATE POLICY script_tournaments_workspace_isolation",
+  "CREATE POLICY script_variants_workspace_isolation",
+  "CREATE POLICY script_evaluations_workspace_isolation",
+  "script_tournaments_status_check",
+  "script_variants_status_check",
+  "script_evaluations_status_check",
+  "script_tournaments_variant_count_check"
+]) {
+  if (!s1Migration.includes(required)) {
+    throw new Error(`Missing required S1 script tournament migration statement: ${required}`);
+  }
+}
+
+if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}\n${s1Migration}`)) {
   throw new Error("Runtime roles must not receive BYPASSRLS.");
 }
 
@@ -383,4 +414,4 @@ for (const required of [
   }
 }
 
-console.log("Database contract valid for V0-F5/B1/B2/B3/P1/P2/P3/P4/P5 identity, idempotency, artifacts, jobs, outbox, capability controls, service credentials, brand intake, brand candidates, brand memory, blueprint path selection, viral candidate metrics, media acquisition, thumbnail blueprints, scene blueprints, formula derivations, director prompts and RLS.");
+console.log("Database contract valid for V0-F5/B1/B2/B3/P1/P2/P3/P4/P5/S1 identity, idempotency, artifacts, jobs, outbox, capability controls, service credentials, brand intake, brand candidates, brand memory, blueprint path selection, viral candidate metrics, media acquisition, thumbnail blueprints, scene blueprints, formula derivations, director prompts, script tournaments and RLS.");

@@ -97,6 +97,9 @@ model Workspace {
   thumbnailBlueprints ThumbnailBlueprint[]
   videoBlueprints VideoBlueprint[]
   blueprintScenes BlueprintScene[]
+  scriptTournaments ScriptTournament[]
+  scriptVariants ScriptVariant[]
+  scriptEvaluations ScriptEvaluation[]
   inboxEvents InboxEvent[]
   jobs Job[]
   jobAttempts JobAttempt[]
@@ -309,6 +312,7 @@ model BrandProfile {
   generationEstimates GenerationEstimate[]
   blueprintLibraryEntries BlueprintLibraryEntry[]
   blueprintRequests BlueprintRequest[]
+  scriptTournaments ScriptTournament[]
 
   @@unique([workspaceId, brandId, version])
   @@index([workspaceId, brandId, status, active])
@@ -386,6 +390,7 @@ model BlueprintLibraryEntry {
   blueprintRequests BlueprintRequest[]
   formulaDerivations FormulaDerivation[]
   directorPrompts DirectorPrompt[]
+  scriptTournaments ScriptTournament[]
 
   @@index([workspaceId, status, createdAt])
   @@index([workspaceId, updatedAt, id])
@@ -411,6 +416,7 @@ model BlueprintRequest {
   viralCandidates         ViralCandidate[]
   formulaDerivations      FormulaDerivation[]
   directorPrompts         DirectorPrompt[]
+  scriptTournaments       ScriptTournament[]
 
   @@index([workspaceId, status, createdAt])
   @@index([workspaceId, brandProfileId, createdAt])
@@ -433,6 +439,7 @@ model FormulaDerivation {
   blueprintLibraryEntry   BlueprintLibraryEntry @relation(fields: [blueprintLibraryEntryId], references: [id])
   blueprintRequest        BlueprintRequest      @relation(fields: [blueprintRequestId], references: [id])
   directorPrompts         DirectorPrompt[]
+  scriptTournaments       ScriptTournament[]
 
   @@unique([workspaceId, blueprintLibraryEntryId])
   @@index([workspaceId, status, createdAt])
@@ -456,10 +463,100 @@ model DirectorPrompt {
   blueprintLibraryEntry   BlueprintLibraryEntry @relation(fields: [blueprintLibraryEntryId], references: [id])
   formulaDerivation       FormulaDerivation     @relation(fields: [formulaDerivationId], references: [id])
   blueprintRequest        BlueprintRequest      @relation(fields: [blueprintRequestId], references: [id])
+  scriptTournaments       ScriptTournament[]
 
   @@unique([workspaceId, blueprintLibraryEntryId])
   @@index([workspaceId, status, createdAt])
   @@map("director_prompts")
+}
+
+model ScriptTournament {
+  id                      String   @id @default(uuid()) @db.Uuid
+  workspaceId             String   @map("workspace_id") @db.Uuid
+  blueprintRequestId       String   @map("blueprint_request_id") @db.Uuid
+  blueprintLibraryEntryId  String   @map("blueprint_library_entry_id") @db.Uuid
+  formulaDerivationId      String   @map("formula_derivation_id") @db.Uuid
+  directorPromptId         String   @map("director_prompt_id") @db.Uuid
+  brandProfileId           String   @map("brand_profile_id") @db.Uuid
+  brandProfileVersion      Int      @map("brand_profile_version")
+  objectiveType             String   @map("objective_type") @db.VarChar(120)
+  objective                 String   @db.VarChar(500)
+  requestedVariantCount     Int      @map("requested_variant_count")
+  validVariantCount         Int      @map("valid_variant_count")
+  status                    String   @db.VarChar(40)
+  result                    String   @db.VarChar(40)
+  promptVersion             String   @map("prompt_version") @db.VarChar(80)
+  modelVersion              String   @map("model_version") @db.VarChar(80)
+  telemetry                 Json
+  manifestArtifactId        String?  @map("manifest_artifact_id") @db.Uuid
+  jobId                      String?  @map("job_id") @db.Uuid
+  createdByUserId           String   @map("created_by_user_id") @db.Uuid
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace                 Workspace             @relation(fields: [workspaceId], references: [id])
+  blueprintRequest          BlueprintRequest      @relation(fields: [blueprintRequestId], references: [id])
+  blueprintLibraryEntry     BlueprintLibraryEntry @relation(fields: [blueprintLibraryEntryId], references: [id])
+  formulaDerivation         FormulaDerivation     @relation(fields: [formulaDerivationId], references: [id])
+  directorPrompt            DirectorPrompt        @relation(fields: [directorPromptId], references: [id])
+  brandProfile              BrandProfile          @relation(fields: [brandProfileId], references: [id])
+  variants                  ScriptVariant[]
+  evaluations               ScriptEvaluation[]
+
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, brandProfileId, createdAt])
+  @@map("script_tournaments")
+}
+
+model ScriptVariant {
+  id              String   @id @default(uuid()) @db.Uuid
+  workspaceId     String   @map("workspace_id") @db.Uuid
+  tournamentId    String   @map("tournament_id") @db.Uuid
+  index           Int
+  status          String   @db.VarChar(40)
+  hookType        String   @map("hook_type") @db.VarChar(80)
+  hook            String   @db.Text
+  body            String   @db.Text
+  cta             String   @db.Text
+  captions        String   @db.Text
+  claims          Json
+  cadence         Json
+  formulaSlots    Json     @map("formula_slots")
+  provenance      Json
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  workspace       Workspace @relation(fields: [workspaceId], references: [id])
+  tournament      ScriptTournament @relation(fields: [tournamentId], references: [id])
+  evaluation      ScriptEvaluation?
+
+  @@index([workspaceId, tournamentId, index])
+  @@map("script_variants")
+}
+
+model ScriptEvaluation {
+  id               String   @id @default(uuid()) @db.Uuid
+  workspaceId      String   @map("workspace_id") @db.Uuid
+  tournamentId     String   @map("tournament_id") @db.Uuid
+  variantId        String   @unique @map("variant_id") @db.Uuid
+  status           String   @db.VarChar(40)
+  hookStrength     Json     @map("hook_strength")
+  timing           Json
+  patternInterrupts Json     @map("pattern_interrupts")
+  cta              Json
+  claims           Json
+  captions         Json
+  tone             Json
+  formulaChecks    Json     @map("formula_checks")
+  policyChecks     Json     @map("policy_checks")
+  brandRuleChecks  Json     @map("brand_rule_checks")
+  modelScore       Float    @map("model_score")
+  humanScore       Float?   @map("human_score")
+  explanation      String   @db.Text
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  workspace        Workspace @relation(fields: [workspaceId], references: [id])
+  tournament       ScriptTournament @relation(fields: [tournamentId], references: [id])
+  variant          ScriptVariant @relation(fields: [variantId], references: [id])
+
+  @@index([workspaceId, tournamentId, status])
+  @@map("script_evaluations")
 }
 
 model ViralCandidate {

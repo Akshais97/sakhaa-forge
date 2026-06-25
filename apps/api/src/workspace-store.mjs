@@ -2,6 +2,19 @@ import { createHash, randomUUID } from "node:crypto";
 import { PrismaClient } from "../../../packages/db/generated/client/index.js";
 import { buildBrandExtractionCandidates } from "./brand-extraction.mjs";
 import { candidateSourceHash, searchXpozCandidates } from "./viral-discovery.mjs";
+import {
+  generateScriptVariants,
+  evaluateScriptVariant,
+  requestedVariantBucket,
+  validVariantCountBucket,
+  durationBucket,
+  tokenBucket,
+  costBucket,
+  objectiveCategory,
+  SCRIPT_PROMPT_VERSION,
+  SCRIPT_MODEL_VERSION,
+  supportedScriptSimulatorModes
+} from "./script-generation.mjs";
 
 export function createStore(env = process.env) {
   if (env.V0_RUNTIME_DB === "prisma") {
@@ -28,6 +41,9 @@ export function createWorkspaceStore() {
   const blueprintRequests = new Map();
   const formulaDerivations = new Map();
   const directorPrompts = new Map();
+  const scriptTournaments = new Map();
+  const scriptVariants = new Map();
+  const scriptEvaluations = new Map();
   const viralCandidates = new Map();
   const metricSnapshots = new Map();
   const mediaAcquisitions = new Map();
@@ -810,6 +826,193 @@ export function createWorkspaceStore() {
     return {
       ok: true,
       response: readyBlueprintResponse(entry, formula.record, directorPrompt, request, audit, readyJobs)
+    };
+  }
+
+  async function createScriptTournament(actor, input) {
+    if (!getWorkspaceForActor(actor, input.workspaceId)) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const validation = validateScriptTournamentInput(input);
+    if (validation) {
+      return { ok: false, problem: validation };
+    }
+    const request = blueprintRequests.get(input.blueprintRequestId);
+    if (!request || request.workspaceId !== input.workspaceId) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    if (request.status !== "ready") {
+      return {
+        ok: false,
+        problem: problem("BLUEPRINT_STAGE_INCOMPLETE", 409, "Blueprint stage incomplete", "The blueprint is not ready. Review the incomplete stages.")
+      };
+    }
+    const formula = [...formulaDerivations.values()].find((record) => record.blueprintRequestId === request.id);
+    const directorPrompt = [...directorPrompts.values()].find((record) => record.blueprintRequestId === request.id);
+    if (!formula || !directorPrompt) {
+      return {
+        ok: false,
+        problem: problem("BLUEPRINT_STAGE_INCOMPLETE", 409, "Blueprint stage incomplete", "The blueprint is not ready. Review the incomplete stages.")
+      };
+    }
+    const entry = blueprintLibraryEntries.get(formula.blueprintLibraryEntryId);
+    if (!entry || entry.status !== "ready") {
+      return {
+        ok: false,
+        problem: problem("BLUEPRINT_STAGE_INCOMPLETE", 409, "Blueprint stage incomplete", "The blueprint is not ready. Review the incomplete stages.")
+      };
+    }
+    const profile = brandProfiles.get(request.brandProfileId);
+    if (!isActiveApprovedProfile(profile, input.workspaceId) || profile.version !== request.brandProfileVersion) {
+      return {
+        ok: false,
+        problem: problem("BRAND_PROFILE_NOT_APPROVED", 409, "Brand profile not approved", "Approve the current brand profile before using it for production.")
+      };
+    }
+    const rulesForProfile = [...brandRules.values()].filter((rule) => rule.brandProfileId === profile.id);
+    const variantCount = input.variantCount ?? 10;
+    const simulatorMode = input.simulatorMode ?? "fixture_success";
+    const now = new Date().toISOString();
+    const tournamentId = randomUUID();
+    const generated = generateScriptVariants({
+      tournamentId,
+      workspaceId: input.workspaceId,
+      objectiveType: request.objectiveType,
+      objective: request.objective,
+      brandProfile: profile,
+      brandRules: rulesForProfile,
+      formula,
+      directorPrompt,
+      variantCount,
+      simulatorMode
+    });
+
+    let validCount = 0;
+    let result;
+    let tournamentStatus;
+    const variants = [];
+    const evaluations = [];
+    if (!generated.ok) {
+      result = generated.problemCode === "AI_REQUEST_REFUSED" ? "ai_request_refused" : "schema_invalid";
+      tournamentStatus = "failed";
+    } else {
+      for (const variant of generated.variants) {
+        const outcome = evaluateScriptVariant(variant, rulesForProfile, formula);
+        const variantRecord = {
+          id: randomUUID(),
+          workspaceId: input.workspaceId,
+          tournamentId,
+          index: variant.index,
+          status: outcome.variantStatus,
+          hookType: variant.hookType,
+          hook: variant.hook,
+          body: variant.body,
+          cta: variant.cta,
+          captions: variant.captions,
+          claims: variant.claims,
+          cadence: variant.cadence,
+          formulaSlots: variant.formulaSlots,
+          provenance: variant.provenance,
+          createdAt: now
+        };
+        const evaluationRecord = {
+          id: randomUUID(),
+          workspaceId: input.workspaceId,
+          tournamentId,
+          variantId: variantRecord.id,
+          ...outcome.evaluation,
+          createdAt: now
+        };
+        variants.push(variantRecord);
+        evaluations.push(evaluationRecord);
+        if (outcome.variantStatus === "generated") {
+          validCount += 1;
+        }
+      }
+      if (validCount >= 10) {
+        result = "ready_for_selection";
+        tournamentStatus = "ready_for_selection";
+      } else {
+        result = "insufficient_valid";
+        tournamentStatus = "failed";
+      }
+    }
+
+    const manifestArtifact = scriptTournamentManifestArtifact(input.workspaceId, tournamentId, variantCount, now);
+    artifacts.set(manifestArtifact.id, manifestArtifact);
+    const job = scriptTournamentJob(
+      input.workspaceId,
+      tournamentId,
+      request,
+      entry,
+      formula,
+      directorPrompt,
+      manifestArtifact.id,
+      tournamentStatus === "ready_for_selection" ? "SUCCEEDED" : "FAILED",
+      now
+    );
+    jobs.set(job.id, job);
+    appendJobEvent(jobEvents, job, "job.created", { tournamentId });
+    appendJobEvent(jobEvents, job, tournamentStatus === "ready_for_selection" ? "job.succeeded" : "job.failed", { tournamentId, result });
+    const outboxEventsList = scriptTournamentOutboxEvents(input.workspaceId, tournamentId, request, variantCount, validCount, result, now);
+    for (const outbox of outboxEventsList) {
+      outboxEvents.set(outbox.id, outbox);
+    }
+    const audit = scriptTournamentAudit(input.workspaceId, tournamentId, actor.userId, result, now);
+    audits.push(audit);
+    const tournament = scriptTournamentRecord({
+      tournamentId,
+      workspaceId: input.workspaceId,
+      request,
+      entry,
+      formula,
+      directorPrompt,
+      profile,
+      variantCount,
+      validCount,
+      status: tournamentStatus,
+      result,
+      now,
+      actorUserId: actor.userId,
+      manifestArtifactId: manifestArtifact.id,
+      jobId: job.id
+    });
+    scriptTournaments.set(tournamentId, tournament);
+    for (const variantRecord of variants) {
+      scriptVariants.set(variantRecord.id, variantRecord);
+    }
+    for (const evaluationRecord of evaluations) {
+      scriptEvaluations.set(evaluationRecord.id, evaluationRecord);
+    }
+
+    const body = scriptTournamentResponseBody(tournament, variants, evaluations, job, outboxEventsList, audit);
+    if (tournamentStatus === "ready_for_selection") {
+      return { ok: true, response: body };
+    }
+    const failureCode = result === "insufficient_valid" ? "SCRIPT_VARIANT_COUNT_INSUFFICIENT" : result === "ai_request_refused" ? "AI_REQUEST_REFUSED" : "AI_OUTPUT_SCHEMA_INVALID";
+    const failureStatus = failureCode === "SCRIPT_VARIANT_COUNT_INSUFFICIENT" ? 409 : 422;
+    const failureTitle = failureCode === "SCRIPT_VARIANT_COUNT_INSUFFICIENT"
+      ? "Script variant count insufficient"
+      : failureCode === "AI_REQUEST_REFUSED"
+        ? "AI request refused"
+        : "AI output schema invalid";
+    const failureDetail = failureCode === "SCRIPT_VARIANT_COUNT_INSUFFICIENT"
+      ? "There are not enough valid scripts to compare."
+      : failureCode === "AI_REQUEST_REFUSED"
+        ? "The requested content could not be generated under the current policy."
+        : "The AI result did not match the required structure.";
+    return {
+      ok: false,
+      problem: {
+        ...problem(failureCode, failureStatus, failureTitle, failureDetail),
+        ...body
+      }
     };
   }
 
@@ -1656,6 +1859,7 @@ export function createWorkspaceStore() {
     seedBlueprintLibraryEntry,
     createBlueprintRequest,
     createReadyBlueprint,
+    createScriptTournament,
     searchViralCandidates,
     extractViralCandidateBlueprint,
     createSceneBlueprint,
@@ -2654,6 +2858,216 @@ export function createPrismaWorkspaceStore(env = process.env) {
     );
   }
 
+  async function createScriptTournament(actor, input) {
+    const validation = validateScriptTournamentInput(input);
+    if (validation) {
+      return { ok: false, problem: validation };
+    }
+    return withActor(
+      actor,
+      async (tx) => {
+        const request = await tx.blueprintRequest.findFirst({ where: { id: input.blueprintRequestId, workspaceId: input.workspaceId } });
+        if (!request) {
+          return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
+        }
+        if (request.status !== "ready") {
+          return { ok: false, problem: problem("BLUEPRINT_STAGE_INCOMPLETE", 409, "Blueprint stage incomplete", "The blueprint is not ready. Review the incomplete stages.") };
+        }
+        const formula = await tx.formulaDerivation.findFirst({ where: { blueprintRequestId: request.id, workspaceId: input.workspaceId } });
+        const directorPrompt = await tx.directorPrompt.findFirst({ where: { blueprintRequestId: request.id, workspaceId: input.workspaceId } });
+        if (!formula || !directorPrompt) {
+          return { ok: false, problem: problem("BLUEPRINT_STAGE_INCOMPLETE", 409, "Blueprint stage incomplete", "The blueprint is not ready. Review the incomplete stages.") };
+        }
+        const entry = await tx.blueprintLibraryEntry.findFirst({ where: { id: formula.blueprintLibraryEntryId, workspaceId: input.workspaceId } });
+        if (!entry || entry.status !== "ready") {
+          return { ok: false, problem: problem("BLUEPRINT_STAGE_INCOMPLETE", 409, "Blueprint stage incomplete", "The blueprint is not ready. Review the incomplete stages.") };
+        }
+        const profile = await tx.brandProfile.findFirst({ where: { id: request.brandProfileId, workspaceId: input.workspaceId, status: "approved", active: true } });
+        if (!profile || profile.version !== request.brandProfileVersion) {
+          return { ok: false, problem: problem("BRAND_PROFILE_NOT_APPROVED", 409, "Brand profile not approved", "Approve the current brand profile before using it for production.") };
+        }
+        const brandRules = await tx.brandRule.findMany({ where: { brandProfileId: profile.id, workspaceId: input.workspaceId } });
+        const rulesForProfile = brandRules.map((rule) => ({ id: rule.id, type: rule.type, value: rule.value, severity: rule.severity }));
+        const variantCount = input.variantCount ?? 10;
+        const simulatorMode = input.simulatorMode ?? "fixture_success";
+        const now = new Date();
+        const nowIso = now.toISOString();
+        const tournamentId = randomUUID();
+        const generated = generateScriptVariants({
+          tournamentId,
+          workspaceId: input.workspaceId,
+          objectiveType: request.objectiveType,
+          objective: request.objective,
+          brandProfile: { profile: profile.profile },
+          brandRules: rulesForProfile,
+          formula,
+          directorPrompt,
+          variantCount,
+          simulatorMode
+        });
+
+        let validCount = 0;
+        let result;
+        let tournamentStatus;
+        const variants = [];
+        const evaluations = [];
+        if (!generated.ok) {
+          result = generated.problemCode === "AI_REQUEST_REFUSED" ? "ai_request_refused" : "schema_invalid";
+          tournamentStatus = "failed";
+        } else {
+          for (const variant of generated.variants) {
+            const outcome = evaluateScriptVariant(variant, rulesForProfile, formula);
+            const variantRecord = {
+              id: randomUUID(),
+              workspaceId: input.workspaceId,
+              tournamentId,
+              index: variant.index,
+              status: outcome.variantStatus,
+              hookType: variant.hookType,
+              hook: variant.hook,
+              body: variant.body,
+              cta: variant.cta,
+              captions: variant.captions,
+              claims: variant.claims,
+              cadence: variant.cadence,
+              formulaSlots: variant.formulaSlots,
+              provenance: variant.provenance,
+              createdAt: nowIso
+            };
+            const evaluationRecord = {
+              id: randomUUID(),
+              workspaceId: input.workspaceId,
+              tournamentId,
+              variantId: variantRecord.id,
+              ...outcome.evaluation,
+              createdAt: nowIso
+            };
+            variants.push(variantRecord);
+            evaluations.push(evaluationRecord);
+            if (outcome.variantStatus === "generated") {
+              validCount += 1;
+            }
+          }
+          if (validCount >= 10) {
+            result = "ready_for_selection";
+            tournamentStatus = "ready_for_selection";
+          } else {
+            result = "insufficient_valid";
+            tournamentStatus = "failed";
+          }
+        }
+
+        const manifestArtifactInput = scriptTournamentManifestArtifact(input.workspaceId, tournamentId, variantCount, nowIso);
+        const dbArtifact = await tx.artifact.create({ data: { id: manifestArtifactInput.id, ...prismaArtifact(manifestArtifactInput) } });
+        const manifestArtifactId = dbArtifact.id;
+        const jobInput = scriptTournamentJob(
+          input.workspaceId,
+          tournamentId,
+          request,
+          entry,
+          formula,
+          directorPrompt,
+          manifestArtifactId,
+          tournamentStatus === "ready_for_selection" ? "SUCCEEDED" : "FAILED",
+          nowIso
+        );
+        await tx.job.create({
+          data: {
+            id: jobInput.id,
+            workspaceId: jobInput.workspaceId,
+            type: jobInput.type,
+            resourceClass: jobInput.resourceClass,
+            status: jobInput.status,
+            priority: jobInput.priority,
+            inputHash: jobInput.inputHash,
+            input: jobInput.input,
+            outputArtifactId: jobInput.outputArtifactId,
+            lastErrorCode: jobInput.lastErrorCode,
+            maxAttempts: jobInput.maxAttempts
+          }
+        });
+        await tx.jobEvent.create({ data: { workspaceId: input.workspaceId, jobId: jobInput.id, eventType: "job.created", payload: { tournamentId } } });
+        await tx.jobEvent.create({ data: { workspaceId: input.workspaceId, jobId: jobInput.id, eventType: tournamentStatus === "ready_for_selection" ? "job.succeeded" : "job.failed", payload: { tournamentId, result } } });
+
+        const tournament = scriptTournamentRecord({
+          tournamentId,
+          workspaceId: input.workspaceId,
+          request,
+          entry,
+          formula,
+          directorPrompt,
+          profile: { id: profile.id },
+          variantCount,
+          validCount,
+          status: tournamentStatus,
+          result,
+          now: nowIso,
+          actorUserId: actor.userId,
+          manifestArtifactId,
+          jobId: jobInput.id
+        });
+        await tx.scriptTournament.create({ data: { id: tournament.id, ...prismaScriptTournament(tournament) } });
+        for (const variantRecord of variants) {
+          await tx.scriptVariant.create({ data: { id: variantRecord.id, ...prismaScriptVariant(variantRecord) } });
+        }
+        for (const evaluationRecord of evaluations) {
+          await tx.scriptEvaluation.create({ data: { id: evaluationRecord.id, ...prismaScriptEvaluation(evaluationRecord) } });
+        }
+        const outboxEventsList = scriptTournamentOutboxEvents(input.workspaceId, tournamentId, request, variantCount, validCount, result, nowIso);
+        for (const outbox of outboxEventsList) {
+          await tx.outboxEvent.create({
+            data: {
+              id: outbox.id,
+              workspaceId: outbox.workspaceId,
+              eventType: outbox.eventType,
+              aggregateType: outbox.aggregateType,
+              aggregateId: outbox.aggregateId,
+              payload: outbox.payload,
+              status: outbox.status,
+              publishedAt: now
+            }
+          });
+        }
+        const audit = scriptTournamentAudit(input.workspaceId, tournamentId, actor.userId, result, nowIso);
+        await tx.auditEvent.create({
+          data: {
+            workspaceId: audit.workspaceId,
+            actorUserId: audit.actorUserId,
+            eventType: audit.eventType,
+            targetType: audit.targetType,
+            targetId: audit.targetId,
+            reason: audit.reason
+          }
+        });
+
+        const body = scriptTournamentResponseBody(tournament, variants, evaluations, jobInput, outboxEventsList, audit);
+        if (tournamentStatus === "ready_for_selection") {
+          return { ok: true, response: body };
+        }
+        const failureCode = result === "insufficient_valid" ? "SCRIPT_VARIANT_COUNT_INSUFFICIENT" : result === "ai_request_refused" ? "AI_REQUEST_REFUSED" : "AI_OUTPUT_SCHEMA_INVALID";
+        const failureStatus = failureCode === "SCRIPT_VARIANT_COUNT_INSUFFICIENT" ? 409 : 422;
+        const failureTitle = failureCode === "SCRIPT_VARIANT_COUNT_INSUFFICIENT"
+          ? "Script variant count insufficient"
+          : failureCode === "AI_REQUEST_REFUSED"
+            ? "AI request refused"
+            : "AI output schema invalid";
+        const failureDetail = failureCode === "SCRIPT_VARIANT_COUNT_INSUFFICIENT"
+          ? "There are not enough valid scripts to compare."
+          : failureCode === "AI_REQUEST_REFUSED"
+            ? "The requested content could not be generated under the current policy."
+            : "The AI result did not match the required structure.";
+        return {
+          ok: false,
+          problem: {
+            ...problem(failureCode, failureStatus, failureTitle, failureDetail),
+            ...body
+          }
+        };
+      },
+      input.workspaceId
+    );
+  }
+
   async function searchViralCandidates(actor, input) {
     const validation = validateViralCandidateSearchInput(input);
     if (validation) {
@@ -3622,6 +4036,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
     seedBlueprintLibraryEntry,
     createBlueprintRequest,
     createReadyBlueprint,
+    createScriptTournament,
     searchViralCandidates,
     extractViralCandidateBlueprint,
     createSceneBlueprint,
@@ -4635,6 +5050,291 @@ function replacementInstructionFor(slot) {
     problem_contrast: "Frame the buyer problem without fear or guaranteed outcome claims."
   };
   return instructions[slot];
+}
+
+function validateScriptTournamentInput(input) {
+  if (typeof input.workspaceId !== "string" || typeof input.blueprintRequestId !== "string") {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "Check the highlighted fields.");
+  }
+  if (input.variantCount !== undefined && (!Number.isInteger(input.variantCount) || input.variantCount < 10 || input.variantCount > 20)) {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "Check the highlighted fields.");
+  }
+  if (input.simulatorMode !== undefined && !supportedScriptSimulatorModes().includes(input.simulatorMode)) {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "Check the highlighted fields.");
+  }
+  return null;
+}
+
+function scriptTournamentRecord({ tournamentId, workspaceId, request, entry, formula, directorPrompt, profile, variantCount, validCount, status, result, now, actorUserId, manifestArtifactId, jobId }) {
+  return {
+    id: tournamentId,
+    workspaceId,
+    blueprintRequestId: request.id,
+    blueprintLibraryEntryId: entry.id,
+    formulaDerivationId: formula.id,
+    directorPromptId: directorPrompt.id,
+    brandProfileId: profile.id,
+    brandProfileVersion: request.brandProfileVersion,
+    objectiveType: request.objectiveType,
+    objective: request.objective,
+    requestedVariantCount: variantCount,
+    validVariantCount: validCount,
+    status,
+    result,
+    promptVersion: SCRIPT_PROMPT_VERSION,
+    modelVersion: SCRIPT_MODEL_VERSION,
+    telemetry: {
+      tokenBucket: tokenBucket(variantCount),
+      costBucket: costBucket(variantCount)
+    },
+    manifestArtifactId,
+    jobId,
+    createdByUserId: actorUserId,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function scriptTournamentJob(workspaceId, tournamentId, request, entry, formula, directorPrompt, manifestArtifactId, status, now) {
+  const baseInput = {
+    tournamentId,
+    blueprintRequestId: request.id,
+    blueprintLibraryEntryId: entry.id,
+    formulaDerivationId: formula.id,
+    directorPromptId: directorPrompt.id
+  };
+  return {
+    id: randomUUID(),
+    workspaceId,
+    type: "script_tournament",
+    resourceClass: "AI",
+    status,
+    priority: 0,
+    inputHash: hashRequest({ type: "script_tournament", ...baseInput }),
+    input: { type: "script_tournament", ...baseInput },
+    outputArtifactId: manifestArtifactId,
+    lastErrorCode: status === "FAILED" ? "TOURNAMENT_INSUFFICIENT" : null,
+    nextRunAt: null,
+    maxAttempts: 1,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function scriptTournamentManifestArtifact(workspaceId, tournamentId, variantCount, now) {
+  const sha256 = createHash("sha256").update(`script-tournament:${tournamentId}:${variantCount}`).digest("hex");
+  return {
+    id: randomUUID(),
+    workspaceId,
+    fileName: `script-tournament-${tournamentId}.json`,
+    contentType: "application/json",
+    byteSize: 4096,
+    sha256,
+    status: "CLEAN",
+    retentionClass: "private-artifact",
+    producer: "script-tournament-simulator",
+    schemaVersion: "v0.script-tournament.manifest.1",
+    objectKey: `private-artifacts/${workspaceId}/script-tournament/${tournamentId}/manifest.json`,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function scriptTournamentOutboxEvents(workspaceId, tournamentId, request, variantCount, validCount, result, now) {
+  return [
+    {
+      id: randomUUID(),
+      workspaceId,
+      eventType: "script_tournament_started",
+      aggregateType: "ScriptTournament",
+      aggregateId: tournamentId,
+      payload: {
+        requestedVariantBucket: requestedVariantBucket(variantCount),
+        objectiveCategory: objectiveCategory(request.objectiveType)
+      },
+      status: "PUBLISHED",
+      createdAt: now,
+      publishedAt: now
+    },
+    {
+      id: randomUUID(),
+      workspaceId,
+      eventType: "script_tournament_completed",
+      aggregateType: "ScriptTournament",
+      aggregateId: tournamentId,
+      payload: {
+        validVariantCountBucket: validVariantCountBucket(validCount),
+        result,
+        durationBucket: durationBucket(variantCount)
+      },
+      status: "PUBLISHED",
+      createdAt: now,
+      publishedAt: now
+    }
+  ];
+}
+
+function scriptTournamentAudit(workspaceId, tournamentId, actorUserId, result, now) {
+  return {
+    id: randomUUID(),
+    workspaceId,
+    actorUserId,
+    eventType: "script.tournament.created",
+    targetType: "ScriptTournament",
+    targetId: tournamentId,
+    reason: result,
+    occurredAt: now
+  };
+}
+
+function scriptTournamentResponseBody(tournament, variants, evaluations, job, outboxEventsList, audit) {
+  return {
+    tournament: publicScriptTournament(tournament),
+    variants: variants.map(publicScriptVariant),
+    evaluations: evaluations.map(publicScriptEvaluation),
+    jobs: [publicJob(job)],
+    analytics: outboxEventsList.map((event) => ({ eventType: event.eventType, properties: event.payload })),
+    audit: publicAudit(audit),
+    tournamentId: tournament.id,
+    validVariantCount: tournament.validVariantCount,
+    requestedVariantCount: tournament.requestedVariantCount,
+    result: tournament.result
+  };
+}
+
+function publicScriptTournament(tournament) {
+  return {
+    id: tournament.id,
+    workspaceId: tournament.workspaceId,
+    blueprintRequestId: tournament.blueprintRequestId,
+    blueprintLibraryEntryId: tournament.blueprintLibraryEntryId,
+    formulaDerivationId: tournament.formulaDerivationId,
+    directorPromptId: tournament.directorPromptId,
+    brandProfileId: tournament.brandProfileId,
+    brandProfileVersion: tournament.brandProfileVersion,
+    objectiveType: tournament.objectiveType,
+    objective: tournament.objective,
+    requestedVariantCount: tournament.requestedVariantCount,
+    validVariantCount: tournament.validVariantCount,
+    status: tournament.status,
+    result: tournament.result,
+    promptVersion: tournament.promptVersion,
+    modelVersion: tournament.modelVersion,
+    telemetry: tournament.telemetry,
+    manifestArtifactId: tournament.manifestArtifactId,
+    jobId: tournament.jobId,
+    createdByUserId: tournament.createdByUserId,
+    createdAt: toIso(tournament.createdAt),
+    updatedAt: toIso(tournament.updatedAt)
+  };
+}
+
+function publicScriptVariant(variant) {
+  return {
+    id: variant.id,
+    workspaceId: variant.workspaceId,
+    tournamentId: variant.tournamentId,
+    index: variant.index,
+    status: variant.status,
+    hookType: variant.hookType,
+    hook: variant.hook,
+    body: variant.body,
+    cta: variant.cta,
+    captions: variant.captions,
+    claims: variant.claims,
+    cadence: variant.cadence,
+    formulaSlots: variant.formulaSlots,
+    provenance: variant.provenance,
+    createdAt: toIso(variant.createdAt)
+  };
+}
+
+function publicScriptEvaluation(evaluation) {
+  return {
+    id: evaluation.id,
+    workspaceId: evaluation.workspaceId,
+    tournamentId: evaluation.tournamentId,
+    variantId: evaluation.variantId,
+    status: evaluation.status,
+    hookStrength: evaluation.hookStrength,
+    timing: evaluation.timing,
+    patternInterrupts: evaluation.patternInterrupts,
+    cta: evaluation.cta,
+    claims: evaluation.claims,
+    captions: evaluation.captions,
+    tone: evaluation.tone,
+    formulaChecks: evaluation.formulaChecks,
+    policyChecks: evaluation.policyChecks,
+    brandRuleChecks: evaluation.brandRuleChecks,
+    modelScore: evaluation.modelScore,
+    humanScore: evaluation.humanScore,
+    explanation: evaluation.explanation,
+    createdAt: toIso(evaluation.createdAt)
+  };
+}
+
+function prismaScriptTournament(tournament) {
+  return {
+    workspaceId: tournament.workspaceId,
+    blueprintRequestId: tournament.blueprintRequestId,
+    blueprintLibraryEntryId: tournament.blueprintLibraryEntryId,
+    formulaDerivationId: tournament.formulaDerivationId,
+    directorPromptId: tournament.directorPromptId,
+    brandProfileId: tournament.brandProfileId,
+    brandProfileVersion: tournament.brandProfileVersion,
+    objectiveType: tournament.objectiveType,
+    objective: tournament.objective,
+    requestedVariantCount: tournament.requestedVariantCount,
+    validVariantCount: tournament.validVariantCount,
+    status: tournament.status,
+    result: tournament.result,
+    promptVersion: tournament.promptVersion,
+    modelVersion: tournament.modelVersion,
+    telemetry: tournament.telemetry,
+    manifestArtifactId: tournament.manifestArtifactId,
+    jobId: tournament.jobId,
+    createdByUserId: tournament.createdByUserId
+  };
+}
+
+function prismaScriptVariant(variant) {
+  return {
+    workspaceId: variant.workspaceId,
+    tournamentId: variant.tournamentId,
+    index: variant.index,
+    status: variant.status,
+    hookType: variant.hookType,
+    hook: variant.hook,
+    body: variant.body,
+    cta: variant.cta,
+    captions: variant.captions,
+    claims: variant.claims,
+    cadence: variant.cadence,
+    formulaSlots: variant.formulaSlots,
+    provenance: variant.provenance
+  };
+}
+
+function prismaScriptEvaluation(evaluation) {
+  return {
+    workspaceId: evaluation.workspaceId,
+    tournamentId: evaluation.tournamentId,
+    variantId: evaluation.variantId,
+    status: evaluation.status,
+    hookStrength: evaluation.hookStrength,
+    timing: evaluation.timing,
+    patternInterrupts: evaluation.patternInterrupts,
+    cta: evaluation.cta,
+    claims: evaluation.claims,
+    captions: evaluation.captions,
+    tone: evaluation.tone,
+    formulaChecks: evaluation.formulaChecks,
+    policyChecks: evaluation.policyChecks,
+    brandRuleChecks: evaluation.brandRuleChecks,
+    modelScore: evaluation.modelScore,
+    humanScore: evaluation.humanScore,
+    explanation: evaluation.explanation
+  };
 }
 
 function buildSceneStageSet(workspaceId, candidate, input, requestId, traceId, now) {

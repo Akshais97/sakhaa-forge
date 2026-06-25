@@ -310,6 +310,75 @@ model DirectorPrompt {
   @@map("director_prompts")
 }
 
+model ScriptTournament {
+  id                       String  @id @default(uuid()) @db.Uuid
+  workspaceId              String  @db.Uuid
+  blueprintRequestId       String  @db.Uuid
+  blueprintLibraryEntryId  String  @db.Uuid
+  formulaDerivationId      String  @db.Uuid
+  directorPromptId         String  @db.Uuid
+  brandProfileId           String  @db.Uuid
+  brandProfileVersion      Int
+  objectiveType            String  @db.VarChar(120)
+  objective                String  @db.VarChar(500)
+  requestedVariantCount    Int
+  validVariantCount        Int
+  status                   String  @db.VarChar(40)
+  result                   String  @db.VarChar(40)
+  promptVersion            String  @db.VarChar(80)
+  modelVersion             String  @db.VarChar(80)
+  telemetry                Json
+  manifestArtifactId       String? @db.Uuid
+  jobId                    String? @db.Uuid
+  variants                 ScriptVariant[]
+  evaluations              ScriptEvaluation[]
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, brandProfileId, createdAt])
+  @@map("script_tournaments")
+}
+
+model ScriptVariant {
+  id           String   @id @default(uuid()) @db.Uuid
+  workspaceId  String   @db.Uuid
+  tournamentId String   @db.Uuid
+  index        Int
+  status       String   @db.VarChar(40)
+  hookType      String   @db.VarChar(80)
+  hook          String   @db.Text
+  body          String   @db.Text
+  cta           String   @db.Text
+  captions      String   @db.Text
+  claims        Json
+  cadence       Json
+  formulaSlots  Json
+  provenance    Json
+  evaluation    ScriptEvaluation?
+  @@index([workspaceId, tournamentId, index])
+  @@map("script_variants")
+}
+
+model ScriptEvaluation {
+  id                String  @id @default(uuid()) @db.Uuid
+  workspaceId       String  @db.Uuid
+  tournamentId      String  @db.Uuid
+  variantId         String  @unique @db.Uuid
+  status            String  @db.VarChar(40)
+  hookStrength      Json
+  timing            Json
+  patternInterrupts Json
+  cta               Json
+  claims            Json
+  captions          Json
+  tone              Json
+  formulaChecks     Json
+  policyChecks      Json
+  brandRuleChecks   Json
+  modelScore        Float
+  humanScore        Float?
+  explanation       String  @db.Text
+  @@map("script_evaluations")
+}
+
 model ViralCandidate {
   id                 String @id @default(uuid()) @db.Uuid
   workspaceId        String @db.Uuid

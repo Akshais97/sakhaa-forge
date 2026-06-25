@@ -689,6 +689,21 @@
         }
       }
     },
+    "/script-tournaments": {
+      "post": {
+        "operationId": "createScriptTournament",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true },
+        "responses": {
+          "202": { "description": "S1 auditable script tournament generated, evaluated and exposed every variant with provenance, evaluation and bucketed analytics." },
+          "401": { "description": "Authentication is required." },
+          "403": { "description": "Only Owner, Admin or Client Manager can run script tournaments." },
+          "404": { "description": "Workspace or ready blueprint is hidden by tenant isolation." },
+          "409": { "description": "Fewer than ten valid variants cannot silently advance to selection." },
+          "422": { "description": "Validation failed, AI request refused or AI output schema invalid." }
+        }
+      }
+    },
     "/viral-candidates/search": {
       "post": {
         "operationId": "searchViralCandidates",

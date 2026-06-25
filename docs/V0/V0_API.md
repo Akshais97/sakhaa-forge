@@ -145,6 +145,23 @@ stage evidence returns `BLUEPRINT_STAGE_INCOMPLETE`; invalid or incomplete formu
 return `BLUEPRINT_FORMULA_INVALID`; a second ready creation for the same request returns
 `RESOURCE_VERSION_STALE`.
 
+`POST /script-tournaments` implements V0-S1 auditable script tournament creation. The
+request names the workspace and a P5-ready blueprint request, an optional 10-20
+`variantCount` (default 10) and a deterministic `simulatorMode`. Generation binds to the
+approved brand profile, formula derivation and provider-neutral director prompt bound to
+that ready blueprint; an unapproved brand profile or a draft blueprint returns
+`BRAND_PROFILE_NOT_APPROVED` or `BLUEPRINT_STAGE_INCOMPLETE`. The deterministic simulator
+generates 10-20 variants and evaluates hook strength, timing, pattern interrupts, CTA,
+claims, captions and tone against brand rules and universal prohibited-claim policy,
+preserving prompt/model versions, provenance source hashes, a manifest artifact and a
+`script_tournament` job. The response exposes every variant, evaluation, job, audit and
+bucketed `script_tournament_started`/`script_tournament_completed` analytics; raw prompts and
+script text never enter analytics. Fewer than ten valid variants return
+`SCRIPT_VARIANT_COUNT_INSUFFICIENT` (409); a policy refusal returns `AI_REQUEST_REFUSED` and
+schema-invalid simulator output returns `AI_OUTPUT_SCHEMA_INVALID` (422). No failed
+tournament silently advances to selection. The endpoint requires an `Idempotency-Key` and
+the `select_blueprint_and_run_scripts` capability.
+
 ## Provider Callbacks
 
 ```text

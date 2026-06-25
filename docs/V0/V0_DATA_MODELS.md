@@ -67,9 +67,17 @@ profiles. Historical lineage keeps the exact profile version originally used.
 
 ## Script Tournament
 
-- `ScriptTournament`: requested objective, formula, brand-profile version and policy.
-- `ScriptVariant`: generated script, hook type, body, CTA and generation provenance.
-- `ScriptEvaluation`: formula checks, policy checks, model/human score and explanation.
+- `ScriptTournament`: requested objective, formula derivation, director prompt, ready
+  blueprint library entry, brand-profile version, requested and valid variant counts,
+  status (`draft`/`generating`/`evaluating`/`ready_for_selection`/`selected`/`failed`/
+  `cancelled`), result, prompt/model versions, token/cost telemetry buckets, manifest
+  artifact and `script_tournament` job references.
+- `ScriptVariant`: generated script with hook type, hook, body, CTA, captions, claims,
+  cadence, formula slots, generation provenance (prompt/model version and source hash) and
+  status (`generated`/`policy_refused`/`schema_invalid`).
+- `ScriptEvaluation`: formula checks, policy checks, brand-rule checks, hook strength,
+  timing, pattern interrupts, CTA, claims, captions, tone, model score, optional human
+  score, explanation and status (`evaluated`/`policy_violation`/`schema_invalid`).
 - `SelectedScript`: immutable selection decision and approver.
 
 ## Avatars and Generation

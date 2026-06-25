@@ -383,6 +383,48 @@ function createF0Controller(env, store, prefix) {
       return result.response;
     }
 
+    async createScriptTournament(request) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      await assertWorkspacePermission(store, auth.actor, request.body?.workspaceId, "select_blueprint_and_run_scripts");
+
+      const idempotencyKey = request.headers["idempotency-key"];
+      if (typeof idempotencyKey !== "string" || idempotencyKey.trim().length === 0) {
+        throw new HttpException(
+          problem(
+            "IDEMPOTENCY_KEY_REQUIRED",
+            400,
+            "Idempotency key required",
+            "This action needs a request identity. Refresh and try again.",
+            true
+          ),
+          400
+        );
+      }
+
+      const result = await store.runIdempotent(
+        {
+          actor: auth.actor,
+          operation: "script.tournament.create",
+          idempotencyKey: idempotencyKey.trim(),
+          input: request.body ?? {}
+        },
+        async () => {
+          const created = await store.createScriptTournament(auth.actor, request.body ?? {});
+          if (!created.ok) {
+            throw new HttpException(created.problem, created.problem.status);
+          }
+          return created.response;
+        }
+      );
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
     async searchViralCandidates(request) {
       const auth = authenticateRequest(request.headers, env);
       if (!auth.ok) {
@@ -684,6 +726,7 @@ function createF0Controller(env, store, prefix) {
   postRoute("blueprints/library-entries", F0Controller, "seedBlueprintLibraryEntry", [Req()], 201);
   postRoute("blueprint-requests", F0Controller, "createBlueprintRequest", [Req()], 202);
   postRoute("blueprint-requests/:blueprintRequestId/ready-blueprint", F0Controller, "createReadyBlueprint", [Req(), Param("blueprintRequestId")], 202);
+  postRoute("script-tournaments", F0Controller, "createScriptTournament", [Req()], 202);
   postRoute("viral-candidates/search", F0Controller, "searchViralCandidates", [Req()], 202);
   postRoute("viral-candidates/:candidateId/extract-blueprint", F0Controller, "extractViralCandidateBlueprint", [Req(), Param("candidateId")], 202);
   postRoute("viral-candidates/:candidateId/scene-blueprint", F0Controller, "createSceneBlueprint", [Req(), Param("candidateId")], 202);
