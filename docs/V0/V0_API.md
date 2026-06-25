@@ -162,6 +162,23 @@ schema-invalid simulator output returns `AI_OUTPUT_SCHEMA_INVALID` (422). No fai
 tournament silently advances to selection. The endpoint requires an `Idempotency-Key` and
 the `select_blueprint_and_run_scripts` capability.
 
+`POST /script-tournaments/{id}/select` implements V0-S2 immutable selected script
+creation. The request names the workspace, tournament, an eligible `variantId` and the
+`optimisticTournamentVersion` captured by the comparison tab; an optional `humanOverride`
+boolean attests a human choice. Selection is a synchronous durable decision: one canonical,
+immutable `SelectedScript` is retained per tournament with the actor, tournament, variant,
+version and timestamp. The response exposes the selected script, tournament, variant,
+evaluation, audit and a bucketed `script_selected` analytics event
+(`variant_rank_bucket`, `human_overrode_top_score`); raw script text never enters analytics.
+Selection never implies generation approval or credit reservation. A stale comparison tab
+returns `RESOURCE_VERSION_STALE` (409); an unevaluated, refused, superseded or foreign
+variant returns `SCRIPT_SELECTION_INVALID` (409); a tournament that already has a selected
+script returns `SCRIPT_ALREADY_SELECTED` (409) before the stale-version guard, so a retried
+tab never overwrites a selection; a cross-workspace tournament is hidden with
+`WORKSPACE_ACCESS_DENIED` (404). Retries with the same `Idempotency-Key` return the same
+selection. The endpoint requires an `Idempotency-Key` and the
+`select_blueprint_and_run_scripts` capability.
+
 ## Provider Callbacks
 
 ```text

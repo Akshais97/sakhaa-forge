@@ -332,6 +332,7 @@ model ScriptTournament {
   jobId                    String? @db.Uuid
   variants                 ScriptVariant[]
   evaluations              ScriptEvaluation[]
+  selection                SelectedScript?
   @@index([workspaceId, status, createdAt])
   @@index([workspaceId, brandProfileId, createdAt])
   @@map("script_tournaments")
@@ -353,6 +354,7 @@ model ScriptVariant {
   formulaSlots  Json
   provenance    Json
   evaluation    ScriptEvaluation?
+  selection     SelectedScript?
   @@index([workspaceId, tournamentId, index])
   @@map("script_variants")
 }
@@ -377,6 +379,18 @@ model ScriptEvaluation {
   humanScore        Float?
   explanation       String  @db.Text
   @@map("script_evaluations")
+}
+
+model SelectedScript {
+  id              String   @id @default(uuid()) @db.Uuid
+  workspaceId     String   @db.Uuid
+  tournamentId    String   @unique @db.Uuid
+  variantId       String   @unique @db.Uuid
+  approverUserId  String   @db.Uuid
+  version         Int
+  humanOverride   Boolean
+  @@index([workspaceId, createdAt])
+  @@map("selected_scripts")
 }
 
 model ViralCandidate {

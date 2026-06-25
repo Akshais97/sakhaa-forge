@@ -100,6 +100,7 @@ model Workspace {
   scriptTournaments ScriptTournament[]
   scriptVariants ScriptVariant[]
   scriptEvaluations ScriptEvaluation[]
+  selectedScripts SelectedScript[]
   inboxEvents InboxEvent[]
   jobs Job[]
   jobAttempts JobAttempt[]
@@ -501,6 +502,7 @@ model ScriptTournament {
   brandProfile              BrandProfile          @relation(fields: [brandProfileId], references: [id])
   variants                  ScriptVariant[]
   evaluations               ScriptEvaluation[]
+  selection                 SelectedScript?
 
   @@index([workspaceId, status, createdAt])
   @@index([workspaceId, brandProfileId, createdAt])
@@ -526,6 +528,7 @@ model ScriptVariant {
   workspace       Workspace @relation(fields: [workspaceId], references: [id])
   tournament      ScriptTournament @relation(fields: [tournamentId], references: [id])
   evaluation      ScriptEvaluation?
+  selection       SelectedScript?
 
   @@index([workspaceId, tournamentId, index])
   @@map("script_variants")
@@ -557,6 +560,28 @@ model ScriptEvaluation {
 
   @@index([workspaceId, tournamentId, status])
   @@map("script_evaluations")
+}
+
+// V0-S2 immutable selected script: one canonical, immutable selection per
+// tournament. The unique tournament_id and variant_id constraints enforce one
+// selection per tournament and one selection per variant; changes require a new
+// tournament and a new selection.
+model SelectedScript {
+  id              String   @id @default(uuid()) @db.Uuid
+  workspaceId     String   @map("workspace_id") @db.Uuid
+  tournamentId    String   @unique @map("tournament_id") @db.Uuid
+  variantId       String   @unique @map("variant_id") @db.Uuid
+  approverUserId  String   @map("approver_user_id") @db.Uuid
+  version         Int
+  humanOverride   Boolean  @map("human_override")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace       Workspace @relation(fields: [workspaceId], references: [id])
+  tournament      ScriptTournament @relation(fields: [tournamentId], references: [id])
+  variant         ScriptVariant @relation(fields: [variantId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@map("selected_scripts")
 }
 
 model ViralCandidate {

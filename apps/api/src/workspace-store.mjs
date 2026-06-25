@@ -11,6 +11,7 @@ import {
   tokenBucket,
   costBucket,
   objectiveCategory,
+  variantRankBucket,
   SCRIPT_PROMPT_VERSION,
   SCRIPT_MODEL_VERSION,
   supportedScriptSimulatorModes
@@ -44,6 +45,7 @@ export function createWorkspaceStore() {
   const scriptTournaments = new Map();
   const scriptVariants = new Map();
   const scriptEvaluations = new Map();
+  const selectedScripts = new Map();
   const viralCandidates = new Map();
   const metricSnapshots = new Map();
   const mediaAcquisitions = new Map();
@@ -1016,6 +1018,102 @@ export function createWorkspaceStore() {
     };
   }
 
+  async function selectScriptVariant(actor, input) {
+    if (!getWorkspaceForActor(actor, input.workspaceId)) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const validation = validateScriptSelectionInput(input);
+    if (validation) {
+      return { ok: false, problem: validation };
+    }
+    const tournament = scriptTournaments.get(input.tournamentId);
+    if (!tournament || tournament.workspaceId !== input.workspaceId) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    // An already-selected tournament refuses any new genuine selection before the
+    // stale-version guard so a retried comparison tab never overwrites a selection.
+    if (tournament.status === "selected") {
+      return {
+        ok: false,
+        problem: problem("SCRIPT_ALREADY_SELECTED", 409, "Script already selected", "This tournament already has a selected script.")
+      };
+    }
+    // Optimistic-version guard: a stale comparison tab captured an older tournament
+    // state and must reload the latest variants before selecting.
+    if (input.optimisticTournamentVersion !== toIso(tournament.updatedAt)) {
+      return {
+        ok: false,
+        problem: problem("RESOURCE_VERSION_STALE", 409, "Resource version stale", "This item changed after you opened it. Review the latest version.")
+      };
+    }
+    if (tournament.status !== "ready_for_selection") {
+      return {
+        ok: false,
+        problem: problem("SCRIPT_SELECTION_INVALID", 409, "Script selection invalid", "Select an evaluated, eligible script.")
+      };
+    }
+    const variant = scriptVariants.get(input.variantId);
+    if (!variant || variant.tournamentId !== tournament.id || variant.workspaceId !== input.workspaceId) {
+      return {
+        ok: false,
+        problem: problem("SCRIPT_SELECTION_INVALID", 409, "Script selection invalid", "Select an evaluated, eligible script.")
+      };
+    }
+    if (variant.status !== "generated") {
+      return {
+        ok: false,
+        problem: problem("SCRIPT_SELECTION_INVALID", 409, "Script selection invalid", "Select an evaluated, eligible script.")
+      };
+    }
+    const evaluation = [...scriptEvaluations.values()].find((record) => record.variantId === variant.id);
+    if (!evaluation || evaluation.status !== "evaluated") {
+      return {
+        ok: false,
+        problem: problem("SCRIPT_SELECTION_INVALID", 409, "Script selection invalid", "Select an evaluated, eligible script.")
+      };
+    }
+
+    const now = new Date().toISOString();
+    const selectedScriptId = randomUUID();
+    const validVariants = [...scriptVariants.values()].filter(
+      (record) => record.tournamentId === tournament.id && record.workspaceId === input.workspaceId && record.status === "generated"
+    );
+    const tournamentEvaluations = [...scriptEvaluations.values()].filter(
+      (record) => record.tournamentId === tournament.id && record.workspaceId === input.workspaceId
+    );
+    const rank = computeVariantRank(validVariants, tournamentEvaluations, variant.id);
+    const humanOverride = input.humanOverride === true;
+    const selectedScript = selectedScriptRecord({
+      selectedScriptId,
+      workspaceId: input.workspaceId,
+      tournamentId: tournament.id,
+      variantId: variant.id,
+      actorUserId: actor.userId,
+      humanOverride,
+      now
+    });
+    selectedScripts.set(selectedScript.id, selectedScript);
+    // Selection flips the lifecycle status but does not alter the compared variant
+    // set, so the tournament content version remains the ready_for_selection state.
+    tournament.status = "selected";
+    tournament.updatedAt = now;
+    scriptTournaments.set(tournament.id, tournament);
+    const outbox = selectedScriptOutboxEvent(input.workspaceId, tournament.id, selectedScript.id, rank, now);
+    outboxEvents.set(outbox.id, outbox);
+    const audit = selectedScriptAudit(input.workspaceId, selectedScript.id, tournament.id, actor.userId, now);
+    audits.push(audit);
+    return {
+      ok: true,
+      response: selectedScriptResponseBody(selectedScript, tournament, variant, evaluation, [outbox], audit)
+    };
+  }
+
   function searchViralCandidates(actor, input) {
     if (!getWorkspaceForActor(actor, input.workspaceId)) {
       return {
@@ -1860,6 +1958,7 @@ export function createWorkspaceStore() {
     createBlueprintRequest,
     createReadyBlueprint,
     createScriptTournament,
+    selectScriptVariant,
     searchViralCandidates,
     extractViralCandidateBlueprint,
     createSceneBlueprint,
@@ -3068,6 +3167,103 @@ export function createPrismaWorkspaceStore(env = process.env) {
     );
   }
 
+  async function selectScriptVariant(actor, input) {
+    const validation = validateScriptSelectionInput(input);
+    if (validation) {
+      return { ok: false, problem: validation };
+    }
+    return withActor(
+      actor,
+      async (tx) => {
+        const tournament = await tx.scriptTournament.findFirst({
+          where: { id: input.tournamentId, workspaceId: input.workspaceId }
+        });
+        if (!tournament) {
+          return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
+        }
+        if (tournament.status === "selected") {
+          return { ok: false, problem: problem("SCRIPT_ALREADY_SELECTED", 409, "Script already selected", "This tournament already has a selected script.") };
+        }
+        if (input.optimisticTournamentVersion !== toIso(tournament.updatedAt)) {
+          return { ok: false, problem: problem("RESOURCE_VERSION_STALE", 409, "Resource version stale", "This item changed after you opened it. Review the latest version.") };
+        }
+        if (tournament.status !== "ready_for_selection") {
+          return { ok: false, problem: problem("SCRIPT_SELECTION_INVALID", 409, "Script selection invalid", "Select an evaluated, eligible script.") };
+        }
+        const variant = await tx.scriptVariant.findFirst({
+          where: { id: input.variantId, workspaceId: input.workspaceId }
+        });
+        if (!variant || variant.tournamentId !== tournament.id) {
+          return { ok: false, problem: problem("SCRIPT_SELECTION_INVALID", 409, "Script selection invalid", "Select an evaluated, eligible script.") };
+        }
+        if (variant.status !== "generated") {
+          return { ok: false, problem: problem("SCRIPT_SELECTION_INVALID", 409, "Script selection invalid", "Select an evaluated, eligible script.") };
+        }
+        const evaluation = await tx.scriptEvaluation.findFirst({
+          where: { variantId: variant.id, workspaceId: input.workspaceId }
+        });
+        if (!evaluation || evaluation.status !== "evaluated") {
+          return { ok: false, problem: problem("SCRIPT_SELECTION_INVALID", 409, "Script selection invalid", "Select an evaluated, eligible script.") };
+        }
+
+        const now = new Date();
+        const nowIso = now.toISOString();
+        const selectedScriptId = randomUUID();
+        const validVariants = await tx.scriptVariant.findMany({
+          where: { tournamentId: tournament.id, workspaceId: input.workspaceId, status: "generated" }
+        });
+        const tournamentEvaluations = await tx.scriptEvaluation.findMany({
+          where: { tournamentId: tournament.id, workspaceId: input.workspaceId }
+        });
+        const rank = computeVariantRank(validVariants, tournamentEvaluations, variant.id);
+        const humanOverride = input.humanOverride === true;
+        const selectedScript = selectedScriptRecord({
+          selectedScriptId,
+          workspaceId: input.workspaceId,
+          tournamentId: tournament.id,
+          variantId: variant.id,
+          actorUserId: actor.userId,
+          humanOverride,
+          now: nowIso
+        });
+        await tx.selectedScript.create({ data: { id: selectedScript.id, ...prismaSelectedScript(selectedScript) } });
+        const updatedTournament = await tx.scriptTournament.update({
+          where: { id: tournament.id },
+          data: { status: "selected" }
+        });
+        const outbox = selectedScriptOutboxEvent(input.workspaceId, tournament.id, selectedScript.id, rank, nowIso);
+        await tx.outboxEvent.create({
+          data: {
+            id: outbox.id,
+            workspaceId: outbox.workspaceId,
+            eventType: outbox.eventType,
+            aggregateType: outbox.aggregateType,
+            aggregateId: outbox.aggregateId,
+            payload: outbox.payload,
+            status: outbox.status,
+            publishedAt: now
+          }
+        });
+        const audit = selectedScriptAudit(input.workspaceId, selectedScript.id, tournament.id, actor.userId, nowIso);
+        await tx.auditEvent.create({
+          data: {
+            workspaceId: audit.workspaceId,
+            actorUserId: audit.actorUserId,
+            eventType: audit.eventType,
+            targetType: audit.targetType,
+            targetId: audit.targetId,
+            reason: audit.reason
+          }
+        });
+        return {
+          ok: true,
+          response: selectedScriptResponseBody(selectedScript, updatedTournament, variant, evaluation, [outbox], audit)
+        };
+      },
+      input.workspaceId
+    );
+  }
+
   async function searchViralCandidates(actor, input) {
     const validation = validateViralCandidateSearchInput(input);
     if (validation) {
@@ -4037,6 +4233,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
     createBlueprintRequest,
     createReadyBlueprint,
     createScriptTournament,
+    selectScriptVariant,
     searchViralCandidates,
     extractViralCandidateBlueprint,
     createSceneBlueprint,
@@ -5334,6 +5531,124 @@ function prismaScriptEvaluation(evaluation) {
     modelScore: evaluation.modelScore,
     humanScore: evaluation.humanScore,
     explanation: evaluation.explanation
+  };
+}
+
+// V0-S2 immutable selected-script helpers. Selection is a synchronous durable
+// decision: one canonical, immutable SelectedScript per tournament, retained
+// with an audit record and a bucketed script_selected analytics event. Selection
+// never implies generation approval or credit reservation.
+
+function validateScriptSelectionInput(input) {
+  if (
+    typeof input.workspaceId !== "string" ||
+    typeof input.tournamentId !== "string" ||
+    typeof input.variantId !== "string" ||
+    typeof input.optimisticTournamentVersion !== "string"
+  ) {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "Check the highlighted fields.");
+  }
+  if (input.humanOverride !== undefined && typeof input.humanOverride !== "boolean") {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "Check the highlighted fields.");
+  }
+  return null;
+}
+
+function selectedScriptRecord({ selectedScriptId, workspaceId, tournamentId, variantId, actorUserId, humanOverride, now }) {
+  return {
+    id: selectedScriptId,
+    workspaceId,
+    tournamentId,
+    variantId,
+    approverUserId: actorUserId,
+    version: 1,
+    humanOverride,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+// The selected variant's 1-based rank among valid variants sorted by model score
+// descending. Ties break on variant index so the rank is deterministic across
+// stores. The rank feeds a coarse analytics bucket only; the variant id, score
+// and script text never enter analytics.
+function computeVariantRank(validVariants, tournamentEvaluations, selectedVariantId) {
+  const scored = validVariants.map((variant) => {
+    const evaluation = tournamentEvaluations.find((record) => record.variantId === variant.id);
+    return { id: variant.id, index: variant.index, score: evaluation ? evaluation.modelScore : 0 };
+  });
+  scored.sort((a, b) => b.score - a.score || a.index - b.index);
+  return scored.findIndex((entry) => entry.id === selectedVariantId) + 1;
+}
+
+function selectedScriptOutboxEvent(workspaceId, tournamentId, selectedScriptId, rank, now) {
+  return {
+    id: randomUUID(),
+    workspaceId,
+    eventType: "script_selected",
+    aggregateType: "SelectedScript",
+    aggregateId: selectedScriptId,
+    payload: {
+      variant_rank_bucket: variantRankBucket(rank),
+      human_overrode_top_score: rank !== 1
+    },
+    status: "PUBLISHED",
+    createdAt: now,
+    publishedAt: now
+  };
+}
+
+function selectedScriptAudit(workspaceId, selectedScriptId, tournamentId, actorUserId, now) {
+  return {
+    id: randomUUID(),
+    workspaceId,
+    actorUserId,
+    eventType: "script.selected",
+    targetType: "SelectedScript",
+    targetId: selectedScriptId,
+    reason: "selected",
+    occurredAt: now
+  };
+}
+
+function publicSelectedScript(selectedScript) {
+  return {
+    id: selectedScript.id,
+    workspaceId: selectedScript.workspaceId,
+    tournamentId: selectedScript.tournamentId,
+    variantId: selectedScript.variantId,
+    approverUserId: selectedScript.approverUserId,
+    version: selectedScript.version,
+    humanOverride: selectedScript.humanOverride,
+    immutable: true,
+    createdAt: toIso(selectedScript.createdAt),
+    updatedAt: toIso(selectedScript.updatedAt)
+  };
+}
+
+function selectedScriptResponseBody(selectedScript, tournament, variant, evaluation, outboxEventsList, audit) {
+  return {
+    selectedScript: publicSelectedScript(selectedScript),
+    tournament: publicScriptTournament(tournament),
+    variant: publicScriptVariant(variant),
+    evaluation: publicScriptEvaluation(evaluation),
+    jobs: [],
+    analytics: outboxEventsList.map((event) => ({ eventType: event.eventType, properties: event.payload })),
+    audit: publicAudit(audit),
+    tournamentId: tournament.id,
+    variantId: variant.id,
+    selectedScriptId: selectedScript.id
+  };
+}
+
+function prismaSelectedScript(selectedScript) {
+  return {
+    workspaceId: selectedScript.workspaceId,
+    tournamentId: selectedScript.tournamentId,
+    variantId: selectedScript.variantId,
+    approverUserId: selectedScript.approverUserId,
+    version: selectedScript.version,
+    humanOverride: selectedScript.humanOverride
   };
 }
 

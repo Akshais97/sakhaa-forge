@@ -233,6 +233,33 @@ test("web shell renders S1 script tournament variant, evaluation and guard state
   }
 });
 
+test("web shell renders S2 script selection immutable, stale and ineligible states", async () => {
+  const port = 3926;
+  const child = spawn(process.execPath, ["apps/web/src/server.mjs"], {
+    env: { ...process.env, PORT: String(port) },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForServer(`http://127.0.0.1:${port}`);
+    const response = await fetch(`http://127.0.0.1:${port}`);
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /data-testid="script-selection-contract"/);
+    assert.match(html, /Script selection contract/);
+    assert.match(html, /compares evaluated variants and selects one exact immutable script version/);
+    assert.match(html, /One canonical, immutable selected script is retained per tournament/);
+    assert.match(html, /analytics script_selected bucket only/);
+    assert.match(html, /An optimistic-version guard rejects a selection made from a stale comparison tab/);
+    assert.match(html, /data-state="stale"/);
+    assert.match(html, /An unevaluated, refused, superseded or cross-workspace variant cannot be selected/);
+    assert.match(html, /selection never implies generation approval or credit reservation/);
+  } finally {
+    child.kill();
+  }
+});
+
 async function waitForServer(url) {
   const started = Date.now();
   while (Date.now() - started < 5000) {

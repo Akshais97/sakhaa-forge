@@ -355,6 +355,28 @@ const server = http.createServer((_request, response) => {
           </article>
         </div>
       </section>
+      <section aria-labelledby="script-selection-title" data-testid="script-selection-contract">
+        <h2 id="script-selection-title">Script selection contract</h2>
+        <p>The client manager compares evaluated variants and selects one exact immutable script version for generation.</p>
+        <div class="candidate-grid">
+          <article class="candidate">
+            <h3>Selected immutable script</h3>
+            <p>One canonical, immutable selected script is retained per tournament with actor, tournament, variant and version provenance.</p>
+            <p class="source">Schema v0.selected-script.1 · analytics script_selected bucket only</p>
+            <span class="status" data-state="approved">Selected</span>
+          </article>
+          <article class="candidate">
+            <h3>Stale comparison tab</h3>
+            <p>An optimistic-version guard rejects a selection made from a stale comparison tab.</p>
+            <span class="status" data-state="stale">Stale</span>
+          </article>
+          <article class="candidate">
+            <h3>Ineligible variant</h3>
+            <p>An unevaluated, refused, superseded or cross-workspace variant cannot be selected; selection never implies generation approval or credit reservation.</p>
+            <span class="status" data-state="blocked">Blocked</span>
+          </article>
+        </div>
+      </section>
     </main>
   </body>
 </html>

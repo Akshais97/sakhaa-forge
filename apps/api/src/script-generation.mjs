@@ -26,7 +26,7 @@ const UNIVERSAL_PROHIBITED_CLAIMS = [
   "risk-free investment"
 ];
 
-const SUPPORTED_MODES = new Set(["fixture_success", "insufficient_valid", "ai_refused", "malformed"]);
+const SUPPORTED_MODES = new Set(["fixture_success", "insufficient_valid", "mixed_valid", "ai_refused", "malformed"]);
 
 export function supportedScriptSimulatorModes() {
   return [...SUPPORTED_MODES];
@@ -36,6 +36,9 @@ export function supportedScriptSimulatorModes() {
 // - fixture_success: `variantCount` policy-clean, schema-valid variants.
 // - insufficient_valid: `variantCount` variants where the first
 //   `max(2, variantCount - 8)` carry a prohibited claim so valid count < 10.
+// - mixed_valid: the first two variants carry a prohibited claim while the rest
+//   stay valid, so the tournament reaches ready_for_selection with two
+//   refused variants still present for selection-rejection tests.
 // - ai_refused: the provider refuses under policy; no variants are produced.
 // - malformed: the provider returns schema-invalid output that cannot be parsed.
 export function generateScriptVariants(input) {
@@ -50,7 +53,7 @@ export function generateScriptVariants(input) {
     return { ok: false, problemCode: "AI_OUTPUT_SCHEMA_INVALID", retryable: false, variants: [] };
   }
   const count = input.variantCount;
-  const poisonedCount = mode === "insufficient_valid" ? Math.max(2, count - 8) : 0;
+  const poisonedCount = mode === "insufficient_valid" ? Math.max(2, count - 8) : mode === "mixed_valid" ? 2 : 0;
   const variants = [];
   for (let index = 0; index < count; index += 1) {
     variants.push(buildVariant({ ...input, index, poisoned: index < poisonedCount }));
@@ -287,4 +290,15 @@ export function costBucket(count) {
 
 export function objectiveCategory(objectiveType) {
   return objectiveType;
+}
+
+// Bucket for the script_selected analytics event: the selected variant's
+// 1-based rank among valid variants when sorted by model score descending.
+// Coarse buckets only; the variant id, score and script text never enter
+// analytics.
+export function variantRankBucket(rank) {
+  if (rank === 1) return "1";
+  if (rank <= 3) return "2-3";
+  if (rank <= 10) return "4-10";
+  return "11+";
 }

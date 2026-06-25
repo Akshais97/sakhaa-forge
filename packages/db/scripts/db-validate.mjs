@@ -65,6 +65,10 @@ const s1Migration = await readFile(
   "packages/db/prisma/migrations/0016_v0_s1_script_tournament/migration.sql",
   "utf8"
 );
+const s2Migration = await readFile(
+  "packages/db/prisma/migrations/0017_v0_s2_selected_script/migration.sql",
+  "utf8"
+);
 
 if (!schema.includes("provider = \"postgresql\"")) {
   throw new Error("Prisma datasource must use PostgreSQL.");
@@ -106,7 +110,8 @@ for (const required of [
   "model DirectorPrompt",
   "model ScriptTournament",
   "model ScriptVariant",
-  "model ScriptEvaluation"
+  "model ScriptEvaluation",
+  "model SelectedScript"
 ]) {
   if (!schema.includes(required)) {
     throw new Error(`Missing required schema block: ${required}`);
@@ -401,7 +406,22 @@ for (const required of [
   }
 }
 
-if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}\n${s1Migration}`)) {
+if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}\n${s1Migration}\n${s2Migration}`)) {
+  throw new Error("Runtime roles must not receive BYPASSRLS.");
+}
+
+for (const required of [
+  "CREATE TABLE IF NOT EXISTS selected_scripts",
+  "ALTER TABLE selected_scripts ENABLE ROW LEVEL SECURITY;",
+  "CREATE POLICY selected_scripts_workspace_isolation",
+  "selected_scripts_version_check"
+]) {
+  if (!s2Migration.includes(required)) {
+    throw new Error(`Missing required S2 selected script migration statement: ${required}`);
+  }
+}
+
+if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}\n${s1Migration}\n${s2Migration}`)) {
   throw new Error("Runtime roles must not receive BYPASSRLS.");
 }
 
@@ -414,4 +434,4 @@ for (const required of [
   }
 }
 
-console.log("Database contract valid for V0-F5/B1/B2/B3/P1/P2/P3/P4/P5/S1 identity, idempotency, artifacts, jobs, outbox, capability controls, service credentials, brand intake, brand candidates, brand memory, blueprint path selection, viral candidate metrics, media acquisition, thumbnail blueprints, scene blueprints, formula derivations, director prompts, script tournaments and RLS.");
+console.log("Database contract valid for V0-F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2 identity, idempotency, artifacts, jobs, outbox, capability controls, service credentials, brand intake, brand candidates, brand memory, blueprint path selection, viral candidate metrics, media acquisition, thumbnail blueprints, scene blueprints, formula derivations, director prompts, script tournaments, selected scripts and RLS.");

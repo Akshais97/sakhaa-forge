@@ -78,7 +78,12 @@ profiles. Historical lineage keeps the exact profile version originally used.
 - `ScriptEvaluation`: formula checks, policy checks, brand-rule checks, hook strength,
   timing, pattern interrupts, CTA, claims, captions, tone, model score, optional human
   score, explanation and status (`evaluated`/`policy_violation`/`schema_invalid`).
-- `SelectedScript`: immutable selection decision and approver.
+- `SelectedScript`: one canonical, immutable selection decision per tournament, retaining
+  the workspace, tournament, selected variant, approver, version, optional human-override
+  attestation and timestamp. Unique `tournament_id` and `variant_id` enforce one selection
+  per tournament and one selection per variant; changing the selection requires a new
+  tournament and a new selection. Selection never implies generation approval or credit
+  reservation.
 
 ## Avatars and Generation
 

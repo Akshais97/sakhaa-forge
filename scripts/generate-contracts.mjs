@@ -100,6 +100,10 @@ export class V0Client {
     return this.#post("/script-tournaments", input, options);
   }
 
+  async selectScriptVariant(tournamentId, input, options = {}) {
+    return this.#post(\`/script-tournaments/\${encodeURIComponent(tournamentId)}/select\`, input, options);
+  }
+
   async searchViralCandidates(input) {
     return this.#post("/viral-candidates/search", input);
   }
