@@ -227,3 +227,94 @@ production provider readiness or full V0 acceptance. Generation (V0-G3 onward),
 credit reservation, wallet and publishing are not yet implemented; avatar
 selection stops at the derived eligibility surface and never silently advances
 to generation. No public avatar creation or revocation endpoint was introduced.
+
+## Review Fixes (2026-06-26)
+
+A senior sprint review (`docs/Project/Sprint Reviews/G1_review.md`) found that
+G1 implemented catalogue eligibility and UI disabled states but did not enforce
+avatar eligibility at the backend boundary that consumes avatar selection, and
+that avatar selection was not auditable or durable. Both critical issues are
+fixed in this change.
+
+### Backend consent guard at the estimate boundary
+
+`createGenerationEstimate` (in-memory and Prisma) now enforces consent-safe
+avatar eligibility when an `avatarProfileId` is supplied. After the active
+approved brand-profile check, the API materializes the brand-bound catalogue,
+loads the avatar by `workspaceId` and `brandProfileId`, and derives eligibility
+with the same server logic as `GET /avatars`. The UI disabled state is never
+trusted.
+
+- A missing, nonexistent or cross-workspace avatar is hidden behind
+  `WORKSPACE_ACCESS_DENIED` (404), never a 409 that leaks existence.
+- A revoked avatar returns `AVATAR_CONSENT_REVOKED` (409).
+- An expired avatar returns `AVATAR_CONSENT_EXPIRED` (409).
+- A missing-evidence avatar returns `AVATAR_CONSENT_REQUIRED` (409).
+- A service-pending custom avatar returns `AVATAR_CONSENT_REQUIRED` (409). The
+  V0 error catalog defines no dedicated service-pending code; an unfulfilled
+  custom-avatar service means valid likeness/voice consent is not yet in place.
+  This mapping is documented in `docs/V0/V0_API.md`.
+- A generic avatar is accepted by the same derive logic; it carries a
+  non-expiring library licence consent record and is bound to the workspace and
+  brand profile.
+- When no `avatarProfileId` is supplied, the estimate is created without an
+  avatar and no guard or audit applies, preserving the pre-G1 estimate contract.
+
+Error codes are the existing `AVATAR_CONSENT_*` entries in
+`docs/V0/V0_ERROR_CATALOG.md`; no new error code or endpoint was introduced.
+
+### Durable selection audit
+
+An eligible avatar that enters a generation estimate writes a durable
+`avatar.selected` audit row (target type `AvatarProfile`, target id the avatar
+id) retained as selection lineage. A rejected avatar writes no estimate and no
+audit. Consent evidence never reaches the audit record. This binds avatar
+selection into the first downstream generation-estimate mutation, satisfying the
+sprint's "Selection audit record" completion evidence without inventing a public
+avatar mutation endpoint.
+
+### Fix verification
+
+Red evidence before the fix: a `consent_revoked` avatar was accepted into a
+generation estimate with `202`; a cross-workspace avatar was accepted with `202`;
+no audit record was returned.
+
+Green evidence after the fix:
+
+```text
+node --test tests\integration\avatar-g1.test.mjs tests\integration\brand-memory-b3.test.mjs
+tests 8
+pass 8
+fail 0
+```
+
+The `brand-memory-b3` "active estimate" case now uses a real eligible avatar
+from the catalogue, because a fake `avatarProfileId` is correctly rejected under
+the strengthened contract; its draft and stale assertions are unchanged because
+they fail at the brand-profile check before any avatar guard runs.
+
+Prisma runtime proof against Supabase:
+
+```text
+V0_RUNTIME_DB_PROOF=1 node --test tests\integration\prisma-runtime.test.mjs
+✔ prisma runtime enforces V0-G1 avatar consent at the generation estimate boundary and retains selection audit
+tests 4
+pass 4
+fail 0
+```
+
+The runtime proof confirms a revoked avatar is rejected with
+`AVATAR_CONSENT_REVOKED` (409), an eligible avatar is accepted (202) with an
+`avatar.selected` audit, `audit_events` holds one selection row for the eligible
+avatar and zero rows for the rejected avatar.
+
+### Non-blocking items left for the owner
+
+- `avatar_consents.revoked_by_user_id` remains a plain nullable UUID column
+  with no FK to `users(id)`, mirroring the pre-0018 selected-script approver
+  pattern. The deterministic simulator sets it to null; a real revocation actor
+  FK can be added when a public revocation contract is introduced.
+- A true browser click-automation test against the live API is not added; the
+  web-shell state functions and module serving remain unit-tested. The sprint's
+  first failing behaviour (backend guard) is covered by the integration and
+  runtime proofs above.

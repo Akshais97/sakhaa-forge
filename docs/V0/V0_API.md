@@ -89,6 +89,22 @@ only the active approved brand-profile version for the workspace. Draft, rejecte
 revoked, missing or superseded profile IDs return `BRAND_PROFILE_NOT_APPROVED`; historical
 lineage may still reference old profiles, but new production cannot use them.
 
+`POST /generation-estimates` is also the V0-G1 consent-safe avatar guard. When the request
+supplies an `avatarProfileId`, the API materializes the brand-bound avatar catalogue,
+loads the avatar by `workspaceId` and `brandProfileId`, and derives consent eligibility
+with the same server logic as `GET /avatars` — the UI disabled state is never trusted. A
+missing, nonexistent or cross-workspace avatar is hidden behind
+`WORKSPACE_ACCESS_DENIED` (404), never a 409 that leaks existence. A revoked, expired,
+missing-evidence or service-pending avatar is rejected with the stable consent codes
+`AVATAR_CONSENT_REVOKED`, `AVATAR_CONSENT_EXPIRED` or `AVATAR_CONSENT_REQUIRED`. The
+catalogue defines no dedicated service-pending code, so a custom avatar whose service
+fulfillment is still pending surfaces as `AVATAR_CONSENT_REQUIRED`: valid likeness and
+voice consent is not yet in place. An eligible avatar that enters an estimate writes a
+durable `avatar.selected` audit row (target type `AvatarProfile`) retained as selection
+lineage; a rejected avatar writes no estimate and no audit. No audit carries consent
+evidence. When no `avatarProfileId` is supplied, the estimate is created without an avatar
+and no avatar guard or audit applies, preserving the pre-G1 estimate contract.
+
 `GET /blueprints` returns the V0-P1 reusable blueprint library for one workspace and one
 active approved brand profile. Results are bounded by `limit` with a cursor, include
 compatibility metadata and expose an empty state that requires the user to choose either
@@ -201,6 +217,11 @@ existence. The endpoint requires the `manage_avatars_consent` capability (Owner,
 Client Manager). The deterministic consent simulator idempotently materializes the
 brand-bound catalogue on first read; V0 defines no public avatar creation or
 revocation endpoint, so no client can mutate consent state through `/api/v0`.
+The catalogue is the source of truth for the downstream consent guard: `POST /generation-estimates`
+loads the supplied `avatarProfileId` from this brand-bound catalogue and rejects
+revoked, expired, missing-evidence and service-pending avatars with the stable
+`AVATAR_CONSENT_*` codes, so an avatar that is unavailable in the catalogue cannot
+enter a paid generation step.
 
 ## Provider Callbacks
 

@@ -345,6 +345,92 @@ test("prisma runtime materializes V0-G1 avatar catalogue with derived consent el
   );
 });
 
+test("prisma runtime enforces V0-G1 avatar consent at the generation estimate boundary and retains selection audit", {
+  timeout: 30000,
+  skip: process.env.V0_RUNTIME_DB_PROOF === "1" ? false : "Run through pnpm verify runtime proof step."
+}, async () => {
+  const env = loadApiEnv();
+  if (!env.DATABASE_URL) {
+    throw new Error("DATABASE_URL required for prisma runtime G1 estimate guard proof.");
+  }
+
+  const userId = randomUUID();
+
+  await withApiServer(
+    {
+      ...env,
+      APP_ENV: "test",
+      APP_VERSION: "test",
+      V0_RUNTIME_DB: "prisma",
+      V0_EXPOSE_TEST_ERRORS: "1",
+      V0_INTERNAL_WORKER_TOKEN: "runtime-worker-token",
+      SUPABASE_JWT_SECRET: jwtSecret
+    },
+    async ({ baseUrl }) => {
+      const client = new V0Client({ baseUrl, authToken: signJwt(userId) });
+      const prepared = await prepareApprovedBrand(client, "Runtime G1 estimate guard");
+
+      const listed = await client.listAvatars({
+        workspaceId: prepared.workspaceId,
+        brandProfileId: prepared.brandProfileId,
+        limit: 50
+      });
+      assert.equal(listed.status, 200, JSON.stringify(listed.body));
+      const revoked = listed.body.items.find((avatar) => avatar.eligibility.reason === "consent_revoked");
+      const eligible = listed.body.items.find((avatar) => avatar.eligibility.eligible === true);
+      assert.ok(revoked, "expected a revoked-consent avatar");
+      assert.ok(eligible, "expected an eligible avatar");
+
+      // A revoked avatar cannot enter a generation estimate.
+      const rejected = await client.createGenerationEstimate({
+        workspaceId: prepared.workspaceId,
+        brandProfileId: prepared.brandProfileId,
+        selectedScriptId: "31000000-0000-4000-8000-000000000001",
+        avatarProfileId: revoked.id
+      });
+      assert.equal(rejected.status, 409, JSON.stringify(rejected.body));
+      assert.equal(rejected.body.code, "AVATAR_CONSENT_REVOKED");
+
+      // An eligible avatar is accepted and binds a durable avatar.selected audit.
+      const accepted = await client.createGenerationEstimate({
+        workspaceId: prepared.workspaceId,
+        brandProfileId: prepared.brandProfileId,
+        selectedScriptId: "31000000-0000-4000-8000-000000000001",
+        avatarProfileId: eligible.id
+      });
+      assert.equal(accepted.status, 202, JSON.stringify(accepted.body));
+      assert.equal(accepted.body.estimate.avatarProfileId, eligible.id);
+      assert.equal(accepted.body.audit.eventType, "avatar.selected");
+      assert.equal(accepted.body.audit.targetId, eligible.id);
+
+      const db = env.DIRECT_DATABASE_URL || env.DATABASE_URL;
+      const eligibleAudit = queryScalar(
+        db,
+        `
+          SELECT count(*)
+          FROM audit_events
+          WHERE workspace_id = '${prepared.workspaceId}'::uuid
+            AND event_type = 'avatar.selected'
+            AND target_id = '${eligible.id}'::uuid
+        `
+      );
+      assert.equal(eligibleAudit, "1", "expected one selection audit row for the eligible avatar");
+
+      // No audit row is retained for the rejected avatar.
+      const rejectedAudit = queryScalar(
+        db,
+        `
+          SELECT count(*)
+          FROM audit_events
+          WHERE workspace_id = '${prepared.workspaceId}'::uuid
+            AND target_id = '${revoked.id}'::uuid
+        `
+      );
+      assert.equal(rejectedAudit, "0", "no audit must be written for a rejected avatar");
+    }
+  );
+});
+
 function signJwt(userId) {
   const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
   const payload = Buffer.from(

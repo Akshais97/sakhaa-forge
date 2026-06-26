@@ -66,6 +66,16 @@ test("B3 downstream production rejects draft or superseded brand profile version
           positioningStatement: "Premium homes with transparent site visit support."
         })
       );
+      // V0-G1: an active estimate must use a consent-safe avatar bound to the
+      // active approved brand profile. Draft and stale estimates still fail at
+      // the brand-profile check before any avatar guard runs, so their avatar id
+      // is never resolved.
+      const avatars = await client.listAvatars({
+        workspaceId: prepared.workspaceId,
+        brandProfileId: versionTwo.body.profile.id,
+        limit: 50
+      });
+      const eligibleAvatar = avatars.body.items.find((item) => item.eligibility.eligible === true);
       const staleEstimate = await client.createGenerationEstimate({
         workspaceId: prepared.workspaceId,
         brandProfileId: versionOne.body.profile.id,
@@ -76,7 +86,7 @@ test("B3 downstream production rejects draft or superseded brand profile version
         workspaceId: prepared.workspaceId,
         brandProfileId: versionTwo.body.profile.id,
         selectedScriptId: "31000000-0000-4000-8000-000000000001",
-        avatarProfileId: "41000000-0000-4000-8000-000000000001"
+        avatarProfileId: eligibleAvatar.id
       });
 
       assert.equal(draftEstimate.status, 409);

@@ -97,7 +97,12 @@ profiles. Historical lineage keeps the exact profile version originally used.
   is held as a secret-manager style `evidenceRef` and never appears in public
   responses or analytics. `expiresAt` and `revokedAt` drive derived eligibility;
   revocation blocks future use immediately while historical audit records remain.
-- `GenerationEstimate`: provider, route, price version, maximum authorized cost.
+- `GenerationEstimate`: provider, route, price version, maximum authorized cost. When
+  `avatarProfileId` is supplied it must resolve to an avatar in the same workspace bound
+  to the active approved brand profile, and the avatar must be consent-safe; the estimate
+  boundary rejects revoked, expired, missing-evidence and service-pending avatars with
+  the stable `AVATAR_CONSENT_*` codes and binds a durable `avatar.selected` audit row for
+  an eligible avatar.
 - `GenerationJob`: V0 production aggregate and current workflow state.
 - `ProviderOperation`: durable provider request, idempotency key, external ID and
   `submitting/accepted/unknown/completed/failed` state.
@@ -138,7 +143,10 @@ entries.
 - `CreativeLineage`: brand, blueprint, formula, script, avatar, provider and final-video
   ancestry.
 - `Artifact`: any immutable file with schema, hash, producer and retention class.
-- `AuditEvent`: append-only security, billing, review and production event.
+- `AuditEvent`: append-only security, billing, review and production event. V0-G1
+  retains an `avatar.selected` audit event (target type `AvatarProfile`) when an eligible
+  avatar enters a generation estimate, so avatar selection is durable lineage rather than
+  local UI state; rejected avatars write no audit.
 - `IdempotencyRecord`: request hash and stable response for costly mutations.
 - `OutboxEvent`: committed event awaiting internal/future delivery.
 - `InboxEvent`: consumed callback/event used for de-duplication.

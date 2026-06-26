@@ -607,6 +607,41 @@ export function createWorkspaceStore() {
       };
     }
     const now = new Date().toISOString();
+    // V0-G1: when an avatar is supplied, enforce consent-safe eligibility at the
+    // backend boundary that consumes avatar selection. The catalogue is
+    // materialized for the active approved brand profile so the supplied
+    // avatarProfileId resolves to a real, workspace+brand-bound profile; the UI
+    // disabled state is never trusted. A missing or cross-workspace avatar is
+    // hidden behind the same existence-hiding 404 as every cross-workspace read.
+    let avatarAudit = null;
+    if (input.avatarProfileId) {
+      ensureAvatarCatalog(input.workspaceId, profile.id);
+      const avatar = avatarProfiles.get(input.avatarProfileId);
+      if (!avatar || avatar.workspaceId !== input.workspaceId || avatar.brandProfileId !== profile.id) {
+        return {
+          ok: false,
+          problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+        };
+      }
+      const eligibility = deriveAvatarEligibility(avatar, avatarConsents.get(avatar.id) ?? null, Date.now());
+      if (!eligibility.eligible) {
+        return { ok: false, problem: avatarConsentProblem(eligibility.reason) };
+      }
+      // Durable avatar-selection lineage: an eligible avatar that enters a
+      // generation estimate writes an avatar.selected audit row. Ineligible
+      // attempts are rejected above and write no audit.
+      avatarAudit = {
+        id: randomUUID(),
+        workspaceId: input.workspaceId,
+        actorUserId: actor.userId,
+        eventType: "avatar.selected",
+        targetType: "AvatarProfile",
+        targetId: avatar.id,
+        reason: null,
+        occurredAt: now
+      };
+      audits.push(avatarAudit);
+    }
     const estimate = {
       id: randomUUID(),
       workspaceId: input.workspaceId,
@@ -622,7 +657,13 @@ export function createWorkspaceStore() {
       updatedAt: now
     };
     generationEstimates.set(estimate.id, estimate);
-    return { ok: true, response: { estimate: publicGenerationEstimate(estimate) } };
+    return {
+      ok: true,
+      response: {
+        estimate: publicGenerationEstimate(estimate),
+        ...(avatarAudit ? { audit: publicAudit(avatarAudit) } : {})
+      }
+    };
   }
 
   function listBlueprints(actor, input) {
@@ -2741,6 +2782,43 @@ export function createPrismaWorkspaceStore(env = process.env) {
             problem: problem("BRAND_PROFILE_NOT_APPROVED", 409, "Brand profile not approved", "Approve the current brand profile before using it for production.")
           };
         }
+        // V0-G1: enforce consent-safe avatar eligibility at the estimate
+        // boundary. The catalogue is materialized for the brand profile so the
+        // supplied avatarProfileId resolves to a real, workspace+brand-bound
+        // profile. A missing or cross-workspace avatar is hidden behind the
+        // existence-hiding 404; an ineligible avatar returns the stable consent
+        // code. An eligible avatar binds a durable avatar.selected audit row.
+        let avatarAudit = null;
+        if (input.avatarProfileId) {
+          await ensurePrismaAvatarCatalog(tx, input.workspaceId, profile.id);
+          const avatar = await tx.avatarProfile.findFirst({
+            where: {
+              id: input.avatarProfileId,
+              workspaceId: input.workspaceId,
+              brandProfileId: profile.id
+            },
+            include: { consent: true }
+          });
+          if (!avatar) {
+            return {
+              ok: false,
+              problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+            };
+          }
+          const eligibility = deriveAvatarEligibility(avatar, avatar.consent, Date.now());
+          if (!eligibility.eligible) {
+            return { ok: false, problem: avatarConsentProblem(eligibility.reason) };
+          }
+          avatarAudit = await tx.auditEvent.create({
+            data: {
+              workspaceId: input.workspaceId,
+              actorUserId: actor.userId,
+              eventType: "avatar.selected",
+              targetType: "AvatarProfile",
+              targetId: avatar.id
+            }
+          });
+        }
         const estimate = await tx.generationEstimate.create({
           data: {
             workspaceId: input.workspaceId,
@@ -2754,7 +2832,13 @@ export function createPrismaWorkspaceStore(env = process.env) {
             avatarProfileId: input.avatarProfileId
           }
         });
-        return { ok: true, response: { estimate: publicGenerationEstimate(estimate) } };
+        return {
+          ok: true,
+          response: {
+            estimate: publicGenerationEstimate(estimate),
+            ...(avatarAudit ? { audit: publicAudit(avatarAudit) } : {})
+          }
+        };
       },
       input.workspaceId
     );
@@ -5187,6 +5271,24 @@ function publicAvatar(avatar, consent, nowMs) {
 function deterministicUuid(seed) {
   const hash = createHash("sha256").update(seed).digest("hex");
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
+}
+
+// V0-G1 backend guard: map a derived avatar eligibility reason to the stable
+// consent problem from the V0 error catalog. The catalog defines
+// AVATAR_CONSENT_REQUIRED, AVATAR_CONSENT_EXPIRED and AVATAR_CONSENT_REVOKED.
+// It defines no dedicated service-pending code, so a custom avatar whose
+// service fulfillment is still pending surfaces as AVATAR_CONSENT_REQUIRED:
+// valid likeness/voice consent is not yet in place. This mapping is documented
+// in docs/V0/V0_API.md. A missing or cross-workspace avatar is handled by the
+// caller with the existence-hiding WORKSPACE_ACCESS_DENIED 404, never here.
+function avatarConsentProblem(reason) {
+  if (reason === "consent_revoked") {
+    return problem("AVATAR_CONSENT_REVOKED", 409, "Avatar consent revoked", "This avatar can no longer be used.");
+  }
+  if (reason === "consent_expired") {
+    return problem("AVATAR_CONSENT_EXPIRED", 409, "Avatar consent expired", "This avatar consent expired. Renew it before generation.");
+  }
+  return problem("AVATAR_CONSENT_REQUIRED", 409, "Avatar consent required", "Valid likeness and voice consent is required.");
 }
 
 function isBlueprintCompatible(entry, profile, objectiveType) {

@@ -112,6 +112,12 @@ Never send:
 | Event | Authoritative source | Properties |
 |---|---|---|
 | `avatar_selected` | API | `avatar_type`, `consent_state` |
+
+`avatar_selected` is emitted only when an eligible, consent-safe avatar enters a
+generation estimate; it is retained as a durable `avatar.selected` audit row (target type
+`AvatarProfile`) at estimate creation, so selection is lineage rather than local UI state.
+A revoked, expired, missing-evidence or service-pending avatar emits no event and writes
+no audit.
 | `credit_purchase_started` | API | `provider`, `currency`, `amount_bucket` |
 | `credit_purchase_completed` | API | `provider`, `result`, `amount_bucket`, `error_code` |
 | `generation_estimate_viewed` | web | `duration_bucket`, `cost_bucket`, `price_version_age_bucket` |

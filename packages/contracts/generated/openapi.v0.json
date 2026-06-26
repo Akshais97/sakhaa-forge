@@ -585,10 +585,10 @@
             "description": "Only Owner, Admin or Client Manager can confirm paid generation."
           },
           "404": {
-            "description": "Workspace is missing or hidden by tenant isolation."
+            "description": "Workspace, or the supplied avatar, is missing or hidden by tenant isolation."
           },
           "409": {
-            "description": "Brand profile is draft, revoked, rejected, superseded or missing."
+            "description": "Brand profile is draft, revoked, rejected, superseded or missing; or the supplied avatar is not consent-safe (AVATAR_CONSENT_REQUIRED, AVATAR_CONSENT_EXPIRED, AVATAR_CONSENT_REVOKED)."
           },
           "422": {
             "description": "Estimate input validation failed."
