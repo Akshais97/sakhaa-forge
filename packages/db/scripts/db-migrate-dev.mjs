@@ -81,6 +81,23 @@ const migrations = [
   {
     path: "packages/db/prisma/migrations/0019_v0_g1_consent_safe_avatar_selection/migration.sql",
     sentinel: "SELECT to_regclass('public.avatar_profiles') IS NOT NULL AND to_regclass('public.avatar_consents') IS NOT NULL"
+  },
+  {
+    path: "packages/db/prisma/migrations/0020_v0_g2_creator_wallet_verified_credit_purchase/migration.sql",
+    sentinel: "SELECT to_regclass('public.credit_wallets') IS NOT NULL AND to_regclass('public.credit_purchases') IS NOT NULL AND to_regclass('public.credit_ledger_entries') IS NOT NULL"
+  },
+  {
+    path: "packages/db/prisma/migrations/0021_v0_g3_versioned_generation_estimate_and_atomic_reservation/migration.sql",
+    sentinel: "SELECT to_regclass('public.generation_jobs') IS NOT NULL AND to_regclass('public.credit_reservations') IS NOT NULL AND to_regclass('public.provider_price_versions') IS NOT NULL"
+  },
+  {
+    path: "packages/db/prisma/migrations/0022_v0_g4_exactly_once_heygen_submission/migration.sql",
+    sentinel: "SELECT to_regclass('public.provider_operations') IS NOT NULL AND to_regtype('public.provider_operation_status') IS NOT NULL"
+  },
+  {
+    path: "packages/db/prisma/migrations/0023_v0_g5_retained_generated_media_and_settled_credits/migration.sql",
+    sentinel:
+      "SELECT to_regclass('public.generated_segments') IS NOT NULL AND to_regclass('public.generated_assets') IS NOT NULL AND to_regclass('public.creative_lineage') IS NOT NULL"
   }
 ];
 
@@ -99,7 +116,7 @@ const databaseUrl = process.env.DIRECT_DATABASE_URL || process.env.DATABASE_URL;
 
 if (!databaseUrl) {
   console.log(
-    "V0-F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1 db:migrate:dev dry-run: DIRECT_DATABASE_URL and DATABASE_URL are not set; migration SQL validated but not applied."
+    "V0-F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1/G2/G3/G4/G5 db:migrate:dev dry-run: DIRECT_DATABASE_URL and DATABASE_URL are not set; migration SQL validated but not applied."
   );
   process.exit(0);
 }
@@ -134,7 +151,7 @@ for (const migration of migrations) {
   }
 }
 
-console.log("V0-F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1 migrations applied.");
+console.log("V0-F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1/G2/G3/G4/G5 migrations applied.");
 
 function isMigrationApplied(psqlCommand, databaseUrl, sentinel) {
   const result = spawnSync(psqlCommand, [databaseUrl, "-t", "-A", "-v", "ON_ERROR_STOP=1", "-c", sentinel], {

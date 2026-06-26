@@ -120,10 +120,60 @@ A revoked, expired, missing-evidence or service-pending avatar emits no event an
 no audit.
 | `credit_purchase_started` | API | `provider`, `currency`, `amount_bucket` |
 | `credit_purchase_completed` | API | `provider`, `result`, `amount_bucket`, `error_code` |
+| `credit_adjustment_recorded` | API | `direction=debit\|credit`, `reason_bucket` |
 | `generation_estimate_viewed` | web | `duration_bucket`, `cost_bucket`, `price_version_age_bucket` |
 | `generation_confirmed` | API | `duration_bucket`, `cost_bucket`, `avatar_type` |
 | `generation_state_changed` | API | `from_status`, `to_status`, `provider`, `error_code` |
-| `generation_media_retained` | API | `duration_bucket`, `resolution`, `settlement=captured|released` |
+| `generation_media_retained` | API | `duration_bucket`, `resolution`, `settlement=captured\|released` |
+
+V0-G2 retains credit purchase, refund and dispute outcomes as append-only `CreditLedgerEntry`
+rows (financial truth), not as analytics events; the `credit_purchase_started` /
+`credit_purchase_completed` funnel events carry only `amount_bucket`, never the exact minor
+units. `credit_adjustment_recorded` is emitted as a durable `credit.adjustment.recorded`
+audit row (target type `CreditWallet`) when an Owner/Admin records a compensating
+adjustment; it carries `direction` and a `reason_bucket`, never the exact amount, wallet
+balance, payment instrument, signature or provider reference. A forged or replayed callback
+emits no event and writes no ledger row.
+
+V0-G3 emits `generation_confirmed` as a durable `generation.confirmed` audit row (target
+type `GenerationJob`) at estimate confirmation, carrying `duration_bucket`, `cost_bucket`
+and `avatar_type`, never the exact minor units, input hash, signed URL or provider
+payload. The atomic credit reservation is retained as one append-only `RESERVE`
+`CreditLedgerEntry` (financial truth, target `GenerationJob`) and one active
+`CreditReservation`, not as an analytics event; a stale, changed, insufficient, conflicting
+or cross-workspace confirmation emits no event, writes no reservation and appends no
+ledger row. Reservation is not provider submission; `generation_state_changed` into
+`submitting`/`accepted`/`unknown` is V0-G4.
+
+V0-G4 emits `generation_state_changed` as a durable `generation.state.changed` audit row
+(target type `GenerationJob`) on each committed provider-operation transition
+(`queued` → `submitting` → `accepted` → `generating`/`generated`, and `unknown`/
+`cancel_requested`/`cancelled`/`failed`), carrying `to_state`, `provider_route`
+(`heygen-simulator`) and `operation_state`, never the request hash, provider external id,
+signed URL, raw provider payload or callback signature. The durable `ProviderOperation`
+and the signature-verified, deduplicated `inbox_events` row are records of truth, not
+analytics events; a `PROVIDER_RATE_LIMITED`, `PROVIDER_OUTPUT_INVALID`,
+`IDEMPOTENCY_INPUT_CONFLICT` or cross-workspace submission emits no state-change event and
+writes no operation. A replayed idempotent submission or a replayed verified callback
+acknowledges the original transition and emits no second event. A bad-signature, stale or
+malformed callback emits no event and transitions nothing. `unknown` is recorded as a real
+state, never promoted to success or failure without a reconciled outcome or verified
+callback.
+
+V0-G5 emits `generation_media_retained` as a durable `generation.settled` audit row (target
+type `GenerationJob`) when a terminal paid generation is settled, carrying `duration_bucket`,
+`resolution` and `settlement=captured|released`, never the provider external id, transient
+media URL, raw hash, signed URL, exact minor units, wallet balance or provider payload. A
+`completed` operation settles to `captured` (one `CAPTURE` ledger entry, retained
+`GeneratedSegment`/`GeneratedAsset`/`Artifact`/`CreativeLineage`); a failed/rejected/
+cancelled operation settles to `released` (one `RELEASE` ledger entry, no retained media).
+The append-only `CAPTURE`/`RELEASE` `CreditLedgerEntry` and the `captured`/`released`
+`CreditReservation` are records of truth, not analytics events; the ledger entries carry
+job-derived idempotency keys so a crash between media retention and ledger settlement is
+recovered once. A `PROVIDER_COST_EXCEEDS_AUTHORIZATION`, `ASSET_MEDIA_MALFORMED` or
+cross-workspace settlement emits no event and moves no credit; a `DEPENDENCY_UNAVAILABLE`
+crash window emits no event until recovery completes. A replayed settlement (detected by
+reservation status) acknowledges the original settlement and emits no second event.
 
 No event contains exact wallet balance or exact payment/provider identifiers.
 

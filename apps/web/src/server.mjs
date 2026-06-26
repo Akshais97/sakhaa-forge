@@ -8,6 +8,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const v0ClientPath = join(here, "..", "..", "..", "packages", "contracts", "generated", "v0-client.mjs");
 const workflowPath = join(here, "script-tournament-workflow.mjs");
 const avatarWorkflowPath = join(here, "avatar-workflow.mjs");
+const walletLedgerWorkflowPath = join(here, "wallet-ledger-workflow.mjs");
+const generationConfirmationWorkflowPath = join(here, "generation-confirmation-workflow.mjs");
+const generationSubmissionWorkflowPath = join(here, "generation-submission-workflow.mjs");
+const generationSettlementWorkflowPath = join(here, "generation-settlement-workflow.mjs");
 
 const page = `<!doctype html>
 <html lang="en-IN">
@@ -195,6 +199,26 @@ const page = `<!doctype html>
       [data-state="blocked-brand"] {
         background: #fbf1da;
         color: #6d4b00;
+      }
+      [data-state="purchase"] {
+        background: #e6efe6;
+        color: #2c5b2c;
+      }
+      [data-state="refund"] {
+        background: #fbf1da;
+        color: #6d4b00;
+      }
+      [data-state="adjustment"] {
+        background: #e7eef5;
+        color: #2c4a6b;
+      }
+      [data-state="matched"] {
+        background: #e6efe6;
+        color: #2c5b2c;
+      }
+      [data-state="mismatched"] {
+        background: #fcebea;
+        color: #8f1d14;
       }
     </style>
   </head>
@@ -454,9 +478,111 @@ const page = `<!doctype html>
         <p class="status workflow-status" data-testid="avatar-catalog-status" data-state="empty">No avatar catalogue loaded.</p>
         <div class="candidate-grid" data-testid="avatar-catalog-grid"></div>
       </section>
+      <section aria-labelledby="wallet-ledger-title" data-testid="wallet-ledger-contract">
+        <h2 id="wallet-ledger-title">Creator wallet and credit ledger</h2>
+        <p>Verified credit purchases credit an integer-minor-unit wallet through an append-only ledger; refunds and disputes debit it as negative entries and Owner adjustments are compensating entries. History is never edited. Payment instrument details are never stored or shown, and the provider financial reconciliation summary is visible only to roles that can view it.</p>
+        <form data-testid="wallet-ledger-form" id="wallet-ledger-form">
+          <label for="wl-workspace">Workspace id</label>
+          <input id="wl-workspace" name="workspaceId" autocomplete="off" required>
+          <label for="wl-wallet">Wallet id</label>
+          <input id="wl-wallet" name="walletId" autocomplete="off" required>
+          <label for="wl-token">Session token</label>
+          <input id="wl-token" name="sessionToken" type="password" autocomplete="off" placeholder="Supabase JWT">
+          <button type="submit">Load wallet ledger</button>
+        </form>
+        <p class="status workflow-status" data-testid="wallet-ledger-status" data-state="empty">No wallet ledger loaded.</p>
+        <div class="candidate-grid" data-testid="wallet-ledger-entries"></div>
+      </section>
+      <section aria-labelledby="generation-confirmation-title" data-testid="generation-confirmation-contract">
+        <h2 id="generation-confirmation-title">Generation estimate and credit reservation</h2>
+        <p>Confirming a versioned estimate atomically reserves the maximum authorized credits in integer minor units through one RESERVE ledger entry, creates one queued generation job and one active reservation, and debits the wallet before any provider network I/O. Reservation is not provider submission. Stale, changed, insufficient or already-reserved estimates are rejected without a second debit, and the input hash is a server-side validation secret that is never shown.</p>
+        <form data-testid="generation-confirmation-form" id="generation-confirmation-form">
+          <label for="gc-workspace">Workspace id</label>
+          <input id="gc-workspace" name="workspaceId" autocomplete="off" required>
+          <label for="gc-estimate">Estimate id</label>
+          <input id="gc-estimate" name="estimateId" autocomplete="off" required>
+          <label for="gc-version">Estimate version</label>
+          <input id="gc-version" name="version" type="number" min="1" step="1" autocomplete="off" required>
+          <label for="gc-script">Selected script id</label>
+          <input id="gc-script" name="selectedScriptId" autocomplete="off" required>
+          <label for="gc-avatar">Avatar profile id</label>
+          <input id="gc-avatar" name="avatarProfileId" autocomplete="off" required>
+          <label for="gc-duration">Duration seconds</label>
+          <input id="gc-duration" name="durationSeconds" type="number" min="1" max="30" step="1" autocomplete="off" required>
+          <label for="gc-idem">Idempotency key</label>
+          <input id="gc-idem" name="idempotencyKey" autocomplete="off" required>
+          <label for="gc-token">Session token</label>
+          <input id="gc-token" name="sessionToken" type="password" autocomplete="off" placeholder="Supabase JWT" required>
+          <button type="submit">Confirm estimate and reserve credits</button>
+        </form>
+        <p class="status workflow-status" data-testid="generation-confirmation-status" data-state="empty">No generation estimate loaded.</p>
+      </section>
+      <section aria-labelledby="generation-submission-title" data-testid="generation-submission-contract">
+        <h2 id="generation-submission-title">Provider submission</h2>
+        <p>A queued generation job is submitted to the HeyGen simulator exactly once: a durable provider operation is recorded before network I/O, the provider external reference and estimated maximum are bound, and a timeout after possible acceptance is reported as unknown and must be reconciled before any retry. Verified callbacks drive the operation to completed; replays never transition twice. Cancellation of an uncertain operation reconciles first. The request hash and provider payloads are server-side secrets that are never shown.</p>
+        <form data-testid="generation-submit-form" id="generation-submit-form">
+          <label for="gs-workspace">Workspace id</label>
+          <input id="gs-workspace" name="workspaceId" autocomplete="off" required>
+          <label for="gs-job">Generation job id</label>
+          <input id="gs-job" name="jobId" autocomplete="off" required>
+          <label for="gs-idem">Idempotency key</label>
+          <input id="gs-idem" name="idempotencyKey" autocomplete="off" required>
+          <label for="gs-token">Session token</label>
+          <input id="gs-token" name="sessionToken" type="password" autocomplete="off" placeholder="Supabase JWT" required>
+          <button type="submit">Submit generation to provider</button>
+        </form>
+        <form data-testid="generation-reconcile-form" id="generation-reconcile-form">
+          <label for="gr-workspace">Workspace id</label>
+          <input id="gr-workspace" name="workspaceId" autocomplete="off" required>
+          <label for="gr-job">Generation job id</label>
+          <input id="gr-job" name="jobId" autocomplete="off" required>
+          <label for="gr-idem">Idempotency key</label>
+          <input id="gr-idem" name="idempotencyKey" autocomplete="off" required>
+          <label for="gr-token">Session token</label>
+          <input id="gr-token" name="sessionToken" type="password" autocomplete="off" placeholder="Supabase JWT" required>
+          <button type="submit">Reconcile uncertain operation</button>
+        </form>
+        <form data-testid="generation-cancel-form" id="generation-cancel-form">
+          <label for="gc2-workspace">Workspace id</label>
+          <input id="gc2-workspace" name="workspaceId" autocomplete="off" required>
+          <label for="gc2-job">Generation job id</label>
+          <input id="gc2-job" name="jobId" autocomplete="off" required>
+          <label for="gc2-idem">Idempotency key</label>
+          <input id="gc2-idem" name="idempotencyKey" autocomplete="off" required>
+          <label for="gc2-token">Session token</label>
+          <input id="gc2-token" name="sessionToken" type="password" autocomplete="off" placeholder="Supabase JWT" required>
+          <button type="submit">Cancel generation</button>
+        </form>
+        <p class="status workflow-status" data-testid="generation-submission-status" data-state="empty">No generation submission loaded.</p>
+        <article class="candidate" data-testid="generation-submission-job" data-state="empty"></article>
+      </section>
+      <section aria-labelledby="generation-settlement-title" data-testid="generation-settlement-contract">
+        <h2 id="generation-settlement-title">Generation settlement</h2>
+        <p>A terminal provider operation is settled once: completed media is copied into private V0 storage through the adapter only, quarantined, validated and hashed, then bound to a retained segment, versioned asset and creative lineage. The reconciled provider cost is compared with the authorized maximum; credits are captured once on success (the unused remainder is returned) or released once on failure (the full reservation is returned). Settlement is idempotent and crash-recoverable: a replay never settles twice and a crash between media retention and ledger settlement is recovered on retry. The transient provider URL and provider payloads are never shown.</p>
+        <form data-testid="generation-settle-form" id="generation-settle-form">
+          <label for="gst-workspace">Workspace id</label>
+          <input id="gst-workspace" name="workspaceId" autocomplete="off" required>
+          <label for="gst-job">Generation job id</label>
+          <input id="gst-job" name="jobId" autocomplete="off" required>
+          <label for="gst-idem">Idempotency key</label>
+          <input id="gst-idem" name="idempotencyKey" autocomplete="off" required>
+          <label for="gst-token">Session token</label>
+          <input id="gst-token" name="sessionToken" type="password" autocomplete="off" placeholder="Supabase JWT" required>
+          <button type="submit">Settle generation</button>
+        </form>
+        <p class="status workflow-status" data-testid="generation-settlement-status" data-state="empty">No generation settlement loaded.</p>
+        <article class="candidate" data-testid="generation-settlement-media" data-state="empty"></article>
+        <article class="candidate" data-testid="generation-settlement-ledger" data-state="empty"></article>
+        <article class="candidate" data-testid="generation-settlement-reservation" data-state="empty"></article>
+        <article class="candidate" data-testid="generation-settlement-wallet" data-state="empty"></article>
+      </section>
     </main>
     <script type="module" src="/script-tournament-workflow.mjs"></script>
     <script type="module" src="/avatar-workflow.mjs"></script>
+    <script type="module" src="/wallet-ledger-workflow.mjs"></script>
+    <script type="module" src="/generation-confirmation-workflow.mjs"></script>
+    <script type="module" src="/generation-submission-workflow.mjs"></script>
+    <script type="module" src="/generation-settlement-workflow.mjs"></script>
   </body>
 </html>
 `;
@@ -468,6 +594,18 @@ const server = http.createServer(async (request, response) => {
   }
   if (url === "/avatar-workflow.mjs") {
     return serveModule(response, avatarWorkflowPath);
+  }
+  if (url === "/wallet-ledger-workflow.mjs") {
+    return serveModule(response, walletLedgerWorkflowPath);
+  }
+  if (url === "/generation-confirmation-workflow.mjs") {
+    return serveModule(response, generationConfirmationWorkflowPath);
+  }
+  if (url === "/generation-submission-workflow.mjs") {
+    return serveModule(response, generationSubmissionWorkflowPath);
+  }
+  if (url === "/generation-settlement-workflow.mjs") {
+    return serveModule(response, generationSettlementWorkflowPath);
   }
   if (url === "/v0-client.mjs") {
     return serveModule(response, v0ClientPath);

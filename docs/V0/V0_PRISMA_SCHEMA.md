@@ -31,6 +31,9 @@ enum ApprovalDecision { APPROVE REJECT REQUEST_CHANGES }
 enum JobStatus { CREATED QUEUED LEASED RUNNING RETRY_WAIT SUCCEEDED FAILED CANCEL_REQUESTED CANCELLED EXPIRED }
 enum ProviderOperationStatus { CREATED SUBMITTING ACCEPTED UNKNOWN PROCESSING COMPLETED REJECTED FAILED CANCELLED }
 enum CreditLedgerType { PURCHASE RESERVE CAPTURE RELEASE ADJUSTMENT REFUND }
+enum CreditPurchaseStatus { INITIATED PENDING SUCCEEDED FAILED REFUNDED DISPUTED }
+enum CreditReservationStatus { ACTIVE CAPTURED RELEASED EXPIRED ADJUSTED }
+enum ProviderOperationStatus { CREATED SUBMITTING ACCEPTED UNKNOWN PROCESSING COMPLETED REJECTED FAILED CANCELLED }
 enum AssetTrustStatus { QUARANTINED VALIDATING CLEAN REJECTED DELETED }
 enum PublishStatus { DRAFT SCHEDULED SUBMITTING ACCEPTED PUBLISHED_UNVERIFIED PUBLISHED_VERIFIED FAILED CANCELLED }
 enum VerificationStatus { PENDING CHECKING PROCESSING_WAIT RETRY_SCHEDULED VERIFIED FAILED IDENTITY_MISMATCH VISIBILITY_RESTRICTED MANUAL_URL_REQUIRED }
@@ -229,27 +232,240 @@ model GenerationEstimate {
   currency               String @db.VarChar(3)
   selectedScriptId       String @db.Uuid
   avatarProfileId        String @db.Uuid
+  // V0-G3 versioned-estimate guards: inputHash (server-side validation secret, never
+  // returned), expiresAt (drives ESTIMATE_EXPIRED), version (optimistic
+  // RESOURCE_VERSION_STALE guard), confirmedAt, durationSeconds (pilot cap 30).
+  inputHash              String?  @db.VarChar(64)
+  expiresAt              DateTime? @db.Timestamptz(6)
+  version                Int      @default(1)
+  confirmedAt            DateTime? @db.Timestamptz(6)
+  durationSeconds        Int      @default(30)
+  createdAt              DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime @updatedAt @db.Timestamptz(6)
+  workspace              Workspace @relation(fields: [workspaceId], references: [id])
+  brandProfile           BrandProfile @relation(fields: [brandProfileId], references: [id])
+  jobs                   GenerationJob[]
   @@index([workspaceId, brandProfileId, status])
   @@map("generation_estimates")
 }
 
+// V0-G3: generation job created at estimate confirmation. status is the lowercase
+// V0_STATUS_ENUMS.md Generation enum stored as a string (authoritative over the
+// JobStatus placeholder above) so provider-specific raw states map into the documented
+// enum without merge or rename; `unknown` is preserved as a real state. V0-G3 creates
+// the job in `queued`; provider submission is V0-G4. unique(workspace_id,
+// idempotency_key) makes creation exactly-once.
 model GenerationJob {
-  id               String   @id @default(uuid()) @db.Uuid
-  workspaceId      String   @db.Uuid
-  selectedScriptId String?  @db.Uuid
-  avatarProfileId  String?  @db.Uuid
-  status           JobStatus @default(CREATED)
-  idempotencyKey   String
-  inputHash        String
-  version          Int      @default(1)
-  createdAt        DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt        DateTime @updatedAt @db.Timestamptz(6)
-  workspace        Workspace @relation(fields: [workspaceId], references: [id])
-  operations       ProviderOperation[]
-  reservations     CreditReservation[]
+  id                     String   @id @default(uuid()) @db.Uuid
+  workspaceId            String   @db.Uuid
+  estimateId             String   @db.Uuid
+  brandProfileId         String   @db.Uuid
+  selectedScriptId       String?  @db.Uuid
+  avatarProfileId        String?  @db.Uuid
+  status                 String   @db.VarChar(40) @default("queued")
+  idempotencyKey         String   @db.VarChar(200)
+  inputHash              String   @db.VarChar(64)
+  version                Int      @default(1)
+  durationSeconds        Int      @default(30)
+  maximumAuthorizedMinor BigInt
+  currency               String   @db.VarChar(3)
+  priceVersion           String   @db.VarChar(80)
+  createdAt              DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime @updatedAt @db.Timestamptz(6)
+  workspace              Workspace @relation(fields: [workspaceId], references: [id])
+  estimate               GenerationEstimate @relation(fields: [estimateId], references: [id])
+  brandProfile           BrandProfile @relation(fields: [brandProfileId], references: [id])
+  operations             ProviderOperation[]
+  reservations           CreditReservation[]
   @@unique([workspaceId, idempotencyKey])
   @@index([workspaceId, status, createdAt])
   @@map("generation_jobs")
+}
+
+// V0-G3: global provider price reference (not tenant-owned, no workspace_id, no RLS).
+// One effective rate per provider + priceVersion. Seeded with the deterministic
+// heygen-simulator v0.local.1 INR rate.
+model ProviderPriceVersion {
+  id                   String   @id @default(uuid()) @db.Uuid
+  provider             String   @db.VarChar(40)
+  priceVersion         String   @db.VarChar(80)
+  currency             String   @db.VarChar(3)
+  rateMinorPerSecond   BigInt
+  source               String   @db.VarChar(80)
+  validFrom            DateTime @db.Timestamptz(6)
+  validUntil           DateTime @db.Timestamptz(6)
+  createdAt            DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime @updatedAt @db.Timestamptz(6)
+  @@unique([provider, priceVersion])
+  @@map("provider_price_versions")
+}
+
+// V0-G3: atomic credit reservation. One active reservation per generation job; the
+// partial unique index credit_reservations_one_active_per_job_idx (status = 'ACTIVE')
+// is the database-side concurrency guard. amountMinor is the held amount in integer
+// minor units (positive); the matching RESERVE ledger entry is the negative debit.
+// Capture/release settle in V0-G5.
+model CreditReservation {
+  id              String                 @id @default(uuid()) @db.Uuid
+  workspaceId     String                 @db.Uuid
+  generationJobId String                 @db.Uuid
+  walletId        String                 @db.Uuid
+  status          CreditReservationStatus @default(ACTIVE)
+  amountMinor     BigInt
+  currency        String                 @db.VarChar(3)
+  idempotencyKey  String                 @db.VarChar(200)
+  expiresAt       DateTime?              @db.Timestamptz(6)
+  createdAt       DateTime               @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(6)
+  workspace       Workspace              @relation(fields: [workspaceId], references: [id])
+  generationJob   GenerationJob          @relation(fields: [generationJobId], references: [id])
+  wallet          CreditWallet           @relation(fields: [walletId], references: [id])
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, generationJobId, status])
+  @@map("credit_reservations")
+}
+
+// V0-G4 exactly-once provider operation. A durable row is persisted in CREATED/SUBMITTING
+// BEFORE any provider network I/O, so a crash between persistence and the network response
+// leaves a resumable operation rather than a blind duplicate. It binds the workspace,
+// generation job, provider route, idempotency key and request hash; stores the provider
+// external id, bound price version and estimated maximum cost; and records the
+// accepted/completed/reconciled/cancelled timestamps. unique(workspace_id,
+// idempotency_key) and the one-operation-per-job unique index make submission
+// exactly-once. requestHash is a server-side binding secret (never returned). Provider
+// payloads stay adapter-private and are never stored here. Credit capture/release is
+// V0-G5. V0-G5 adds providerTotalMinor (reconciled actual provider cost, nullable until
+// settlement) and settledAt (ledger settlement timestamp, not provider completion). RLS
+// policy provider_operations_workspace_isolation; no BYPASSRLS.
+model ProviderOperation {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  workspaceId           String                 @db.Uuid
+  generationJobId       String                 @db.Uuid
+  provider              String                 @db.VarChar(40)
+  operationType         String                 @db.VarChar(40)
+  status                ProviderOperationStatus @default(CREATED)
+  idempotencyKey        String                 @db.VarChar(200)
+  requestHash           String                 @db.Char(64)
+  externalId            String?                @db.VarChar(200)
+  priceVersion          String                 @db.VarChar(80)
+  estimatedMaximumMinor BigInt
+  providerTotalMinor    BigInt?
+  settledAt             DateTime?              @db.Timestamptz(6)
+  currency              String                 @db.VarChar(3)
+  retryAfterMs          Int?
+  lastErrorCode         String?                @db.VarChar(80)
+  submittedAt           DateTime?              @db.Timestamptz(6)
+  acceptedAt            DateTime?              @db.Timestamptz(6)
+  completedAt           DateTime?              @db.Timestamptz(6)
+  reconciledAt          DateTime?              @db.Timestamptz(6)
+  cancelledAt           DateTime?              @db.Timestamptz(6)
+  createdAt             DateTime               @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime               @updatedAt @db.Timestamptz(6)
+  workspace             Workspace              @relation(fields: [workspaceId], references: [id])
+  generationJob         GenerationJob          @relation(fields: [generationJobId], references: [id])
+  generatedSegment      GeneratedSegment?
+  creativeLineage       CreativeLineage?
+
+  @@unique([workspaceId, idempotencyKey])
+  @@unique([generationJobId])
+  @@index([workspaceId, status, updatedAt])
+  @@index([workspaceId, generationJobId, status])
+  @@map("provider_operations")
+}
+
+// V0-G5 retained generated media and settled credits. Completed provider media is copied
+// into private V0 storage through the adapter only, quarantined, validated and hashed, then
+// bound to a GeneratedSegment, a versioned GeneratedAsset and a CreativeLineage row. The
+// transient provider URL is never stored. unique(workspace_id, generation_job_id,
+// segment_index) makes retention exactly-once per job index; RLS policy
+// generated_segments_workspace_isolation; no BYPASSRLS.
+model GeneratedSegment {
+  id                  String   @id @default(uuid()) @db.Uuid
+  workspaceId         String   @db.Uuid
+  generationJobId     String   @db.Uuid
+  providerOperationId String   @db.Uuid
+  provider            String   @db.VarChar(40)
+  externalId          String?  @db.VarChar(200)
+  segmentIndex        Int      @default(0)
+  durationSeconds     Int
+  contentType         String   @db.VarChar(120)
+  byteSize            Int
+  sha256              String   @db.Char(64)
+  artifactId          String   @db.Uuid
+  sourceFetchedAt     DateTime @default(now()) @db.Timestamptz(6)
+  createdAt           DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @db.Timestamptz(6)
+  workspace           Workspace         @relation(fields: [workspaceId], references: [id])
+  generationJob       GenerationJob     @relation(fields: [generationJobId], references: [id])
+  providerOperation   ProviderOperation @relation(fields: [providerOperationId], references: [id])
+  artifact            Artifact          @relation(fields: [artifactId], references: [id])
+  generatedAsset      GeneratedAsset?
+
+  @@unique([workspaceId, generationJobId, segmentIndex])
+  @@index([workspaceId, generationJobId])
+  @@map("generated_segments")
+}
+
+// V0-G5 versioned generated asset bound to a clean retained Artifact. kind is provider_video
+// for V0-G5 (assembled/rendered kinds are later sprints). status is the UPPERCASE
+// AssetTrustStatus contract (CLEAN/REJECTED/SUPERSEDED, default CLEAN).
+// unique(workspace_id, generation_job_id, version) makes asset creation exactly-once per
+// version per job. RLS policy generated_assets_workspace_isolation; no BYPASSRLS.
+model GeneratedAsset {
+  id              String   @id @default(uuid()) @db.Uuid
+  workspaceId     String   @db.Uuid
+  generationJobId String   @db.Uuid
+  segmentId       String   @db.Uuid
+  artifactId      String   @db.Uuid
+  version         Int      @default(1)
+  kind            String   @default("provider_video") @db.VarChar(40)
+  durationSeconds Int
+  contentType     String   @db.VarChar(120)
+  sha256          String   @db.Char(64)
+  status          String   @default("CLEAN") @db.VarChar(40)
+  createdAt       DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(6)
+  workspace       Workspace         @relation(fields: [workspaceId], references: [id])
+  generationJob   GenerationJob     @relation(fields: [generationJobId], references: [id])
+  segment         GeneratedSegment  @relation(fields: [segmentId], references: [id])
+  artifact        Artifact          @relation(fields: [artifactId], references: [id])
+  creativeLineage CreativeLineage?
+
+  @@unique([workspaceId, generationJobId, version])
+  @@index([workspaceId, generationJobId])
+  @@map("generated_assets")
+}
+
+// V0-G5 creative lineage: immutable ancestry of a generated asset from the approved brand
+// profile, selected script (nullable, no FK), consent-safe avatar, estimate, provider
+// operation and price version. One lineage row per generation job.
+// unique(workspace_id, generation_job_id). RLS policy creative_lineage_workspace_isolation;
+// no BYPASSRLS.
+model CreativeLineage {
+  id                  String   @id @default(uuid()) @db.Uuid
+  workspaceId         String   @db.Uuid
+  generationJobId     String   @db.Uuid
+  brandProfileId      String   @db.Uuid
+  selectedScriptId    String?  @db.Uuid
+  avatarProfileId     String?  @db.Uuid
+  estimateId          String   @db.Uuid
+  provider            String   @db.VarChar(40)
+  providerOperationId String   @db.Uuid
+  priceVersion        String   @db.VarChar(80)
+  generatedAssetId    String   @db.Uuid
+  createdAt           DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @db.Timestamptz(6)
+  workspace           Workspace         @relation(fields: [workspaceId], references: [id])
+  generationJob       GenerationJob     @relation(fields: [generationJobId], references: [id])
+  brandProfile        BrandProfile      @relation(fields: [brandProfileId], references: [id])
+  avatarProfile       AvatarProfile?    @relation(fields: [avatarProfileId], references: [id])
+  estimate            GenerationEstimate @relation(fields: [estimateId], references: [id])
+  providerOperation   ProviderOperation @relation(fields: [providerOperationId], references: [id])
+  generatedAsset      GeneratedAsset    @relation(fields: [generatedAssetId], references: [id])
+
+  @@unique([workspaceId, generationJobId])
+  @@index([workspaceId, generatedAssetId])
+  @@map("creative_lineage")
 }
 
 model BlueprintLibraryEntry {
@@ -569,18 +785,67 @@ model ProviderOperation {
   @@map("provider_operations")
 }
 
+// V0-G2: one workspace wallet per currency. balanceMinor is integer minor units,
+// derived from the ledger and cached. Payment instrument details are never stored.
+model CreditWallet {
+  id           String   @id @default(uuid()) @db.Uuid
+  workspaceId  String   @map("workspace_id") @db.Uuid
+  currency     String   @db.VarChar(3)
+  balanceMinor BigInt   @map("balance_minor")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace    Workspace @relation(fields: [workspaceId], references: [id])
+  purchases    CreditPurchase[]
+  ledgerEntries CreditLedgerEntry[]
+
+  @@unique([workspaceId, currency])
+  @@index([workspaceId, updatedAt, id])
+  @@map("credit_wallets")
+}
+
+// V0-G2: Razorpay (India, INR) or Stripe (international) purchase state and provider
+// references. Status is the uppercase DB enum; the public API normalizes it to the
+// lowercase V0_STATUS_ENUMS.md contract at the mapper boundary.
+model CreditPurchase {
+  id               String              @id @default(uuid()) @db.Uuid
+  workspaceId      String              @map("workspace_id") @db.Uuid
+  walletId         String              @map("wallet_id") @db.Uuid
+  provider         String              @db.VarChar(40)
+  providerReference String             @map("provider_reference") @db.VarChar(200)
+  status           CreditPurchaseStatus @default(INITIATED)
+  amountMinor      BigInt              @map("amount_minor")
+  currency         String              @db.VarChar(3)
+  idempotencyKey   String              @map("idempotency_key") @db.VarChar(200)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace        Workspace           @relation(fields: [workspaceId], references: [id])
+  wallet           CreditWallet        @relation(fields: [walletId], references: [id])
+
+  @@unique([workspaceId, idempotencyKey])
+  @@unique([workspaceId, provider, providerReference])
+  @@index([workspaceId, status, updatedAt])
+  @@map("credit_purchases")
+}
+
+// V0-G2 append-only ledger entry. Ledger entries, not mutable balances, are financial
+// truth; corrections are compensating entries. V0-G3 writes the RESERVE type as a
+// negative signed debit that binds the generation_job_id at estimate confirmation;
+// CAPTURE and RELEASE are reserved for V0-G5 settlement. unique(workspace_id,
+// idempotency_key) makes every credit movement exactly-once.
 model CreditLedgerEntry {
-  id             String @id @default(uuid()) @db.Uuid
-  workspaceId    String @db.Uuid
-  walletId       String @db.Uuid
-  generationJobId String? @db.Uuid
-  type           CreditLedgerType
-  amountMinor    BigInt
-  currency       String @db.VarChar(3)
-  idempotencyKey String
-  effectiveAt    DateTime @default(now()) @db.Timestamptz(6)
-  createdAt      DateTime @default(now()) @db.Timestamptz(6)
-  wallet         CreditWallet @relation(fields: [walletId], references: [id])
+  id              String @id @default(uuid()) @db.Uuid
+  workspaceId     String @map("workspace_id") @db.Uuid
+  walletId        String @map("wallet_id") @db.Uuid
+  generationJobId String? @map("generation_job_id") @db.Uuid
+  type            CreditLedgerType
+  amountMinor     BigInt  @map("amount_minor")
+  currency        String @db.VarChar(3)
+  idempotencyKey  String @map("idempotency_key") @db.VarChar(200)
+  reason          String? @db.VarChar(500)
+  effectiveAt     DateTime @default(now()) @map("effective_at") @db.Timestamptz(6)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  workspace       Workspace @relation(fields: [workspaceId], references: [id])
+  wallet          CreditWallet @relation(fields: [walletId], references: [id])
   @@unique([workspaceId, idempotencyKey])
   @@index([walletId, effectiveAt, id])
   @@map("credit_ledger_entries")

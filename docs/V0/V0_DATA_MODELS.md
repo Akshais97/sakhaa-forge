@@ -102,12 +102,61 @@ profiles. Historical lineage keeps the exact profile version originally used.
   to the active approved brand profile, and the avatar must be consent-safe; the estimate
   boundary rejects revoked, expired, missing-evidence and service-pending avatars with
   the stable `AVATAR_CONSENT_*` codes and binds a durable `avatar.selected` audit row for
-  an eligible avatar.
-- `GenerationJob`: V0 production aggregate and current workflow state.
-- `ProviderOperation`: durable provider request, idempotency key, external ID and
-  `submitting/accepted/unknown/completed/failed` state.
-- `GeneratedSegment`: retained provider output with hash and timing.
-- `GeneratedAsset`: versioned assembled or provider-produced media.
+  an eligible avatar. V0-G3 extends the estimate with a server-side `inputHash`
+  (SHA-256 over the selected script, avatar and duration; never returned), an `expiresAt`
+  from `V0_ESTIMATE_TTL_MS` (default 15 minutes), an optimistic `version` (1 at creation)
+  and a `confirmedAt` timestamp. The estimate binds an active `ProviderPriceVersion` for
+  the `heygen-simulator` route and INR currency, carries the `durationSeconds` (pilot cap
+  30) and starts in `awaiting_confirmation`; it moves to `credits_reserved` on confirmation.
+- `ProviderPriceVersion`: global provider catalogue row (not tenant-owned, no
+  `workspace_id`, no RLS) holding one effective rate per `provider` + `priceVersion`:
+  currency, `rateMinorPerSecond` in integer minor units, source and validity period. Seeded
+  with the deterministic `heygen-simulator` `v0.local.1` rate (INR 1,600 minor per second,
+  valid 2000-2100). The estimate binds the active version; the 30-second pilot cap and the
+  48,000 minor-unit authorized maximum are enforced in the domain layer.
+- `GenerationJob`: V0 production aggregate and current workflow state, created at estimate
+  confirmation. V0-G3 creates it in the `queued` state with the estimate binding
+  (`estimateId`, `brandProfileId`, `selectedScriptId`, `avatarProfileId`), the bound
+  `inputHash`, `version`, `durationSeconds`, the integer-minor-units
+  `maximumAuthorizedMinor`, currency and `priceVersion`, and an `idempotencyKey`. Unique on
+  `(workspaceId, idempotencyKey)` for exactly-once creation. Status is the lowercase
+  `V0_STATUS_ENUMS.md` Generation contract stored as a string so provider-specific raw
+  states map into the documented enum without merge or rename; `unknown` is preserved as a
+  real state. V0-G4 drives `queued` → `submitting` → `accepted` → `generating`/`generated`
+  via the bound `ProviderOperation`, with `unknown` on timeout after possible acceptance and
+  `cancel_requested`/`cancelled` for cancellation during uncertainty. V0-G3 only reserves
+  credits and queues the job.
+- `ProviderOperation`: V0-G4 durable provider request for one `GenerationJob`, persisted in
+  `SUBMITTING` before any provider network I/O so a crash between persistence and the
+  network response leaves a resumable operation, never a blind duplicate. Binds
+  `workspaceId`, `generationJobId`, `provider` (`heygen-simulator`), `operationType`
+  (`provider_generate`), an `idempotencyKey`, a server-side `requestHash` (SHA-256, never
+  returned), the bound `priceVersion`, the integer-minor-units `estimatedMaximumMinor` and
+  `currency`. Carries the provider `externalId`, `retryAfterMs`, `lastErrorCode`, and the
+  `submittedAt`/`acceptedAt`/`completedAt`/`reconciledAt`/`cancelledAt` timestamps. Status
+  is the `ProviderOperationStatus` DB enum (`created`, `submitting`, `accepted`, `unknown`,
+  `processing`, `completed`, `rejected`, `failed`, `cancelled`); `unknown` marks a timeout
+  after possible acceptance and is reconciled (recorded by `reconciledAt`, not a separate
+  enum value) before any retry. One operation per `GenerationJob`
+  (`unique(generationJobId)`) and exactly-once by key (`unique(workspaceId,
+  idempotencyKey)`). Provider payloads stay adapter-private; only the external id, status
+  and timestamps are persisted. V0-G5 adds the reconciled integer-minor-units
+  `providerTotalMinor` (nullable until settlement) and `settledAt` (ledger settlement
+  timestamp, not provider completion); capture/release on terminal states is V0-G5.
+- `GeneratedSegment`: V0-G5 retained provider output for one `GenerationJob`, bound to the
+  clean retained `Artifact`, the provider `externalId` (not a URL), `durationSeconds`,
+  `contentType`, `byteSize` and a SHA-256 `sha256`. The transient provider URL is never
+  stored. Unique on `(workspaceId, generationJobId, segmentIndex)`; one clean segment per
+  job index.
+- `GeneratedAsset`: V0-G5 versioned retained media bound to a segment and a clean `Artifact`,
+  with a `kind` (`provider_video` for V0-G5; assembled/rendered kinds are later sprints), a
+  positive `version` and a status (`CLEAN`/`REJECTED`/`SUPERSEDED`, default `CLEAN`; returned
+  UPPERCASE per the V0-F3 AssetTrustStatus contract). Unique on `(workspaceId,
+  generationJobId, version)` so asset creation is exactly-once per version per job.
+- `CreativeLineage`: V0-G5 immutable ancestry of a generated asset from the approved
+  `BrandProfile`, `SelectedScript` (nullable), consent-safe `AvatarProfile`, `GenerationEstimate`,
+  `ProviderOperation` and bound `priceVersion` (`v0.local.1`). One lineage row per
+  `GenerationJob` (`unique(workspaceId, generationJobId)`).
 
 ## Composition
 
@@ -118,14 +167,40 @@ profiles. Historical lineage keeps the exact profile version originally used.
 
 ## Credits and Payments
 
-- `CreditWallet`: workspace wallet and currency policy; balance is derived and cached.
-- `CreditPurchase`: Razorpay/Stripe purchase state and provider references.
-- `CreditReservation`: atomic hold for one generation operation.
-- `CreditLedgerEntry`: append-only purchase, reserve, capture, release or adjustment.
+- `CreditWallet`: one workspace wallet per currency; `balanceMinor` is integer minor units,
+  derived from the ledger and cached. Unique on `(workspaceId, currency)`.
+- `CreditPurchase`: Razorpay (`razorpay`, INR) or Stripe (`stripe`, non-INR) purchase state
+  and provider reference. Status is the lowercase `V0_STATUS_ENUMS.md` contract
+  (`initiated`, `pending`, `succeeded`, `failed`, `refunded`, `disputed`). Unique on
+  `(workspaceId, idempotencyKey)` and `(workspaceId, provider, providerReference)`.
+  Payment instrument details are never stored.
+- `CreditReservation`: atomic hold for one generation operation, created at V0-G3
+  estimate confirmation. One active reservation per `GenerationJob`; the partial unique
+  index `credit_reservations_one_active_per_job_idx` (`status = 'ACTIVE'`) is the
+  database-side concurrency guard against double-click, retry and worker crash.
+  `amountMinor` is the held amount in integer minor units (positive); the matching
+  `RESERVE` ledger entry is the negative debit. Status is the lowercase
+  `V0_STATUS_ENUMS.md` Reservation contract (`active`, `captured`, `released`, `expired`,
+  `adjusted`; `active` in V0-G3, `captured`/`released` in V0-G5). Unique on `(workspaceId,
+  idempotencyKey)`. Capture and release are settled in V0-G5.
+- `CreditLedgerEntry`: append-only `PURCHASE`, `REFUND`, `ADJUSTMENT`, `RESERVE`, `CAPTURE`
+  or `RELEASE` row in integer minor units with a per-entry running balance and
+  `idempotencyKey` exactly-once guard. V0-G3 writes the `RESERVE` type as a negative signed
+  debit that binds the `generationJobId`. V0-G5 writes `CAPTURE` (amount
+  `estimatedMaximumMinor - providerTotalMinor`, 0 when the actual provider total equals the
+  maximum) on a successful settlement and `RELEASE` (full reservation amount, wallet
+  restored) on a failed settlement; both carry job-derived idempotency keys
+  (`g5-capture-{jobId}` / `g5-release-{jobId}`) so crash recovery writes each entry once.
+  V0-G2 writes only `PURCHASE`, `REFUND` and `ADJUSTMENT`. Corrections are compensating
+  entries; history is never edited. Unique on `(workspaceId, idempotencyKey)`.
 - `ProviderPriceVersion`: effective rates, currency, source and validity period.
 
-Ledger entries, not mutable balances, are financial truth. Corrections are compensating
-entries.
+Ledger entries, not mutable balances, are financial truth. Money is integer minor units or
+provider-native credit micros; floating point is never used. Payment callbacks are
+signature-verified, replay-protected and reconciled against amount, currency, provider
+reference and workspace before any credit movement. A timeout after possible provider
+acceptance is `unknown` and reconciled before retry. Compensating adjustments are restricted
+to Owner/Admin.
 
 ## Review and Publishing
 
@@ -141,7 +216,9 @@ entries.
 
 - `PerformanceSnapshot`: immutable platform metrics and observation window.
 - `CreativeLineage`: brand, blueprint, formula, script, avatar, provider and final-video
-  ancestry.
+  ancestry. V0-G5 writes the lineage row binding a generated asset to the approved brand
+  profile, selected script, consent-safe avatar, estimate, provider operation and price
+  version; one row per generation job.
 - `Artifact`: any immutable file with schema, hash, producer and retention class.
 - `AuditEvent`: append-only security, billing, review and production event. V0-G1
   retains an `avatar.selected` audit event (target type `AvatarProfile`) when an eligible

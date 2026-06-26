@@ -75,6 +75,32 @@ export class V0Client {
     return this.#post("/generation-estimates", input);
   }
 
+  async confirmGenerationEstimate(estimateId, input, options = {}) {
+    return this.#post("/generation-estimates/" + encodeURIComponent(estimateId) + "/confirm", input, options);
+  }
+
+  async getGenerationJob(jobId, input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    return this.#get("/generation-jobs/" + encodeURIComponent(jobId) + "?" + params.toString());
+  }
+
+  async submitGenerationJob(jobId, input, options = {}) {
+    return this.#post("/generation-jobs/" + encodeURIComponent(jobId) + "/submit", input, options);
+  }
+
+  async reconcileGenerationJob(jobId, input, options = {}) {
+    return this.#post("/generation-jobs/" + encodeURIComponent(jobId) + "/reconcile", input, options);
+  }
+
+  async cancelGenerationJob(jobId, input, options = {}) {
+    return this.#post("/generation-jobs/" + encodeURIComponent(jobId) + "/cancel", input, options);
+  }
+
+  async settleGenerationJob(jobId, input, options = {}) {
+    return this.#post("/generation-jobs/" + encodeURIComponent(jobId) + "/settle", input, options);
+  }
+
   async listBlueprints(input) {
     const params = new URLSearchParams();
     params.set("workspaceId", input.workspaceId);
@@ -91,6 +117,34 @@ export class V0Client {
     if (input.limit !== undefined) params.set("limit", String(input.limit));
     if (input.cursor) params.set("cursor", input.cursor);
     return this.#get(\`/avatars?\${params.toString()}\`);
+  }
+
+  async createCreditPurchase(input, options = {}) {
+    return this.#post("/credit-purchases", input, options);
+  }
+
+  async getWalletLedger(walletId, input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    if (input.limit !== undefined) params.set("limit", String(input.limit));
+    if (input.cursor) params.set("cursor", input.cursor);
+    return this.#get(\`/credit-wallets/\${encodeURIComponent(walletId)}/ledger?\${params.toString()}\`);
+  }
+
+  async createCreditAdjustment(walletId, input, options = {}) {
+    return this.#post(\`/credit-wallets/\${encodeURIComponent(walletId)}/adjustments\`, input, options);
+  }
+
+  async postRazorpayCallback(envelope, signature) {
+    return this.#postSigned("/callbacks/razorpay", envelope, "x-razorpay-signature", signature);
+  }
+
+  async postStripeCallback(envelope, signature) {
+    return this.#postSigned("/callbacks/stripe", envelope, "stripe-signature", signature);
+  }
+
+  async postHeygenCallback(envelope, signature) {
+    return this.#postSigned("/callbacks/heygen", envelope, "x-heygen-signature", signature);
   }
 
   async seedBlueprintLibraryEntry(input) {
@@ -216,6 +270,23 @@ export class V0Client {
       headers: this.#headers({
         "content-type": "application/json",
         ...(options.idempotencyKey ? { "idempotency-key": options.idempotencyKey } : {})
+      }),
+      body: JSON.stringify(input)
+    });
+    const body = await response.json();
+    return {
+      ok: response.ok,
+      status: response.status,
+      body
+    };
+  }
+
+  async #postSigned(path, input, signatureHeader, signature) {
+    const response = await this.fetchImpl(\`\${this.baseUrl}\${path}\`, {
+      method: "POST",
+      headers: this.#headers({
+        "content-type": "application/json",
+        ...(signature ? { [signatureHeader]: signature } : {})
       }),
       body: JSON.stringify(input)
     });

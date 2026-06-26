@@ -86,7 +86,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["name"],
+                "required": [
+                  "name"
+                ],
                 "properties": {
                   "name": {
                     "type": "string",
@@ -175,11 +177,16 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["capability", "enabled"],
+                "required": [
+                  "capability",
+                  "enabled"
+                ],
                 "properties": {
                   "capability": {
                     "type": "string",
-                    "enum": ["media_processing"]
+                    "enum": [
+                      "media_processing"
+                    ]
                   },
                   "enabled": {
                     "type": "boolean"
@@ -217,107 +224,196 @@
     "/workspaces/{workspace_id}/operations/metrics": {
       "get": {
         "operationId": "getWorkspaceOperationalMetrics",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "workspace_id",
             "in": "path",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
         "responses": {
-          "200": { "description": "Owner/Admin operational metrics for queue, leases, retries, dead letters and artifacts." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner/Admin can inspect operations." },
-          "404": { "description": "Workspace is missing or hidden by tenant isolation." }
+          "200": {
+            "description": "Owner/Admin operational metrics for queue, leases, retries, dead letters and artifacts."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner/Admin can inspect operations."
+          },
+          "404": {
+            "description": "Workspace is missing or hidden by tenant isolation."
+          }
         }
       }
     },
     "/workspaces/{workspace_id}/service-credentials": {
       "post": {
         "operationId": "createServiceCredential",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "workspace_id",
             "in": "path",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
-        "requestBody": { "required": true },
+        "requestBody": {
+          "required": true
+        },
         "responses": {
-          "201": { "description": "Service credential metadata stored with a secret-manager reference only." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner/Admin can manage provider credentials." },
-          "404": { "description": "Workspace is missing or hidden by tenant isolation." },
-          "422": { "description": "Plaintext secret fields or invalid metadata were rejected." }
+          "201": {
+            "description": "Service credential metadata stored with a secret-manager reference only."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner/Admin can manage provider credentials."
+          },
+          "404": {
+            "description": "Workspace is missing or hidden by tenant isolation."
+          },
+          "422": {
+            "description": "Plaintext secret fields or invalid metadata were rejected."
+          }
         }
       }
     },
     "/workspaces/{workspace_id}/simulator-mode": {
       "post": {
         "operationId": "setSimulatorMode",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "workspace_id",
             "in": "path",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
-        "requestBody": { "required": true },
+        "requestBody": {
+          "required": true
+        },
         "responses": {
-          "200": { "description": "Local/staging simulator mode configured." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner/Admin can configure simulator modes." },
-          "404": { "description": "Workspace is hidden or simulator controls are disabled for this environment." },
-          "422": { "description": "Unsupported simulator boundary or mode." }
+          "200": {
+            "description": "Local/staging simulator mode configured."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner/Admin can configure simulator modes."
+          },
+          "404": {
+            "description": "Workspace is hidden or simulator controls are disabled for this environment."
+          },
+          "422": {
+            "description": "Unsupported simulator boundary or mode."
+          }
         }
       }
     },
     "/workspaces/{workspace_id}/restore-drills": {
       "post": {
         "operationId": "recordRestoreDrill",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "workspace_id",
             "in": "path",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
-        "requestBody": { "required": true },
+        "requestBody": {
+          "required": true
+        },
         "responses": {
-          "200": { "description": "Restore drill evidence recorded for RLS and artifact-reference preservation." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner/Admin can record restore drills." },
-          "404": { "description": "Workspace or artifact is missing or hidden by tenant isolation." }
+          "200": {
+            "description": "Restore drill evidence recorded for RLS and artifact-reference preservation."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner/Admin can record restore drills."
+          },
+          "404": {
+            "description": "Workspace or artifact is missing or hidden by tenant isolation."
+          }
         }
       }
     },
     "/workspaces/{workspace_id}/redaction-scan": {
       "post": {
         "operationId": "runRedactionScan",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "workspace_id",
             "in": "path",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
-        "requestBody": { "required": true },
+        "requestBody": {
+          "required": true
+        },
         "responses": {
-          "200": { "description": "Secret and signed-URL redaction scan completed." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner/Admin can inspect operational logs." },
-          "404": { "description": "Workspace is missing or hidden by tenant isolation." },
-          "422": { "description": "Scan input validation failed." }
+          "200": {
+            "description": "Secret and signed-URL redaction scan completed."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner/Admin can inspect operational logs."
+          },
+          "404": {
+            "description": "Workspace is missing or hidden by tenant isolation."
+          },
+          "422": {
+            "description": "Scan input validation failed."
+          }
         }
       }
     },
@@ -348,7 +444,13 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["workspaceId", "fileName", "contentType", "byteSize", "sha256"],
+                "required": [
+                  "workspaceId",
+                  "fileName",
+                  "contentType",
+                  "byteSize",
+                  "sha256"
+                ],
                 "properties": {
                   "workspaceId": {
                     "type": "string",
@@ -596,234 +698,630 @@
         }
       }
     },
+    "/generation-estimates/{estimateId}/confirm": {
+      "post": {
+        "operationId": "confirmGenerationEstimate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The versioned estimate was confirmed and credits were atomically reserved for one generation job; one RESERVE ledger entry debited the workspace wallet."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can confirm paid generation."
+          },
+          "404": {
+            "description": "Workspace or estimate is missing or hidden by tenant isolation."
+          },
+          "409": {
+            "description": "Estimate already confirmed (CREDIT_RESERVATION_CONFLICT), version stale (RESOURCE_VERSION_STALE), input changed (ESTIMATE_INPUT_CHANGED), estimate expired (ESTIMATE_EXPIRED), or insufficient credit balance (CREDIT_BALANCE_INSUFFICIENT)."
+          },
+          "422": {
+            "description": "Confirmation input validation failed."
+          }
+        }
+      }
+    },
+    "/generation-jobs/{jobId}": {
+      "get": {
+        "operationId": "getGenerationJob",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The confirmed generation job and its active credit reservation, scoped to the caller's workspace."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "404": {
+            "description": "Workspace or generation job is missing or hidden by tenant isolation."
+          }
+        }
+      }
+    },
+    "/generation-jobs/{jobId}/submit": {
+      "post": {
+        "operationId": "submitGenerationJob",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The generation job was submitted exactly once to the HeyGen simulator; a durable ProviderOperation was persisted before network I/O. A timeout after possible acceptance returns unknown and must be reconciled before retry."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can submit paid generation."
+          },
+          "404": {
+            "description": "Workspace or generation job is missing or hidden by tenant isolation."
+          },
+          "409": {
+            "description": "Already submitted with a different request identity (IDEMPOTENCY_INPUT_CONFLICT), not submittable in its current state (GENERATION_JOB_NOT_SUBMITTABLE)."
+          },
+          "422": {
+            "description": "The provider output failed validation (PROVIDER_OUTPUT_INVALID)."
+          },
+          "429": {
+            "description": "The provider concurrency limit is reached (PROVIDER_RATE_LIMITED, retryable)."
+          }
+        }
+      }
+    },
+    "/generation-jobs/{jobId}/reconcile": {
+      "post": {
+        "operationId": "reconcileGenerationJob",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "An uncertain provider operation was reconciled to a terminal state by querying the provider; no second submission was made."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can reconcile paid generation."
+          },
+          "404": {
+            "description": "Workspace or generation job is missing or hidden by tenant isolation."
+          },
+          "409": {
+            "description": "No provider operation exists to reconcile (GENERATION_JOB_NOT_SUBMITTABLE)."
+          }
+        }
+      }
+    },
+    "/generation-jobs/{jobId}/cancel": {
+      "post": {
+        "operationId": "cancelGenerationJob",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Cancellation was requested. Uncertain provider operations reconcile first; if still uncertain the job is cancel_requested (GENERATION_CANCEL_UNCERTAIN)."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can cancel paid generation."
+          },
+          "404": {
+            "description": "Workspace or generation job is missing or hidden by tenant isolation."
+          },
+          "409": {
+            "description": "The generation cannot be cancelled in its current state (GENERATION_JOB_NOT_SUBMITTABLE)."
+          }
+        }
+      }
+    },
+    "/generation-jobs/{jobId}/settle": {
+      "post": {
+        "operationId": "settleGenerationJob",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "A terminal provider operation was settled. Completed media was retained into private V0 storage through the adapter, quarantined, validated, hashed and bound to a GeneratedSegment, a versioned GeneratedAsset and a CreativeLineage row; credits were captured once (unused remainder returned) on success or released once (full reservation returned) on failure. Settlement is idempotent and crash-recoverable: a replay returns the original settlement and never writes a second ledger entry."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can settle paid generation."
+          },
+          "404": {
+            "description": "Workspace or generation job is missing or hidden by tenant isolation."
+          },
+          "409": {
+            "description": "The provider operation is not terminal, has no reservation, or the provider cost exceeds the authorized maximum (GENERATION_JOB_NOT_SUBMITTABLE, PROVIDER_COST_EXCEEDS_AUTHORIZATION)."
+          },
+          "422": {
+            "description": "The retained media failed validation (ASSET_MEDIA_MALFORMED)."
+          },
+          "503": {
+            "description": "Settlement was interrupted after media retention and must be retried (DEPENDENCY_UNAVAILABLE, retryable)."
+          }
+        }
+      }
+    },
     "/blueprints": {
       "get": {
         "operationId": "listBlueprints",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "workspaceId",
             "in": "query",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           },
           {
             "name": "brandProfileId",
             "in": "query",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           },
           {
             "name": "limit",
             "in": "query",
             "required": false,
-            "schema": { "type": "integer", "minimum": 1, "maximum": 50 }
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
           },
           {
             "name": "cursor",
             "in": "query",
             "required": false,
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
-          "200": { "description": "Workspace-scoped reusable blueprint library with compatibility metadata and bounded pagination." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner, Admin or Client Manager can select blueprints." },
-          "404": { "description": "Workspace or blueprint is hidden by tenant isolation." },
-          "409": { "description": "Brand profile is missing or not the active approved version." },
-          "422": { "description": "Blueprint list input validation failed." }
+          "200": {
+            "description": "Workspace-scoped reusable blueprint library with compatibility metadata and bounded pagination."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can select blueprints."
+          },
+          "404": {
+            "description": "Workspace or blueprint is hidden by tenant isolation."
+          },
+          "409": {
+            "description": "Brand profile is missing or not the active approved version."
+          },
+          "422": {
+            "description": "Blueprint list input validation failed."
+          }
         }
       }
     },
     "/blueprints/library-entries": {
       "post": {
         "operationId": "seedBlueprintLibraryEntry",
-        "security": [{ "bearerAuth": [] }],
-        "requestBody": { "required": true },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
         "responses": {
-          "201": { "description": "Approved reusable blueprint library entry retained for explicit existing-blueprint selection." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner, Admin or Client Manager can create blueprint entries." },
-          "404": { "description": "Workspace is missing or hidden by tenant isolation." },
-          "409": { "description": "Brand profile is missing or not approved for production use." },
-          "422": { "description": "Blueprint entry validation failed." }
+          "201": {
+            "description": "Approved reusable blueprint library entry retained for explicit existing-blueprint selection."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can create blueprint entries."
+          },
+          "404": {
+            "description": "Workspace is missing or hidden by tenant isolation."
+          },
+          "409": {
+            "description": "Brand profile is missing or not approved for production use."
+          },
+          "422": {
+            "description": "Blueprint entry validation failed."
+          }
         }
       }
     },
     "/blueprint-requests": {
       "post": {
         "operationId": "createBlueprintRequest",
-        "security": [{ "bearerAuth": [] }],
-        "requestBody": { "required": true },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
         "responses": {
-          "202": { "description": "Explicit existing, discovery or default path created one downstream blueprint request identity." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner, Admin or Client Manager can choose blueprint paths." },
-          "404": { "description": "Workspace or existing blueprint is hidden by tenant isolation." },
-          "409": { "description": "Brand profile version is stale or blueprint is archived/incompatible." },
-          "422": { "description": "Blueprint request validation failed." }
+          "202": {
+            "description": "Explicit existing, discovery or default path created one downstream blueprint request identity."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can choose blueprint paths."
+          },
+          "404": {
+            "description": "Workspace or existing blueprint is hidden by tenant isolation."
+          },
+          "409": {
+            "description": "Brand profile version is stale or blueprint is archived/incompatible."
+          },
+          "422": {
+            "description": "Blueprint request validation failed."
+          }
         }
       }
     },
     "/blueprint-requests/{blueprint_request_id}/ready-blueprint": {
       "post": {
         "operationId": "createReadyBlueprint",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "blueprint_request_id",
             "in": "path",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
-        "requestBody": { "required": true },
+        "requestBody": {
+          "required": true
+        },
         "responses": {
-          "202": { "description": "P5 ready immutable blueprint, formula, director prompt and script input contract created." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner, Admin or Client Manager can prepare ready blueprints." },
-          "404": { "description": "Workspace or blueprint request is hidden by tenant isolation." },
-          "409": { "description": "Blueprint stages are incomplete, source is incompatible, or ready record already exists." },
-          "422": { "description": "Formula slots or request input are invalid." }
+          "202": {
+            "description": "P5 ready immutable blueprint, formula, director prompt and script input contract created."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can prepare ready blueprints."
+          },
+          "404": {
+            "description": "Workspace or blueprint request is hidden by tenant isolation."
+          },
+          "409": {
+            "description": "Blueprint stages are incomplete, source is incompatible, or ready record already exists."
+          },
+          "422": {
+            "description": "Formula slots or request input are invalid."
+          }
         }
       }
     },
     "/script-tournaments": {
       "post": {
         "operationId": "createScriptTournament",
-        "security": [{ "bearerAuth": [] }],
-        "requestBody": { "required": true },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
         "responses": {
-          "202": { "description": "S1 auditable script tournament generated, evaluated and exposed every variant with provenance, evaluation and bucketed analytics." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner, Admin or Client Manager can run script tournaments." },
-          "404": { "description": "Workspace or ready blueprint is hidden by tenant isolation." },
-          "409": { "description": "Fewer than ten valid variants cannot silently advance to selection." },
-          "422": { "description": "Validation failed, AI request refused or AI output schema invalid." }
+          "202": {
+            "description": "S1 auditable script tournament generated, evaluated and exposed every variant with provenance, evaluation and bucketed analytics."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can run script tournaments."
+          },
+          "404": {
+            "description": "Workspace or ready blueprint is hidden by tenant isolation."
+          },
+          "409": {
+            "description": "Fewer than ten valid variants cannot silently advance to selection."
+          },
+          "422": {
+            "description": "Validation failed, AI request refused or AI output schema invalid."
+          }
         }
       }
     },
     "/script-tournaments/{tournament_id}/select": {
       "post": {
         "operationId": "selectScriptVariant",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "tournament_id",
             "in": "path",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
-        "requestBody": { "required": true },
+        "requestBody": {
+          "required": true
+        },
         "responses": {
-          "200": { "description": "S2 immutable selected script retained with audit and bucketed script_selected analytics; retries return the same selection." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner, Admin or Client Manager can select a script." },
-          "404": { "description": "Workspace or tournament is hidden by tenant isolation." },
-          "409": { "description": "Stale comparison tab, ineligible variant or already-selected tournament cannot be selected." },
-          "422": { "description": "The path tournamentId and the request body tournamentId must match." }
+          "200": {
+            "description": "S2 immutable selected script retained with audit and bucketed script_selected analytics; retries return the same selection."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can select a script."
+          },
+          "404": {
+            "description": "Workspace or tournament is hidden by tenant isolation."
+          },
+          "409": {
+            "description": "Stale comparison tab, ineligible variant or already-selected tournament cannot be selected."
+          },
+          "422": {
+            "description": "The path tournamentId and the request body tournamentId must match."
+          }
         }
       }
     },
     "/avatars": {
       "get": {
         "operationId": "listAvatars",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "workspaceId",
             "in": "query",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           },
           {
             "name": "brandProfileId",
             "in": "query",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           },
           {
             "name": "limit",
             "in": "query",
             "required": false,
-            "schema": { "type": "integer", "minimum": 1, "maximum": 50 }
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
           },
           {
             "name": "cursor",
             "in": "query",
             "required": false,
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
-          "200": { "description": "V0-G1 consent-safe avatar catalogue with derived eligibility and hidden consent evidence; expired, revoked, missing-evidence and service-pending avatars cannot enter a generation estimate or job." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner, Admin or Client Manager can view the avatar catalogue." },
-          "404": { "description": "Workspace or brand profile is hidden by tenant isolation." },
-          "409": { "description": "The brand profile is not active or approved." }
+          "200": {
+            "description": "V0-G1 consent-safe avatar catalogue with derived eligibility and hidden consent evidence; expired, revoked, missing-evidence and service-pending avatars cannot enter a generation estimate or job."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can view the avatar catalogue."
+          },
+          "404": {
+            "description": "Workspace or brand profile is hidden by tenant isolation."
+          },
+          "409": {
+            "description": "The brand profile is not active or approved."
+          }
         }
       }
     },
     "/viral-candidates/search": {
       "post": {
         "operationId": "searchViralCandidates",
-        "security": [{ "bearerAuth": [] }],
-        "requestBody": { "required": true },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
         "responses": {
-          "202": { "description": "Xpoz simulator or manual fallback returned ranked candidates with immutable metric snapshots." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner, Admin or Client Manager can run viral discovery." },
-          "404": { "description": "Workspace or blueprint request is hidden by tenant isolation." },
-          "503": { "description": "Discovery provider outage, timeout, empty or malformed result created no fabricated candidates." },
-          "422": { "description": "Viral candidate search validation failed." }
+          "202": {
+            "description": "Xpoz simulator or manual fallback returned ranked candidates with immutable metric snapshots."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can run viral discovery."
+          },
+          "404": {
+            "description": "Workspace or blueprint request is hidden by tenant isolation."
+          },
+          "422": {
+            "description": "Viral candidate search validation failed."
+          },
+          "503": {
+            "description": "Discovery provider outage, timeout, empty or malformed result created no fabricated candidates."
+          }
         }
       }
     },
     "/viral-candidates/{candidate_id}/extract-blueprint": {
       "post": {
         "operationId": "extractViralCandidateBlueprint",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "candidate_id",
             "in": "path",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
-        "requestBody": { "required": true },
+        "requestBody": {
+          "required": true
+        },
         "responses": {
-          "202": { "description": "Authorised media acquisition retained an analysis artifact and thumbnail blueprint." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner, Admin or Client Manager can extract blueprint stages." },
-          "404": { "description": "Workspace or candidate is hidden by tenant isolation." },
-          "409": { "description": "Rights, retrieval policy, source hash or blueprint stage confidence blocked extraction." },
-          "422": { "description": "Media acquisition request validation failed." }
+          "202": {
+            "description": "Authorised media acquisition retained an analysis artifact and thumbnail blueprint."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can extract blueprint stages."
+          },
+          "404": {
+            "description": "Workspace or candidate is hidden by tenant isolation."
+          },
+          "409": {
+            "description": "Rights, retrieval policy, source hash or blueprint stage confidence blocked extraction."
+          },
+          "422": {
+            "description": "Media acquisition request validation failed."
+          }
         }
       }
     },
     "/viral-candidates/{candidate_id}/scene-blueprint": {
       "post": {
         "operationId": "createSceneBlueprint",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "candidate_id",
             "in": "path",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
-        "requestBody": { "required": true },
+        "requestBody": {
+          "required": true
+        },
         "responses": {
-          "202": { "description": "Scene detection, transcription, keyframe, vision and OCR stage graph produced scene-level blueprint evidence." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner, Admin or Client Manager can create scene blueprints." },
-          "404": { "description": "Workspace, candidate or prerequisite extraction is hidden by tenant isolation." },
-          "409": { "description": "A required blueprint stage is incomplete and cannot advance as complete." },
-          "422": { "description": "Malformed AI output, worker timeout, OOM or request validation blocked the stage graph." }
+          "202": {
+            "description": "Scene detection, transcription, keyframe, vision and OCR stage graph produced scene-level blueprint evidence."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can create scene blueprints."
+          },
+          "404": {
+            "description": "Workspace, candidate or prerequisite extraction is hidden by tenant isolation."
+          },
+          "409": {
+            "description": "A required blueprint stage is incomplete and cannot advance as complete."
+          },
+          "422": {
+            "description": "Malformed AI output, worker timeout, OOM or request validation blocked the stage graph."
+          }
         }
       }
     },
@@ -886,7 +1384,11 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["workspaceId", "inputArtifactId", "outputFileName"],
+                "required": [
+                  "workspaceId",
+                  "inputArtifactId",
+                  "outputFileName"
+                ],
                 "properties": {
                   "workspaceId": {
                     "type": "string",
@@ -996,43 +1498,79 @@
     "/jobs/{job_id}/trace": {
       "get": {
         "operationId": "getJobTrace",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
             "in": "path",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
         "responses": {
-          "200": { "description": "Owner/Admin trace across request, outbox, worker and artifact evidence." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner/Admin can inspect operations." },
-          "404": { "description": "Job is missing or hidden by tenant isolation." }
+          "200": {
+            "description": "Owner/Admin trace across request, outbox, worker and artifact evidence."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner/Admin can inspect operations."
+          },
+          "404": {
+            "description": "Job is missing or hidden by tenant isolation."
+          }
         }
       }
     },
     "/jobs/{job_id}/recover": {
       "post": {
         "operationId": "recoverJob",
-        "security": [{ "bearerAuth": [] }],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
             "in": "path",
             "required": true,
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
-        "requestBody": { "required": true },
+        "requestBody": {
+          "required": true
+        },
         "responses": {
-          "200": { "description": "Owner/Admin recovery action recorded without duplicate completion or external side effect." },
-          "401": { "description": "Authentication is required." },
-          "403": { "description": "Only Owner/Admin can recover provider or worker jobs." },
-          "404": { "description": "Job is missing or hidden by tenant isolation." },
-          "409": { "description": "Job is not recoverable from its current state." },
-          "422": { "description": "Recovery input validation failed." }
+          "200": {
+            "description": "Owner/Admin recovery action recorded without duplicate completion or external side effect."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner/Admin can recover provider or worker jobs."
+          },
+          "404": {
+            "description": "Job is missing or hidden by tenant isolation."
+          },
+          "409": {
+            "description": "Job is not recoverable from its current state."
+          },
+          "422": {
+            "description": "Recovery input validation failed."
+          }
         }
       }
     },
@@ -1196,6 +1734,191 @@
           },
           "409": {
             "description": "Lease is stale or invalid."
+          }
+        }
+      }
+    },
+    "/credit-purchases": {
+      "post": {
+        "operationId": "createCreditPurchase",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Credit purchase initiated for the deterministic Razorpay (INR) or Stripe (international) simulator; the wallet is credited only after a verified callback."
+          },
+          "400": {
+            "description": "Idempotency key required (IDEMPOTENCY_KEY_REQUIRED)."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can purchase credits."
+          },
+          "404": {
+            "description": "Workspace is hidden by tenant isolation."
+          },
+          "422": {
+            "description": "Provider/currency policy or amount validation failed. Razorpay requires INR; Stripe requires a non-INR currency."
+          }
+        }
+      }
+    },
+    "/credit-wallets/{walletId}/ledger": {
+      "get": {
+        "operationId": "getWalletLedger",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "walletId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workspaceId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Append-only wallet ledger in integer minor units with running balance; Owner/Admin also receives a reconciliation summary against the deterministic simulator totals."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner, Admin or Client Manager can view the wallet ledger."
+          },
+          "404": {
+            "description": "Wallet is missing or hidden by tenant isolation."
+          }
+        }
+      }
+    },
+    "/credit-wallets/{walletId}/adjustments": {
+      "post": {
+        "operationId": "createCreditAdjustment",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Compensating credit adjustment recorded as an append-only ADJUSTMENT ledger entry with a signed amount and reason."
+          },
+          "400": {
+            "description": "Idempotency key required (IDEMPOTENCY_KEY_REQUIRED)."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "403": {
+            "description": "Only Owner or Admin can adjust credits."
+          },
+          "404": {
+            "description": "Wallet is missing or hidden by tenant isolation."
+          },
+          "422": {
+            "description": "Direction, amount, currency or reason validation failed."
+          }
+        }
+      }
+    },
+    "/callbacks/razorpay": {
+      "post": {
+        "operationId": "handleRazorpayCallback",
+        "requestBody": {
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Verified Razorpay callback acknowledged; the purchase transitioned and an append-only ledger entry was written. Duplicate callbacks produce one transition."
+          },
+          "401": {
+            "description": "Signature verification or timestamp tolerance failed (PAYMENT_SIGNATURE_INVALID)."
+          },
+          "409": {
+            "description": "Amount, currency or provider reference did not match the purchase (PAYMENT_AMOUNT_MISMATCH)."
+          }
+        }
+      }
+    },
+    "/callbacks/stripe": {
+      "post": {
+        "operationId": "handleStripeCallback",
+        "requestBody": {
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Verified Stripe callback acknowledged; the purchase transitioned and an append-only ledger entry was written. Duplicate callbacks produce one transition."
+          },
+          "401": {
+            "description": "Signature verification or timestamp tolerance failed (PAYMENT_SIGNATURE_INVALID)."
+          },
+          "409": {
+            "description": "Amount, currency or provider reference did not match the purchase (PAYMENT_AMOUNT_MISMATCH)."
+          }
+        }
+      }
+    },
+    "/callbacks/heygen": {
+      "post": {
+        "operationId": "handleHeygenCallback",
+        "requestBody": {
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Verified HeyGen callback acknowledged; the provider operation transitioned exactly once. Duplicate callbacks produce one transition."
+          },
+          "401": {
+            "description": "Signature verification or timestamp tolerance failed, or the operation could not be reconciled (PROVIDER_CALLBACK_INVALID)."
+          },
+          "422": {
+            "description": "The callback was malformed (PROVIDER_OUTPUT_INVALID)."
           }
         }
       }

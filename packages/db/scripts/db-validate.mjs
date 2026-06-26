@@ -77,6 +77,22 @@ const g1Migration = await readFile(
   "packages/db/prisma/migrations/0019_v0_g1_consent_safe_avatar_selection/migration.sql",
   "utf8"
 );
+const g2Migration = await readFile(
+  "packages/db/prisma/migrations/0020_v0_g2_creator_wallet_verified_credit_purchase/migration.sql",
+  "utf8"
+);
+const g3Migration = await readFile(
+  "packages/db/prisma/migrations/0021_v0_g3_versioned_generation_estimate_and_atomic_reservation/migration.sql",
+  "utf8"
+);
+const g4Migration = await readFile(
+  "packages/db/prisma/migrations/0022_v0_g4_exactly_once_heygen_submission/migration.sql",
+  "utf8"
+);
+const g5Migration = await readFile(
+  "packages/db/prisma/migrations/0023_v0_g5_retained_generated_media_and_settled_credits/migration.sql",
+  "utf8"
+);
 
 if (!schema.includes("provider = \"postgresql\"")) {
   throw new Error("Prisma datasource must use PostgreSQL.");
@@ -121,7 +137,21 @@ for (const required of [
   "model ScriptEvaluation",
   "model SelectedScript",
   "model AvatarProfile",
-  "model AvatarConsent"
+  "model AvatarConsent",
+  "model CreditWallet",
+  "model CreditPurchase",
+  "model CreditLedgerEntry",
+  "enum CreditPurchaseStatus",
+  "enum CreditLedgerType",
+  "model GenerationJob",
+  "model CreditReservation",
+  "model ProviderPriceVersion",
+  "enum CreditReservationStatus",
+  "model ProviderOperation",
+  "enum ProviderOperationStatus",
+  "model GeneratedSegment",
+  "model GeneratedAsset",
+  "model CreativeLineage"
 ]) {
   if (!schema.includes(required)) {
     throw new Error(`Missing required schema block: ${required}`);
@@ -470,6 +500,34 @@ if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migra
 }
 
 for (const required of [
+  "CREATE TYPE credit_purchase_status",
+  "CREATE TYPE credit_ledger_type",
+  "CREATE TABLE IF NOT EXISTS credit_wallets",
+  "CREATE TABLE IF NOT EXISTS credit_purchases",
+  "CREATE TABLE IF NOT EXISTS credit_ledger_entries",
+  "ALTER TABLE credit_wallets ENABLE ROW LEVEL SECURITY;",
+  "ALTER TABLE credit_purchases ENABLE ROW LEVEL SECURITY;",
+  "ALTER TABLE credit_ledger_entries ENABLE ROW LEVEL SECURITY;",
+  "CREATE POLICY credit_wallets_workspace_isolation",
+  "CREATE POLICY credit_purchases_workspace_isolation",
+  "CREATE POLICY credit_ledger_entries_workspace_isolation",
+  "credit_purchases_provider_check",
+  "credit_purchases_amount_check"
+]) {
+  if (!g2Migration.includes(required)) {
+    throw new Error(`Missing required G2 creator wallet migration statement: ${required}`);
+  }
+}
+
+if (/card|cvv|pan|expiry_year|instrument_number/i.test(`${schema}\n${g2Migration}`)) {
+  throw new Error("Credit schema must not store payment instrument details.");
+}
+
+if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}\n${s1Migration}\n${s2Migration}\n${s2ApproverFkMigration}\n${g1Migration}\n${g2Migration}`)) {
+  throw new Error("Runtime roles must not receive BYPASSRLS.");
+}
+
+for (const required of [
   "ADD COLUMN last_error_code",
   "CREATE INDEX jobs_workspace_failed_updated_idx"
 ]) {
@@ -478,4 +536,97 @@ for (const required of [
   }
 }
 
-console.log("Database contract valid for V0-F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1 identity, idempotency, artifacts, jobs, outbox, capability controls, service credentials, brand intake, brand candidates, brand memory, blueprint path selection, viral candidate metrics, media acquisition, thumbnail blueprints, scene blueprints, formula derivations, director prompts, script tournaments, selected scripts, selected-script approver lineage FK, consent-safe avatar profiles and consents, and RLS.");
+for (const required of [
+  "CREATE TYPE credit_reservation_status",
+  "ALTER TABLE generation_estimates",
+  "ADD COLUMN IF NOT EXISTS input_hash CHAR(64)",
+  "ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ(6)",
+  "ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 1",
+  "ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ(6)",
+  "ADD COLUMN IF NOT EXISTS duration_seconds INT NOT NULL DEFAULT 30",
+  "CREATE TABLE IF NOT EXISTS provider_price_versions",
+  "CREATE TABLE IF NOT EXISTS generation_jobs",
+  "CREATE TABLE IF NOT EXISTS credit_reservations",
+  "CREATE UNIQUE INDEX IF NOT EXISTS credit_reservations_one_active_per_job_idx",
+  "WHERE status = 'ACTIVE'",
+  "ALTER TABLE generation_jobs ENABLE ROW LEVEL SECURITY;",
+  "ALTER TABLE credit_reservations ENABLE ROW LEVEL SECURITY;",
+  "CREATE POLICY generation_jobs_workspace_isolation",
+  "CREATE POLICY credit_reservations_workspace_isolation",
+  "generation_jobs_status_check",
+  "credit_reservations_amount_check"
+]) {
+  if (!g3Migration.includes(required)) {
+    throw new Error(`Missing required G3 versioned estimate and reservation migration statement: ${required}`);
+  }
+}
+
+// The generation estimate input hash is a server-side validation secret. It is
+// retained in the schema for confirmation integrity (schema.prisma declares
+// inputHash) but the public mapper omits it; see apps/api/src/workspace-store.mjs
+// publicGenerationEstimate. The integration tests assert it never leaks.
+
+if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}\n${s1Migration}\n${s2Migration}\n${s2ApproverFkMigration}\n${g1Migration}\n${g2Migration}\n${g3Migration}`)) {
+  throw new Error("Runtime roles must not receive BYPASSRLS.");
+}
+
+for (const required of [
+  "CREATE TYPE provider_operation_status",
+  "CREATE TABLE IF NOT EXISTS provider_operations",
+  "request_hash CHAR(64) NOT NULL",
+  "estimated_maximum_minor BIGINT NOT NULL",
+  "CREATE UNIQUE INDEX IF NOT EXISTS provider_operations_workspace_idem_idx",
+  "CREATE UNIQUE INDEX IF NOT EXISTS provider_operations_one_per_job_idx",
+  "CREATE UNIQUE INDEX IF NOT EXISTS provider_operations_provider_external_idx",
+  "WHERE external_id IS NOT NULL",
+  "ALTER TABLE provider_operations ENABLE ROW LEVEL SECURITY;",
+  "CREATE POLICY provider_operations_workspace_isolation",
+  "provider_operations_status_check",
+  "provider_operations_estimated_maximum_check"
+]) {
+  if (!g4Migration.includes(required)) {
+    throw new Error(`Missing required G4 exactly-once HeyGen submission migration statement: ${required}`);
+  }
+}
+
+// The provider operation request hash is a server-side binding secret (it binds
+// the submission to the exact job/script/avatar/duration/price version/provider).
+// schema.prisma declares requestHash but the public mapper omits it; the
+// integration tests assert it never leaks.
+
+if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}\n${s1Migration}\n${s2Migration}\n${s2ApproverFkMigration}\n${g1Migration}\n${g2Migration}\n${g3Migration}\n${g4Migration}`)) {
+  throw new Error("Runtime roles must not receive BYPASSRLS.");
+}
+
+for (const required of [
+  "ADD COLUMN IF NOT EXISTS provider_total_minor BIGINT",
+  "ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ(6)",
+  "CREATE TABLE IF NOT EXISTS generated_segments",
+  "CREATE TABLE IF NOT EXISTS generated_assets",
+  "CREATE TABLE IF NOT EXISTS creative_lineage",
+  "CREATE UNIQUE INDEX IF NOT EXISTS generated_segments_workspace_job_index_idx",
+  "CREATE UNIQUE INDEX IF NOT EXISTS generated_assets_workspace_job_version_idx",
+  "CREATE UNIQUE INDEX IF NOT EXISTS creative_lineage_workspace_job_idx",
+  "ALTER TABLE generated_segments ENABLE ROW LEVEL SECURITY;",
+  "ALTER TABLE generated_assets ENABLE ROW LEVEL SECURITY;",
+  "ALTER TABLE creative_lineage ENABLE ROW LEVEL SECURITY;",
+  "CREATE POLICY generated_segments_workspace_isolation",
+  "CREATE POLICY generated_assets_workspace_isolation",
+  "CREATE POLICY creative_lineage_workspace_isolation",
+  "generated_assets_status_check"
+]) {
+  if (!g5Migration.includes(required)) {
+    throw new Error(`Missing required G5 retained media and settled credits migration statement: ${required}`);
+  }
+}
+
+// The transient provider URL is never retained as production source; the retained
+// segment stores only the hash, duration, content type and byte size. The provider
+// external id is retained for lineage reconciliation but the public mapper never
+// surfaces a transient URL. The integration tests assert no URL leaks.
+
+if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}\n${s1Migration}\n${s2Migration}\n${s2ApproverFkMigration}\n${g1Migration}\n${g2Migration}\n${g3Migration}\n${g4Migration}\n${g5Migration}`)) {
+  throw new Error("Runtime roles must not receive BYPASSRLS.");
+}
+
+console.log("Database contract valid for V0-F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1/G2/G3/G4/G5 identity, idempotency, artifacts, jobs, outbox, capability controls, service credentials, brand intake, brand candidates, brand memory, blueprint path selection, viral candidate metrics, media acquisition, thumbnail blueprints, scene blueprints, formula derivations, director prompts, script tournaments, selected scripts, selected-script approver lineage FK, consent-safe avatar profiles and consents, creator wallets, verified credit purchases, append-only credit ledger, versioned generation estimates with input hash and expiry, atomic credit reservations with one-active-per-job guard, provider price versions, exactly-once provider operations with one-per-job guard, retained generated segments/assets and creative lineage with reconciled provider total and settled credits, and RLS.");

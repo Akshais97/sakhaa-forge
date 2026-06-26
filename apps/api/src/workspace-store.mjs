@@ -1,7 +1,17 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { PrismaClient } from "../../../packages/db/generated/client/index.js";
+import { canPerform } from "./permissions.mjs";
 import { buildBrandExtractionCandidates } from "./brand-extraction.mjs";
 import { candidateSourceHash, searchXpozCandidates } from "./viral-discovery.mjs";
+import {
+  HEYGEN_PROVIDER,
+  HEYGEN_OPERATION_TYPE,
+  heygenConcurrencyLimit,
+  submitHeygenVideo,
+  reconcileHeygenOperation,
+  fetchHeygenMedia,
+  resolveHeygenMediaMode
+} from "./heygen-provider.mjs";
 import {
   generateScriptVariants,
   evaluateScriptVariant,
@@ -17,14 +27,25 @@ import {
   supportedScriptSimulatorModes
 } from "./script-generation.mjs";
 
+// A Prisma unique-constraint violation (P2002) or transaction write conflict
+// (P2034) from a concurrent mutation must be normalized into a stable domain
+// outcome or replay, never surfaced as a raw 500. Both carry a string `code`.
+function isPrismaConflictError(error) {
+  return (
+    error != null &&
+    typeof error.code === "string" &&
+    (error.code === "P2002" || error.code === "P2034")
+  );
+}
+
 export function createStore(env = process.env) {
   if (env.V0_RUNTIME_DB === "prisma") {
     return createPrismaWorkspaceStore(env);
   }
-  return createWorkspaceStore();
+  return createWorkspaceStore(env);
 }
 
-export function createWorkspaceStore() {
+export function createWorkspaceStore(env = process.env) {
   const users = new Map();
   const workspaces = new Map();
   const memberships = new Map();
@@ -49,6 +70,34 @@ export function createWorkspaceStore() {
   const avatarProfiles = new Map();
   const avatarConsents = new Map();
   const avatarCatalogsMaterialized = new Set();
+  const creditWallets = new Map();
+  const creditPurchases = new Map();
+  const creditLedgerEntries = new Map();
+  // V0-G3 versioned generation estimate and atomic reservation.
+  const generationJobs = new Map();
+  const creditReservations = new Map();
+  const providerPriceVersions = new Map();
+  // V0-G4 exactly-once provider operations. One operation per generation job.
+  const providerOperations = new Map();
+  // V0-G5 retained generated media and settled credits.
+  const generatedSegments = new Map();
+  const generatedAssets = new Map();
+  const creativeLineages = new Map();
+  // Global provider price reference, seeded with the deterministic simulator
+  // rate (v0.local.1). Mirrors the migration-seeded provider_price_versions row.
+  providerPriceVersions.set("heygen-simulator:v0.local.1", {
+    id: randomUUID(),
+    provider: "heygen-simulator",
+    priceVersion: "v0.local.1",
+    currency: "INR",
+    rateMinorPerSecond: 1600,
+    source: "deterministic_simulator",
+    validFrom: "2000-01-01T00:00:00.000Z",
+    validUntil: "2100-01-01T00:00:00.000Z",
+    createdAt: "2000-01-01T00:00:00.000Z",
+    updatedAt: "2000-01-01T00:00:00.000Z"
+  });
+  const inboxEvents = new Map();
   const viralCandidates = new Map();
   const metricSnapshots = new Map();
   const mediaAcquisitions = new Map();
@@ -642,17 +691,36 @@ export function createWorkspaceStore() {
       };
       audits.push(avatarAudit);
     }
+    // V0-G3: bind an active provider price version for the route/currency. The
+    // estimate records the price version, an input hash over the exact
+    // script/avatar/duration the user saw, an expiry and an optimistic version
+    // so confirmation can reject stale, changed or replayed inputs cleanly. The
+    // 30s pilot cap and 48,000 minor-unit authorized maximum are the
+    // deterministic simulator policy; the price version row is the reference.
+    const priceVersion = activePriceVersion("heygen-simulator", "INR", Date.now());
+    if (!priceVersion) {
+      return {
+        ok: false,
+        problem: problem("VALIDATION_FAILED", 422, "Validation failed", "No active provider price version is available for this route.")
+      };
+    }
+    const durationSeconds = normalizeDurationSeconds(input.durationSeconds);
     const estimate = {
       id: randomUUID(),
       workspaceId: input.workspaceId,
       brandProfileId: profile.id,
       status: "awaiting_confirmation",
       provider: "heygen-simulator",
-      priceVersion: "v0.local.1",
+      priceVersion: priceVersion.priceVersion,
       maximumAuthorizedMinor: 48000,
       currency: "INR",
       selectedScriptId: input.selectedScriptId,
       avatarProfileId: input.avatarProfileId,
+      inputHash: computeGenerationInputHash(input),
+      expiresAt: new Date(Date.now() + estimateTtlMs(env)).toISOString(),
+      version: 1,
+      confirmedAt: null,
+      durationSeconds,
       createdAt: now,
       updatedAt: now
     };
@@ -663,6 +731,1148 @@ export function createWorkspaceStore() {
         estimate: publicGenerationEstimate(estimate),
         ...(avatarAudit ? { audit: publicAudit(avatarAudit) } : {})
       }
+    };
+  }
+
+  // V0-G3: confirm a versioned estimate and atomically reserve credits for one
+  // generation. The estimate must still be awaiting confirmation, the
+  // optimistic version and input hash must match, the estimate must not have
+  // expired, and the workspace wallet must hold at least the authorized maximum
+  // in integer minor units. Confirmation creates exactly one GenerationJob, one
+  // active CreditReservation and one RESERVE ledger entry that debits the
+  // wallet, all before any provider network I/O. Reservation does not imply
+  // provider submission. Double-click, replay and concurrent confirmation of
+  // the same estimate fall to CREDIT_RESERVATION_CONFLICT after the first
+  // confirmation transitions the estimate to credits_reserved.
+  function confirmGenerationEstimate(actor, input) {
+    const access = getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const estimate = generationEstimates.get(input.estimateId);
+    if (!estimate || estimate.workspaceId !== input.workspaceId) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    if (estimate.status !== "awaiting_confirmation") {
+      return {
+        ok: false,
+        problem: problem("CREDIT_RESERVATION_CONFLICT", 409, "Credit reservation conflict", "Credits are already reserved for this generation.")
+      };
+    }
+    if (Number(input.version) !== estimate.version) {
+      return {
+        ok: false,
+        problem: problem("RESOURCE_VERSION_STALE", 409, "Resource version stale", "This item changed after you opened it. Review the latest version.")
+      };
+    }
+    const confirmHash = computeGenerationInputHash(input);
+    if (confirmHash !== estimate.inputHash) {
+      return {
+        ok: false,
+        problem: problem("ESTIMATE_INPUT_CHANGED", 409, "Estimate input changed", "The script, avatar or settings changed. Request a new estimate.", true)
+      };
+    }
+    if (Date.now() > Date.parse(estimate.expiresAt)) {
+      return {
+        ok: false,
+        problem: problem("ESTIMATE_EXPIRED", 409, "Estimate expired", "This estimate expired. Request a new estimate.", true)
+      };
+    }
+    const wallet = ensureCreditWallet(input.workspaceId, estimate.currency, new Date().toISOString());
+    if (wallet.balanceMinor < estimate.maximumAuthorizedMinor) {
+      return {
+        ok: false,
+        problem: problem("CREDIT_BALANCE_INSUFFICIENT", 409, "Credit balance insufficient", "Add creator credits before generating this video.")
+      };
+    }
+    const now = new Date().toISOString();
+    const job = {
+      id: randomUUID(),
+      workspaceId: input.workspaceId,
+      estimateId: estimate.id,
+      brandProfileId: estimate.brandProfileId,
+      selectedScriptId: estimate.selectedScriptId,
+      avatarProfileId: estimate.avatarProfileId,
+      status: "queued",
+      idempotencyKey: input.idempotencyKey,
+      inputHash: estimate.inputHash,
+      version: estimate.version,
+      durationSeconds: estimate.durationSeconds,
+      maximumAuthorizedMinor: estimate.maximumAuthorizedMinor,
+      currency: estimate.currency,
+      priceVersion: estimate.priceVersion,
+      createdAt: now,
+      updatedAt: now
+    };
+    generationJobs.set(job.id, job);
+    const reservation = {
+      id: randomUUID(),
+      workspaceId: input.workspaceId,
+      generationJobId: job.id,
+      walletId: wallet.id,
+      status: "active",
+      amountMinor: estimate.maximumAuthorizedMinor,
+      currency: estimate.currency,
+      idempotencyKey: input.idempotencyKey,
+      expiresAt: estimate.expiresAt,
+      createdAt: now,
+      updatedAt: now
+    };
+    creditReservations.set(reservation.id, reservation);
+    // The RESERVE ledger entry is the negative debit that proves the hold; the
+    // reservation row is the active hold itself. Both carry the generation job
+    // id so G5 settlement can capture or release against the same job.
+    const reserveEntry = writeLedgerEntry(
+      { workspaceId: input.workspaceId, walletId: wallet.id, currency: wallet.currency },
+      "RESERVE",
+      -estimate.maximumAuthorizedMinor,
+      input.idempotencyKey,
+      "generation reservation",
+      now
+    );
+    reserveEntry.generationJobId = job.id;
+    estimate.status = "credits_reserved";
+    estimate.confirmedAt = now;
+    estimate.updatedAt = now;
+    generationEstimates.set(estimate.id, estimate);
+    audits.push({
+      id: randomUUID(),
+      workspaceId: input.workspaceId,
+      actorUserId: actor.userId,
+      eventType: "generation.confirmed",
+      targetType: "GenerationJob",
+      targetId: job.id,
+      reason: null,
+      occurredAt: now
+    });
+    return {
+      ok: true,
+      response: {
+        estimate: publicGenerationEstimate(estimate),
+        job: publicGenerationJob(job),
+        reservation: publicCreditReservation(reservation),
+        ledgerEntry: publicCreditLedgerEntry(reserveEntry),
+        wallet: publicCreditWallet(creditWallets.get(wallet.id))
+      }
+    };
+  }
+
+  function getGenerationJob(actor, input) {
+    const access = getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const job = generationJobs.get(input.jobId);
+    if (!job || job.workspaceId !== input.workspaceId) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const reservation = [...creditReservations.values()].find(
+      (candidate) => candidate.generationJobId === job.id && candidate.status === "active"
+    );
+    return {
+      ok: true,
+      response: {
+        job: publicGenerationJob(job),
+        ...(reservation ? { reservation: publicCreditReservation(reservation) } : {})
+      }
+    };
+  }
+
+  function activePriceVersion(provider, currency, nowMs) {
+    return (
+      [...providerPriceVersions.values()].find(
+        (version) =>
+          version.provider === provider &&
+          version.currency === currency &&
+          Date.parse(version.validFrom) <= nowMs &&
+          nowMs <= Date.parse(version.validUntil)
+      ) ?? null
+    );
+  }
+
+  // V0-G4: the active provider operation statuses that count against the
+  // pay-as-you-go concurrency limit. A terminal operation frees its slot.
+  function countActiveProviderOperations(workspaceId) {
+    const active = new Set(["submitting", "accepted", "unknown", "processing"]);
+    return [...providerOperations.values()].filter(
+      (op) => op.workspaceId === workspaceId && active.has(op.status)
+    ).length;
+  }
+
+  function findOperationByJob(jobId) {
+    return [...providerOperations.values()].find((op) => op.generationJobId === jobId) ?? null;
+  }
+
+  function findOperationByIdempotencyKey(workspaceId, idempotencyKey) {
+    return (
+      [...providerOperations.values()].find(
+        (op) => op.workspaceId === workspaceId && op.idempotencyKey === idempotencyKey
+      ) ?? null
+    );
+  }
+
+  // V0-G4: submit a queued generation job to the HeyGen simulator exactly once.
+  // A durable ProviderOperation is persisted in CREATED -> SUBMITTING BEFORE the
+  // provider network I/O, so a crash between persistence and the network response
+  // leaves a resumable operation, never a blind duplicate. The operation binds the
+  // workspace, generation job, provider route, idempotency key and request hash,
+  // and stores the provider external id, bound price version and estimated maximum
+  // cost. A timeout after possible acceptance marks the operation unknown; the
+  // caller must reconcile before any retry. Provider payloads stay adapter-private.
+  // Credit capture/release is V0-G5.
+  function submitGenerationJob(actor, input) {
+    const access = getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const job = generationJobs.get(input.jobId);
+    if (!job || job.workspaceId !== input.workspaceId) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    // Exactly-once by idempotency key: a replay returns the existing operation and
+    // never calls the provider again. A second key for the same job is a conflict.
+    const existingByKey = findOperationByIdempotencyKey(input.workspaceId, input.idempotencyKey);
+    if (existingByKey) {
+      return {
+        ok: true,
+        response: {
+          job: publicGenerationJob(job),
+          operation: publicProviderOperation(existingByKey),
+          replay: true
+        }
+      };
+    }
+    const existingForJob = findOperationByJob(job.id);
+    if (existingForJob) {
+      return {
+        ok: false,
+        problem: problem(
+          "IDEMPOTENCY_INPUT_CONFLICT",
+          409,
+          "Idempotency input conflict",
+          "This generation was already submitted with a different request identity."
+        )
+      };
+    }
+    if (job.status !== "queued") {
+      return {
+        ok: false,
+        problem: problem(
+          "GENERATION_JOB_NOT_SUBMITTABLE",
+          409,
+          "Generation job not submittable",
+          "This generation cannot be submitted in its current state."
+        )
+      };
+    }
+    if (countActiveProviderOperations(input.workspaceId) >= heygenConcurrencyLimit(env)) {
+      return {
+        ok: false,
+        problem: problem(
+          "PROVIDER_RATE_LIMITED",
+          429,
+          "Provider rate limited",
+          "The provider is busy. This job will retry at the shown time.",
+          true
+        )
+      };
+    }
+    const requestHash = computeProviderRequestHash(job);
+    const now = new Date().toISOString();
+    // Persist the operation BEFORE network I/O. CREATED is the durable pre-network
+    // row; SUBMITTING spans the network call. A crash here leaves SUBMITTING.
+    const operation = {
+      id: randomUUID(),
+      workspaceId: input.workspaceId,
+      generationJobId: job.id,
+      provider: HEYGEN_PROVIDER,
+      operationType: HEYGEN_OPERATION_TYPE,
+      status: "submitting",
+      idempotencyKey: input.idempotencyKey,
+      requestHash,
+      externalId: null,
+      priceVersion: job.priceVersion,
+      estimatedMaximumMinor: job.maximumAuthorizedMinor,
+      currency: job.currency,
+      retryAfterMs: null,
+      lastErrorCode: null,
+      submittedAt: now,
+      acceptedAt: null,
+      completedAt: null,
+      reconciledAt: null,
+      cancelledAt: null,
+      createdAt: now,
+      updatedAt: now
+    };
+    providerOperations.set(operation.id, operation);
+    job.status = "submitting";
+    job.updatedAt = now;
+    generationJobs.set(job.id, job);
+    const providerResult = submitHeygenVideo(env, {
+      operationId: operation.id,
+      requestHash,
+      mode: input.mode
+    });
+    if (!providerResult.ok) {
+      if (providerResult.kind === "timeout") {
+        // Timeout after possible acceptance: unknown, never success or failure. The
+        // caller reconciles before any retry; blind resubmission is prohibited.
+        operation.status = "unknown";
+        operation.updatedAt = new Date().toISOString();
+        providerOperations.set(operation.id, operation);
+        job.status = "unknown";
+        job.updatedAt = operation.updatedAt;
+        generationJobs.set(job.id, job);
+        return {
+          ok: true,
+          response: {
+            job: publicGenerationJob(job),
+            operation: publicProviderOperation(operation),
+            unknown: true
+          }
+        };
+      }
+      // malformed / unavailable: the provider output failed validation.
+      operation.status = "failed";
+      operation.lastErrorCode = providerResult.errorCode || "PROVIDER_OUTPUT_INVALID";
+      operation.updatedAt = new Date().toISOString();
+      providerOperations.set(operation.id, operation);
+      job.status = "failed";
+      job.updatedAt = operation.updatedAt;
+      generationJobs.set(job.id, job);
+      return {
+        ok: false,
+        problem: problem(
+          operation.lastErrorCode,
+          422,
+          "Provider output invalid",
+          "The generated media failed validation and was not accepted."
+        )
+      };
+    }
+    // success / duplicate: the provider accepted and assigned an external id.
+    operation.status = "accepted";
+    operation.externalId = providerResult.externalId;
+    operation.acceptedAt = new Date().toISOString();
+    operation.updatedAt = operation.acceptedAt;
+    providerOperations.set(operation.id, operation);
+    job.status = "accepted";
+    job.updatedAt = operation.acceptedAt;
+    generationJobs.set(job.id, job);
+    audits.push({
+      id: randomUUID(),
+      workspaceId: input.workspaceId,
+      actorUserId: actor.userId,
+      eventType: "generation.state_changed",
+      targetType: "GenerationJob",
+      targetId: job.id,
+      reason: "accepted",
+      occurredAt: operation.acceptedAt
+    });
+    const response = {
+      job: publicGenerationJob(job),
+      operation: publicProviderOperation(operation)
+    };
+    // Simulator-only: surface the signed callback envelope so the deterministic
+    // test can post the webhook back, exactly as the Razorpay simulator does. The
+    // signing secret never leaves the simulator and the envelope carries no media
+    // URL (media retention is V0-G5).
+    if (env.HEYGEN_MODE !== "api") {
+      const envelope = {
+        workspaceId: input.workspaceId,
+        jobId: job.id,
+        operationId: operation.id,
+        externalId: operation.externalId,
+        eventType: "generation.completed",
+        eventId: `evt_${operation.id}`,
+        timestamp: Date.now()
+      };
+      response.callback = {
+        envelope,
+        signature: signHeygenEnvelope(envelope, heygenSimulatorSecret(env))
+      };
+    }
+    return { ok: true, response };
+  }
+
+  // V0-G4: reconcile an uncertain provider operation by querying the provider for
+  // the authoritative outcome. Reconciliation never resubmits; it only resolves
+  // unknown/submitting to a terminal state and records reconciledAt. A replay is a
+  // no-op once the operation is terminal.
+  function reconcileGenerationJob(actor, input) {
+    const access = getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const job = generationJobs.get(input.jobId);
+    if (!job || job.workspaceId !== input.workspaceId) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const operation = findOperationByJob(job.id);
+    if (!operation) {
+      return {
+        ok: false,
+        problem: problem(
+          "GENERATION_JOB_NOT_SUBMITTABLE",
+          409,
+          "Generation job not submittable",
+          "This generation has no provider operation to reconcile."
+        )
+      };
+    }
+    const terminal = new Set(["completed", "failed", "rejected", "cancelled"]);
+    if (terminal.has(operation.status)) {
+      return {
+        ok: true,
+        response: {
+          job: publicGenerationJob(job),
+          operation: publicProviderOperation(operation),
+          replay: true
+        }
+      };
+    }
+    const outcome = reconcileHeygenOperation(env, {
+      operationId: operation.id,
+      requestHash: operation.requestHash,
+      externalId: operation.externalId,
+      reconcileOutcome: input.reconcileOutcome
+    });
+    const now = new Date().toISOString();
+    if (outcome.status === "pending") {
+      return {
+        ok: true,
+        response: {
+          job: publicGenerationJob(job),
+          operation: publicProviderOperation(operation),
+          pending: true
+        }
+      };
+    }
+    applyProviderOutcome(operation, job, outcome, now, true);
+    providerOperations.set(operation.id, operation);
+    generationJobs.set(job.id, job);
+    return {
+      ok: true,
+      response: {
+        job: publicGenerationJob(job),
+        operation: publicProviderOperation(operation)
+      }
+    };
+  }
+
+  // V0-G4: cancel a generation. Cancellation stops new children; uncertain provider
+  // operations reconcile first. If reconciliation still cannot resolve, the job is
+  // cancel_requested and the caller is told we are checking (GENERATION_CANCEL_UNCERTAIN).
+  // A generation that already completed cannot be cancelled. Credit release is V0-G5.
+  function cancelGenerationJob(actor, input) {
+    const access = getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const job = generationJobs.get(input.jobId);
+    if (!job || job.workspaceId !== input.workspaceId) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    if (job.status === "cancelled") {
+      return {
+        ok: true,
+        response: { job: publicGenerationJob(job), replay: true }
+      };
+    }
+    if (job.status === "generated" || job.status === "failed") {
+      return {
+        ok: false,
+        problem: problem(
+          "GENERATION_JOB_NOT_SUBMITTABLE",
+          409,
+          "Generation job not submittable",
+          "This generation cannot be cancelled in its current state."
+        )
+      };
+    }
+    const operation = findOperationByJob(job.id);
+    const now = new Date().toISOString();
+    if (!operation) {
+      // Queued, never submitted: cancel directly. Reservation release is V0-G5.
+      job.status = "cancelled";
+      job.updatedAt = now;
+      generationJobs.set(job.id, job);
+      return { ok: true, response: { job: publicGenerationJob(job) } };
+    }
+    const uncertain = new Set(["submitting", "accepted", "unknown", "processing"]);
+    if (uncertain.has(operation.status)) {
+      const outcome = reconcileHeygenOperation(env, {
+        operationId: operation.id,
+        requestHash: operation.requestHash,
+        externalId: operation.externalId,
+        reconcileOutcome: input.reconcileOutcome
+      });
+      if (outcome.status === "pending") {
+        job.status = "cancel_requested";
+        job.updatedAt = now;
+        generationJobs.set(job.id, job);
+        return {
+          ok: true,
+          response: {
+            job: publicGenerationJob(job),
+            operation: publicProviderOperation(operation),
+            uncertain: true
+          }
+        };
+      }
+      if (outcome.status === "completed") {
+        // The provider completed the generation; cancellation can no longer undo it.
+        applyProviderOutcome(operation, job, outcome, now, false);
+        providerOperations.set(operation.id, operation);
+        generationJobs.set(job.id, job);
+        return {
+          ok: false,
+          problem: problem(
+            "GENERATION_JOB_NOT_SUBMITTABLE",
+            409,
+            "Generation job not submittable",
+            "This generation cannot be cancelled in its current state."
+          )
+        };
+      }
+      // accepted/processing/failed -> the operation is no longer active; cancel it.
+      operation.status = "cancelled";
+      operation.cancelledAt = now;
+      operation.updatedAt = now;
+      providerOperations.set(operation.id, operation);
+      job.status = "cancelled";
+      job.updatedAt = now;
+      generationJobs.set(job.id, job);
+      return { ok: true, response: { job: publicGenerationJob(job), operation: publicProviderOperation(operation) } };
+    }
+    // Operation already terminal-failed: cancel the job.
+    operation.status = "cancelled";
+    operation.cancelledAt = now;
+    operation.updatedAt = now;
+    providerOperations.set(operation.id, operation);
+    job.status = "cancelled";
+    job.updatedAt = now;
+    generationJobs.set(job.id, job);
+    return { ok: true, response: { job: publicGenerationJob(job), operation: publicProviderOperation(operation) } };
+  }
+
+  // Apply a reconciled provider outcome to an operation and its job. When
+  // `reconciled` is true the operation records reconciledAt (it came from unknown).
+  function applyProviderOutcome(operation, job, outcome, now, reconciled) {
+    if (outcome.externalId && !operation.externalId) {
+      operation.externalId = outcome.externalId;
+    }
+    if (outcome.status === "accepted") {
+      operation.status = "accepted";
+      operation.acceptedAt = operation.acceptedAt || now;
+      job.status = "accepted";
+    } else if (outcome.status === "processing") {
+      operation.status = "processing";
+      job.status = "generating";
+    } else if (outcome.status === "completed") {
+      operation.status = "completed";
+      operation.completedAt = now;
+      job.status = "generated";
+    } else if (outcome.status === "failed") {
+      operation.status = "failed";
+      operation.lastErrorCode = operation.lastErrorCode || "PROVIDER_OUTPUT_INVALID";
+      job.status = "failed";
+    }
+    if (reconciled) {
+      operation.reconciledAt = now;
+    }
+    operation.updatedAt = now;
+    job.updatedAt = now;
+  }
+
+  // V0-G4: process a signed HeyGen callback. The signature is verified in constant
+  // time, the timestamp must be within the callback window, and the event is
+  // deduplicated by (workspace, source, eventId) so a replay never transitions a
+  // second time. Malformed callbacks are rejected. Provider payloads stay private.
+  function processHeygenCallback(envelope, signature) {
+    if (!verifyHeygenSignature(envelope, signature, heygenSimulatorSecret(env))) {
+      return {
+        ok: false,
+        problem: problem(
+          "PROVIDER_CALLBACK_INVALID",
+          401,
+          "Provider callback invalid",
+          "The provider update could not be verified."
+        )
+      };
+    }
+    if (
+      !envelope ||
+      typeof envelope.workspaceId !== "string" ||
+      typeof envelope.jobId !== "string" ||
+      typeof envelope.operationId !== "string" ||
+      typeof envelope.eventType !== "string" ||
+      typeof envelope.eventId !== "string" ||
+      typeof envelope.timestamp !== "number"
+    ) {
+      return {
+        ok: false,
+        problem: problem(
+          "PROVIDER_OUTPUT_INVALID",
+          422,
+          "Provider output invalid",
+          "The provider update was malformed and was not accepted."
+        )
+      };
+    }
+    const inboxKey = `${envelope.workspaceId}:heygen:${envelope.eventId}`;
+    const duplicate = inboxEvents.get(inboxKey);
+    if (duplicate) {
+      return { ok: true, response: { ...duplicate.response, duplicate: true } };
+    }
+    if (Math.abs(Date.now() - envelope.timestamp) > HEYGEN_CALLBACK_WINDOW_MS) {
+      return {
+        ok: false,
+        problem: problem(
+          "PROVIDER_CALLBACK_INVALID",
+          401,
+          "Provider callback invalid",
+          "The provider update could not be verified."
+        )
+      };
+    }
+    const operation = [...providerOperations.values()].find(
+      (candidate) =>
+        candidate.workspaceId === envelope.workspaceId && candidate.id === envelope.operationId
+    );
+    if (!operation) {
+      // A signed callback that cannot be reconciled to an operation in this
+      // workspace does not leak whether the operation exists elsewhere.
+      return {
+        ok: false,
+        problem: problem(
+          "PROVIDER_CALLBACK_INVALID",
+          401,
+          "Provider callback invalid",
+          "The provider update could not be verified."
+        )
+      };
+    }
+    const job = generationJobs.get(operation.generationJobId);
+    if (!job || job.workspaceId !== envelope.workspaceId) {
+      return {
+        ok: false,
+        problem: problem(
+          "PROVIDER_CALLBACK_INVALID",
+          401,
+          "Provider callback invalid",
+          "The provider update could not be verified."
+        )
+      };
+    }
+    const validEvents = new Set([
+      "generation.accepted",
+      "generation.processing",
+      "generation.completed",
+      "generation.failed"
+    ]);
+    if (!validEvents.has(envelope.eventType)) {
+      return {
+        ok: false,
+        problem: problem(
+          "PROVIDER_OUTPUT_INVALID",
+          422,
+          "Provider output invalid",
+          "The provider update was malformed and was not accepted."
+        )
+      };
+    }
+    const now = new Date().toISOString();
+    const outcomeMap = {
+      "generation.accepted": "accepted",
+      "generation.processing": "processing",
+      "generation.completed": "completed",
+      "generation.failed": "failed"
+    };
+    // Idempotent transition: a repeat terminal event is a no-op, never a second
+    // transition or a second ledger entry (settlement is V0-G5).
+    const terminalOp = new Set(["completed", "failed", "rejected", "cancelled"]);
+    if (terminalOp.has(operation.status)) {
+      const response = { job: publicGenerationJob(job), operation: publicProviderOperation(operation) };
+      inboxEvents.set(inboxKey, { response });
+      return { ok: true, response: { ...response, duplicate: false } };
+    }
+    applyProviderOutcome(operation, job, { status: outcomeMap[envelope.eventType], externalId: envelope.externalId }, now, false);
+    providerOperations.set(operation.id, operation);
+    generationJobs.set(job.id, job);
+    const response = { job: publicGenerationJob(job), operation: publicProviderOperation(operation) };
+    inboxEvents.set(inboxKey, { response });
+    return { ok: true, response: { ...response, duplicate: false } };
+  }
+
+  // V0-G5: settle a terminal provider operation. Completed media is copied into
+  // private V0 storage through the adapter only, quarantined, validated and hashed,
+  // then bound to a GeneratedSegment, a versioned GeneratedAsset and a CreativeLineage
+  // row. The reconciled provider total is compared with the authorized maximum; credits
+  // are captured once on success (the unused remainder is returned) or released once on
+  // failure (the full reservation is returned). Settlement is idempotent and append-only:
+  // the CAPTURE/RELEASE ledger entry carries a job-derived idempotency key so a crash
+  // between media retention and ledger settlement is recovered without orphaned capture
+  // or duplicate release. The transient provider URL is never retained as production
+  // source; media is not clean until artifact validation passes. Settlement does not
+  // change the generation job status (it stays generated/failed); it settles the
+  // reservation and the ledger.
+  function settleGenerationJob(actor, input) {
+    const access = getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const job = generationJobs.get(input.jobId);
+    if (!job || job.workspaceId !== input.workspaceId) {
+      // A cross-workspace caller must not learn whether the job exists elsewhere.
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const operation = findOperationByJob(job.id);
+    if (!operation) {
+      return {
+        ok: false,
+        problem: problem(
+          "GENERATION_JOB_NOT_SUBMITTABLE",
+          409,
+          "Generation job not submittable",
+          "This generation has no provider operation to settle."
+        )
+      };
+    }
+    const terminal = new Set(["completed", "failed", "rejected", "cancelled"]);
+    if (!terminal.has(operation.status)) {
+      return {
+        ok: false,
+        problem: problem(
+          "GENERATION_JOB_NOT_SUBMITTABLE",
+          409,
+          "Generation job not submittable",
+          "This generation cannot be settled in its current state."
+        )
+      };
+    }
+    const reservation = [...creditReservations.values()].find(
+      (candidate) => candidate.generationJobId === job.id
+    );
+    if (!reservation) {
+      return {
+        ok: false,
+        problem: problem(
+          "GENERATION_JOB_NOT_SUBMITTABLE",
+          409,
+          "Generation job not submittable",
+          "This generation has no credit reservation to settle."
+        )
+      };
+    }
+    const wallet = creditWallets.get(reservation.walletId);
+
+    // Idempotent replay: once the reservation is captured or released the settlement
+    // is final. A replay (even with a new idempotency key) returns the original
+    // settlement and never writes a second ledger entry. Detection is by reservation
+    // state, not by the caller's idempotency key, so a crash-recovered second call and
+    // an explicit replay both converge without double capture.
+    if (reservation.status === "captured" || reservation.status === "released") {
+      return {
+        ok: true,
+        response: buildSettlementReplay(operation, job, reservation, wallet)
+      };
+    }
+
+    const failureOutcomes = new Set(["failed", "rejected", "cancelled"]);
+    if (failureOutcomes.has(operation.status)) {
+      return settleRelease(actor, operation, job, reservation, wallet);
+    }
+    return settleCapture(actor, operation, job, reservation, wallet);
+  }
+
+  // Release the full reservation once when the provider operation failed. The wallet is
+  // restored by the +max RELEASE ledger entry; the reservation becomes released. No media
+  // is retained for a failed operation. The RELEASE entry idempotency key is job-derived
+  // so a crash between reservation release and the ledger write is recovered once.
+  function settleRelease(actor, operation, job, reservation, wallet) {
+    const now = new Date().toISOString();
+    const releaseKey = `g5-release-${job.id}`;
+    const existing = [...creditLedgerEntries.values()].find(
+      (entry) => entry.walletId === wallet.id && entry.idempotencyKey === releaseKey
+    );
+    let entry = existing;
+    if (!entry) {
+      entry = writeLedgerEntry(
+        { workspaceId: job.workspaceId, walletId: wallet.id, currency: wallet.currency },
+        "RELEASE",
+        Number(reservation.amountMinor),
+        releaseKey,
+        "generation release",
+        now
+      );
+      entry.generationJobId = job.id;
+      creditLedgerEntries.set(entry.id, entry);
+    }
+    reservation.status = "released";
+    reservation.updatedAt = now;
+    creditReservations.set(reservation.id, reservation);
+    operation.settledAt = now;
+    operation.updatedAt = now;
+    providerOperations.set(operation.id, operation);
+    audits.push({
+      id: randomUUID(),
+      workspaceId: job.workspaceId,
+      actorUserId: actor.userId,
+      eventType: "generation.settled",
+      targetType: "GenerationJob",
+      targetId: job.id,
+      reason: "released",
+      occurredAt: now
+    });
+    return {
+      ok: true,
+      response: {
+        outcome: "released",
+        replay: false,
+        operation: publicProviderOperation(operation),
+        job: publicGenerationJob(job),
+        artifact: null,
+        segment: null,
+        asset: null,
+        lineage: null,
+        ledgerEntry: publicCreditLedgerEntry(entry),
+        reservation: publicCreditReservation(reservation),
+        wallet: publicCreditWallet(creditWallets.get(wallet.id))
+      }
+    };
+  }
+
+  // Capture credits once when the provider operation completed. Completed media is
+  // fetched through the adapter only, quarantined, validated, hashed and bound to a
+  // GeneratedSegment, a versioned GeneratedAsset and a CreativeLineage row. The
+  // reconciled provider total is compared with the authorized maximum; the unused
+  // remainder is returned to the wallet through the CAPTURE ledger entry. A crash after
+  // media retention and before the ledger write is recovered on the next call: the
+  // retained segment is detected, retain is skipped and the ledger is settled once.
+  function settleCapture(actor, operation, job, reservation, wallet) {
+    const existingSegment = [...generatedSegments.values()].find(
+      (candidate) => candidate.generationJobId === job.id
+    );
+    const now = new Date().toISOString();
+    let segment;
+    let asset;
+    let lineage;
+    let artifact;
+    if (existingSegment) {
+      // Crash-window recovery: media was retained before the crash. Re-bind the
+      // existing retained records and settle the ledger exactly once without
+      // re-retaining or double-capturing.
+      segment = existingSegment;
+      artifact = artifacts.get(segment.artifactId);
+      asset = [...generatedAssets.values()].find((candidate) => candidate.generationJobId === job.id);
+      lineage = [...creativeLineages.values()].find((candidate) => candidate.generationJobId === job.id);
+    } else {
+      // Fetch the completed media through the adapter only. The transient provider
+      // URL and raw provider response stay adapter-private; the adapter returns only
+      // the retained-media descriptor and the reconciled provider total.
+      const mediaResult = fetchHeygenMedia(env, {
+        operationId: operation.id,
+        externalId: operation.externalId,
+        durationSeconds: job.durationSeconds,
+        estimatedMaximumMinor: operation.estimatedMaximumMinor
+      });
+      if (!mediaResult.ok) {
+        if (mediaResult.kind === "unavailable") {
+          return {
+            ok: false,
+            problem: problem(
+              "DEPENDENCY_UNAVAILABLE",
+              503,
+              "Dependency unavailable",
+              "The provider could not be reached. Try again."
+            )
+          };
+        }
+        // malformed media: the artifact is rejected and no credits are captured.
+        return {
+          ok: false,
+          problem: problem(
+            mediaResult.errorCode || "ASSET_MEDIA_MALFORMED",
+            422,
+            "Asset media malformed",
+            "The generated media failed validation and was not accepted."
+          )
+        };
+      }
+      const media = mediaResult.media;
+      // Validate the retained media descriptor before accepting it as clean.
+      if (
+        !isSha256(media.sha256) ||
+        !Number.isInteger(media.byteSize) ||
+        media.byteSize <= 0 ||
+        !Number.isInteger(media.durationSeconds) ||
+        media.durationSeconds <= 0 ||
+        !supportedContentTypes.has(media.contentType) ||
+        !Number.isInteger(media.providerTotalMinor) ||
+        media.providerTotalMinor < 0
+      ) {
+        return {
+          ok: false,
+          problem: problem(
+            "ASSET_MEDIA_MALFORMED",
+            422,
+            "Asset media malformed",
+            "The generated media failed validation and was not accepted."
+          )
+        };
+      }
+      // Reconcile the provider total against the authorized maximum. A provider total
+      // above the authorization blocks settlement: no media is retained and no credits
+      // are captured or released.
+      const authorized = Number(operation.estimatedMaximumMinor);
+      if (media.providerTotalMinor > authorized) {
+        return {
+          ok: false,
+          problem: problem(
+            "PROVIDER_COST_EXCEEDS_AUTHORIZATION",
+            409,
+            "Provider cost exceeds authorization",
+            "The provider cost exceeded the authorized maximum and was not settled."
+          )
+        };
+      }
+      // Retain the media into private V0 storage through the adapter only. The
+      // artifact starts quarantined and is promoted to CLEAN once validation passes;
+      // media is not clean until that promotion. The transient provider URL is never
+      // stored; only the hash, duration, content type and byte size are retained.
+      artifact = {
+        id: randomUUID(),
+        workspaceId: job.workspaceId,
+        fileName: `generated-${job.id}.mp4`,
+        contentType: media.contentType,
+        byteSize: media.byteSize,
+        sha256: media.sha256,
+        status: "QUARANTINED",
+        retentionClass: "quarantine",
+        producer: `job:${job.id}`,
+        schemaVersion: "artifact.generated.v1",
+        objectKey: `clean-media/${job.workspaceId}/${randomUUID()}`,
+        createdAt: now,
+        updatedAt: now
+      };
+      artifacts.set(artifact.id, artifact);
+      // Media validation passes: the retained artifact is promoted to CLEAN. The
+      // segment, versioned asset and immutable lineage row bind the retained artifact
+      // to the provider operation, estimate, brand profile, selected script, avatar
+      // and bound price version.
+      artifact.status = "CLEAN";
+      artifact.retentionClass = "clean-media";
+      artifact.updatedAt = now;
+      artifacts.set(artifact.id, artifact);
+      segment = {
+        id: randomUUID(),
+        workspaceId: job.workspaceId,
+        generationJobId: job.id,
+        providerOperationId: operation.id,
+        provider: HEYGEN_PROVIDER,
+        externalId: media.externalId,
+        segmentIndex: 0,
+        durationSeconds: media.durationSeconds,
+        contentType: media.contentType,
+        byteSize: media.byteSize,
+        sha256: media.sha256,
+        artifactId: artifact.id,
+        sourceFetchedAt: now,
+        createdAt: now,
+        updatedAt: now
+      };
+      generatedSegments.set(segment.id, segment);
+      asset = {
+        id: randomUUID(),
+        workspaceId: job.workspaceId,
+        generationJobId: job.id,
+        segmentId: segment.id,
+        artifactId: artifact.id,
+        version: 1,
+        kind: "provider_video",
+        durationSeconds: media.durationSeconds,
+        contentType: media.contentType,
+        sha256: media.sha256,
+        status: "CLEAN",
+        createdAt: now,
+        updatedAt: now
+      };
+      generatedAssets.set(asset.id, asset);
+      lineage = {
+        id: randomUUID(),
+        workspaceId: job.workspaceId,
+        generationJobId: job.id,
+        brandProfileId: job.brandProfileId,
+        selectedScriptId: job.selectedScriptId ?? null,
+        avatarProfileId: job.avatarProfileId ?? null,
+        estimateId: job.estimateId,
+        provider: HEYGEN_PROVIDER,
+        providerOperationId: operation.id,
+        priceVersion: job.priceVersion,
+        generatedAssetId: asset.id,
+        createdAt: now,
+        updatedAt: now
+      };
+      creativeLineages.set(lineage.id, lineage);
+      // Record the reconciled provider total on the operation at retain time so a
+      // crash-window recovery reads the same total without re-fetching. settledAt is
+      // set later, at ledger settlement.
+      operation.providerTotalMinor = media.providerTotalMinor;
+      operation.updatedAt = now;
+      providerOperations.set(operation.id, operation);
+      // Crash-window simulator: media was retained before the crash, but the ledger
+      // settlement did not happen. Return DEPENDENCY_UNAVAILABLE so the caller retries;
+      // the next call detects the retained segment and settles the ledger once.
+      if (resolveHeygenMediaMode(env) === "crash_after_retain") {
+        return {
+          ok: false,
+          problem: problem(
+            "DEPENDENCY_UNAVAILABLE",
+            503,
+            "Dependency unavailable",
+            "Settlement was interrupted after media retention. Try again."
+          )
+        };
+      }
+    }
+    // Settle the ledger exactly once. The CAPTURE entry returns the unused remainder
+    // (authorized maximum minus reconciled actual); when the actual equals the maximum
+    // the return is 0 and the wallet balance is unchanged. The job-derived idempotency
+    // key makes capture exactly-once across the crash window.
+    const captureKey = `g5-capture-${job.id}`;
+    const existingCapture = [...creditLedgerEntries.values()].find(
+      (entry) => entry.walletId === wallet.id && entry.idempotencyKey === captureKey
+    );
+    const actual = Number(operation.providerTotalMinor);
+    const captureAmount = Number(operation.estimatedMaximumMinor) - actual;
+    let entry = existingCapture;
+    if (!entry) {
+      entry = writeLedgerEntry(
+        { workspaceId: job.workspaceId, walletId: wallet.id, currency: wallet.currency },
+        "CAPTURE",
+        captureAmount,
+        captureKey,
+        "generation capture",
+        now
+      );
+      entry.generationJobId = job.id;
+      creditLedgerEntries.set(entry.id, entry);
+    }
+    // Record the settlement timestamp on the operation. The provider total was
+    // reconciled at retain time; settledAt marks the ledger settlement.
+    operation.settledAt = now;
+    operation.updatedAt = now;
+    providerOperations.set(operation.id, operation);
+    reservation.status = "captured";
+    reservation.updatedAt = now;
+    creditReservations.set(reservation.id, reservation);
+    audits.push({
+      id: randomUUID(),
+      workspaceId: job.workspaceId,
+      actorUserId: actor.userId,
+      eventType: "generation.settled",
+      targetType: "GenerationJob",
+      targetId: job.id,
+      reason: "captured",
+      occurredAt: now
+    });
+    return {
+      ok: true,
+      response: {
+        outcome: "captured",
+        replay: false,
+        operation: publicProviderOperation(operation),
+        job: publicGenerationJob(job),
+        artifact: publicArtifact(artifact),
+        segment: publicGeneratedSegment(segment),
+        asset: publicGeneratedAsset(asset),
+        lineage: publicCreativeLineage(lineage),
+        ledgerEntry: publicCreditLedgerEntry(entry),
+        reservation: publicCreditReservation(reservation),
+        wallet: publicCreditWallet(creditWallets.get(wallet.id))
+      }
+    };
+  }
+
+  // Reconstruct a settlement replay from the retained records. A captured settlement
+  // returns the retained media; a released settlement returns null media.
+  function buildSettlementReplay(operation, job, reservation, wallet) {
+    if (reservation.status === "released") {
+      const releaseKey = `g5-release-${job.id}`;
+      const entry = [...creditLedgerEntries.values()].find(
+        (candidate) => candidate.walletId === wallet.id && candidate.idempotencyKey === releaseKey
+      );
+      return {
+        outcome: "released",
+        replay: true,
+        operation: publicProviderOperation(operation),
+        job: publicGenerationJob(job),
+        artifact: null,
+        segment: null,
+        asset: null,
+        lineage: null,
+        ledgerEntry: entry ? publicCreditLedgerEntry(entry) : null,
+        reservation: publicCreditReservation(reservation),
+        wallet: publicCreditWallet(creditWallets.get(wallet.id))
+      };
+    }
+    const segment = [...generatedSegments.values()].find((candidate) => candidate.generationJobId === job.id);
+    const asset = [...generatedAssets.values()].find((candidate) => candidate.generationJobId === job.id);
+    const lineage = [...creativeLineages.values()].find((candidate) => candidate.generationJobId === job.id);
+    const artifact = segment ? artifacts.get(segment.artifactId) : null;
+    const captureKey = `g5-capture-${job.id}`;
+    const entry = [...creditLedgerEntries.values()].find(
+      (candidate) => candidate.walletId === wallet.id && candidate.idempotencyKey === captureKey
+    );
+    return {
+      outcome: "captured",
+      replay: true,
+      operation: publicProviderOperation(operation),
+      job: publicGenerationJob(job),
+      artifact: artifact ? publicArtifact(artifact) : null,
+      segment: segment ? publicGeneratedSegment(segment) : null,
+      asset: asset ? publicGeneratedAsset(asset) : null,
+      lineage: lineage ? publicCreativeLineage(lineage) : null,
+      ledgerEntry: entry ? publicCreditLedgerEntry(entry) : null,
+      reservation: publicCreditReservation(reservation),
+      wallet: publicCreditWallet(creditWallets.get(wallet.id))
     };
   }
 
@@ -752,6 +1962,339 @@ export function createWorkspaceStore() {
       }
     }
     avatarCatalogsMaterialized.add(key);
+  }
+
+  // V0-G2 creator wallet and verified credit purchase. Money is integer minor
+  // units only. The deterministic Razorpay (India, INR) and Stripe
+  // (international) simulators sign the callback envelope; the handler verifies
+  // the signature over the canonical envelope, enforces a timestamp window,
+  // deduplicates by provider event id, reconciles amount/currency/provider/
+  // workspace, then transitions the purchase and writes an append-only ledger
+  // entry. Payment instrument details are never stored.
+  function ensureCreditWallet(workspaceId, currency, now) {
+    const existing = [...creditWallets.values()].find(
+      (wallet) => wallet.workspaceId === workspaceId && wallet.currency === currency
+    );
+    if (existing) {
+      return existing;
+    }
+    const wallet = {
+      id: randomUUID(),
+      workspaceId,
+      currency,
+      balanceMinor: 0,
+      createdAt: now,
+      updatedAt: now
+    };
+    creditWallets.set(wallet.id, wallet);
+    return wallet;
+  }
+
+  function createCreditPurchase(actor, input) {
+    if (!getWorkspaceForActor(actor, input.workspaceId)) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const validation = validateCreditPurchaseInput(input);
+    if (validation) {
+      return { ok: false, problem: validation };
+    }
+    const now = new Date().toISOString();
+    const wallet = ensureCreditWallet(input.workspaceId, input.currency, now);
+    const purchase = {
+      id: randomUUID(),
+      workspaceId: input.workspaceId,
+      walletId: wallet.id,
+      provider: input.provider,
+      providerReference: `sim_${input.provider}_${randomUUID()}`,
+      status: "initiated",
+      amountMinor: input.amountMinor,
+      currency: input.currency,
+      idempotencyKey: input.idempotencyKey,
+      createdAt: now,
+      updatedAt: now
+    };
+    creditPurchases.set(purchase.id, purchase);
+    // The simulator returns the signed callback envelope exactly as the provider
+    // would deliver it, so the test can post the webhook back. The signing
+    // secret never leaves the simulator.
+    const envelope = {
+      workspaceId: input.workspaceId,
+      purchaseId: purchase.id,
+      walletId: wallet.id,
+      provider: input.provider,
+      providerReference: purchase.providerReference,
+      amountMinor: input.amountMinor,
+      currency: input.currency,
+      eventType: "payment.success",
+      eventId: `evt_${purchase.id}`,
+      timestamp: Date.now()
+    };
+    const signature = signPaymentEnvelope(envelope, paymentSimulatorSecret(env));
+    return {
+      ok: true,
+      response: {
+        purchase: publicCreditPurchase(purchase),
+        wallet: publicCreditWallet(wallet),
+        checkout: {
+          provider: input.provider,
+          providerReference: purchase.providerReference,
+          envelope,
+          signature
+        }
+      }
+    };
+  }
+
+  function processPaymentCallback(source, envelope, signature) {
+    if (!verifyPaymentSignature(envelope, signature, paymentSimulatorSecret(env))) {
+      return {
+        ok: false,
+        problem: problem(
+          "PAYMENT_SIGNATURE_INVALID",
+          401,
+          "Payment signature invalid",
+          "The payment update could not be verified."
+        )
+      };
+    }
+    const inboxKey = `${envelope.workspaceId}:${source}:${envelope.eventId}`;
+    const duplicate = inboxEvents.get(inboxKey);
+    if (duplicate) {
+      // A replayed callback acknowledges with the original transition; it never
+      // creates a second ledger entry or a second credit.
+      return { ok: true, response: { ...duplicate.response, duplicate: true } };
+    }
+    // Timestamp tolerance is part of signature verification: an out-of-window
+    // envelope fails verification rather than being replayed as fresh.
+    if (Math.abs(Date.now() - envelope.timestamp) > PAYMENT_CALLBACK_WINDOW_MS) {
+      return {
+        ok: false,
+        problem: problem(
+          "PAYMENT_SIGNATURE_INVALID",
+          401,
+          "Payment signature invalid",
+          "The payment update could not be verified."
+        )
+      };
+    }
+    const purchase = [...creditPurchases.values()].find(
+      (candidate) =>
+        candidate.workspaceId === envelope.workspaceId &&
+        candidate.provider === source &&
+        candidate.providerReference === envelope.providerReference
+    );
+    if (!purchase) {
+      // A signed callback that cannot be reconciled to a purchase in this
+      // workspace is a provider/ledger mismatch; it does not leak whether the
+      // purchase exists in another workspace.
+      return {
+        ok: false,
+        problem: problem(
+          "PAYMENT_AMOUNT_MISMATCH",
+          409,
+          "Payment amount mismatch",
+          "The payment amount or currency did not match the purchase."
+        )
+      };
+    }
+    if (
+      purchase.amountMinor !== envelope.amountMinor ||
+      purchase.currency !== envelope.currency
+    ) {
+      return {
+        ok: false,
+        problem: problem(
+          "PAYMENT_AMOUNT_MISMATCH",
+          409,
+          "Payment amount mismatch",
+          "The payment amount or currency did not match the purchase."
+        )
+      };
+    }
+    const transition = applyPurchaseTransition(purchase, envelope, source);
+    if (!transition.ok) {
+      return transition;
+    }
+    const response = transition.response;
+    inboxEvents.set(inboxKey, { response });
+    return { ok: true, response: { ...response, duplicate: false } };
+  }
+
+  function applyPurchaseTransition(purchase, envelope, source) {
+    const now = new Date().toISOString();
+    if (envelope.eventType === "payment.pending") {
+      purchase.status = "pending";
+      purchase.updatedAt = now;
+      creditPurchases.set(purchase.id, purchase);
+      return { ok: true, response: { purchase: publicCreditPurchase(purchase), ledgerEntry: null, wallet: publicCreditWallet(creditWallets.get(purchase.walletId)) } };
+    }
+    if (envelope.eventType === "payment.success") {
+      if (purchase.status === "succeeded") {
+        // Already credited; a repeat success event is a no-op, never a second credit.
+        return { ok: true, response: { purchase: publicCreditPurchase(purchase), ledgerEntry: null, wallet: publicCreditWallet(creditWallets.get(purchase.walletId)) } };
+      }
+      const entry = writeLedgerEntry(purchase, "PURCHASE", purchase.amountMinor, envelope.eventId, null, now);
+      purchase.status = "succeeded";
+      purchase.updatedAt = now;
+      creditPurchases.set(purchase.id, purchase);
+      return { ok: true, response: { purchase: publicCreditPurchase(purchase), ledgerEntry: publicCreditLedgerEntry(entry), wallet: publicCreditWallet(creditWallets.get(purchase.walletId)) } };
+    }
+    if (envelope.eventType === "payment.refunded") {
+      if (purchase.status === "refunded") {
+        return { ok: true, response: { purchase: publicCreditPurchase(purchase), ledgerEntry: null, wallet: publicCreditWallet(creditWallets.get(purchase.walletId)) } };
+      }
+      const entry = writeLedgerEntry(purchase, "REFUND", -purchase.amountMinor, envelope.eventId, "provider refund", now);
+      purchase.status = "refunded";
+      purchase.updatedAt = now;
+      creditPurchases.set(purchase.id, purchase);
+      return { ok: true, response: { purchase: publicCreditPurchase(purchase), ledgerEntry: publicCreditLedgerEntry(entry), wallet: publicCreditWallet(creditWallets.get(purchase.walletId)) } };
+    }
+    if (envelope.eventType === "payment.disputed") {
+      if (purchase.status === "disputed" || purchase.status === "refunded") {
+        return { ok: true, response: { purchase: publicCreditPurchase(purchase), ledgerEntry: null, wallet: publicCreditWallet(creditWallets.get(purchase.walletId)) } };
+      }
+      const entry = writeLedgerEntry(purchase, "REFUND", -purchase.amountMinor, envelope.eventId, "provider dispute reversal", now);
+      purchase.status = "disputed";
+      purchase.updatedAt = now;
+      creditPurchases.set(purchase.id, purchase);
+      return { ok: true, response: { purchase: publicCreditPurchase(purchase), ledgerEntry: publicCreditLedgerEntry(entry), wallet: publicCreditWallet(creditWallets.get(purchase.walletId)) } };
+    }
+    return {
+      ok: false,
+      problem: problem("VALIDATION_FAILED", 422, "Validation failed", "Unsupported payment event type.")
+    };
+  }
+
+  function writeLedgerEntry(purchase, type, amountMinor, idempotencyKey, reason, now) {
+    const entry = {
+      id: randomUUID(),
+      workspaceId: purchase.workspaceId,
+      walletId: purchase.walletId,
+      generationJobId: null,
+      type,
+      amountMinor,
+      currency: purchase.currency,
+      idempotencyKey,
+      reason,
+      effectiveAt: now,
+      createdAt: now
+    };
+    creditLedgerEntries.set(entry.id, entry);
+    const wallet = creditWallets.get(purchase.walletId);
+    wallet.balanceMinor += amountMinor;
+    wallet.updatedAt = now;
+    creditWallets.set(wallet.id, wallet);
+    return entry;
+  }
+
+  function listWalletLedger(actor, input) {
+    const access = getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const wallet = creditWallets.get(input.walletId);
+    if (!wallet || wallet.workspaceId !== input.workspaceId) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const limit = normalizeLimit(input.limit);
+    const all = [...creditLedgerEntries.values()]
+      .filter((entry) => entry.walletId === wallet.id)
+      .sort((left, right) => `${left.effectiveAt}:${left.id}`.localeCompare(`${right.effectiveAt}:${right.id}`));
+    let running = 0;
+    const withRunning = all.map((entry) => {
+      running += entry.amountMinor;
+      return { entry, runningBalanceMinor: running };
+    });
+    const start = input.cursor ? withRunning.findIndex((row) => row.entry.id === input.cursor) + 1 : 0;
+    const offset = Math.max(start, 0);
+    const pageRows = withRunning.slice(offset, offset + limit);
+    const entries = pageRows.map((row) => publicCreditLedgerEntry(row.entry, row.runningBalanceMinor));
+    const nextCursor = pageRows.length > 0 && offset + limit < withRunning.length ? pageRows[pageRows.length - 1].entry.id : null;
+    return {
+      ok: true,
+      response: {
+        wallet: publicCreditWallet(wallet),
+        entries,
+        page: { limit, nextCursor },
+        reconciliation: canPerform(access.membership.role, "view_provider_financial_reconciliation")
+          ? creditReconciliation(wallet)
+          : null
+      }
+    };
+  }
+
+  function creditReconciliation(wallet) {
+    const entries = [...creditLedgerEntries.values()].filter((entry) => entry.walletId === wallet.id);
+    const ledgerPurchaseMinor = entries
+      .filter((entry) => entry.type === "PURCHASE")
+      .reduce((sum, entry) => sum + entry.amountMinor, 0);
+    const ledgerRefundMinor = entries
+      .filter((entry) => entry.type === "REFUND")
+      .reduce((sum, entry) => sum + (-entry.amountMinor), 0);
+    const simulatorPaidMinor = [...creditPurchases.values()]
+      .filter((purchase) => purchase.walletId === wallet.id && purchase.status === "succeeded")
+      .reduce((sum, purchase) => sum + purchase.amountMinor, 0);
+    return {
+      currency: wallet.currency,
+      ledgerPurchaseMinor,
+      ledgerRefundMinor,
+      simulatorPaidMinor,
+      matched: ledgerPurchaseMinor === simulatorPaidMinor
+    };
+  }
+
+  function createCreditAdjustment(actor, input) {
+    const access = getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    if (!canPerform(access.membership.role, "adjust_credits")) {
+      return { ok: false, problem: problem("PERMISSION_DENIED", 403, "Permission denied", "Your role cannot perform this action.") };
+    }
+    const wallet = creditWallets.get(input.walletId);
+    if (!wallet || wallet.workspaceId !== input.workspaceId) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const validation = validateCreditAdjustmentInput(input, wallet.currency);
+    if (validation) {
+      return { ok: false, problem: validation };
+    }
+    const now = new Date().toISOString();
+    const signedAmount = input.direction === "credit" ? input.amountMinor : -input.amountMinor;
+    const purchase = { workspaceId: input.workspaceId, walletId: wallet.id, currency: wallet.currency };
+    const entry = writeLedgerEntry(purchase, "ADJUSTMENT", signedAmount, input.idempotencyKey, input.reason, now);
+    audits.push({
+      id: randomUUID(),
+      workspaceId: input.workspaceId,
+      actorUserId: actor.userId,
+      eventType: "credit.adjustment.recorded",
+      targetType: "CreditLedgerEntry",
+      targetId: entry.id,
+      reason: input.reason,
+      occurredAt: now
+    });
+    return {
+      ok: true,
+      response: {
+        ledgerEntry: publicCreditLedgerEntry(entry),
+        wallet: publicCreditWallet(creditWallets.get(wallet.id))
+      }
+    };
   }
 
   function seedBlueprintLibraryEntry(actor, input) {
@@ -2054,6 +3597,13 @@ export function createWorkspaceStore() {
     createBrandCrawlRun,
     approveBrandProfile,
     createGenerationEstimate,
+    confirmGenerationEstimate,
+    getGenerationJob,
+    submitGenerationJob,
+    reconcileGenerationJob,
+    cancelGenerationJob,
+    processHeygenCallback,
+    settleGenerationJob,
     listBlueprints,
     seedBlueprintLibraryEntry,
     createBlueprintRequest,
@@ -2075,6 +3625,10 @@ export function createWorkspaceStore() {
     expireJobLeases,
     relayOutbox,
     listAvatars,
+    createCreditPurchase,
+    processPaymentCallback,
+    listWalletLedger,
+    createCreditAdjustment,
     disconnect: () => {}
   };
 }
@@ -2819,17 +4373,41 @@ export function createPrismaWorkspaceStore(env = process.env) {
             }
           });
         }
+        // V0-G3: bind an active provider price version and record the input
+        // hash, expiry and optimistic version so confirmation can reject stale,
+        // changed or replayed inputs. The 30s pilot cap and 48,000 minor-unit
+        // authorized maximum are the deterministic simulator policy.
+        const nowDate = new Date();
+        const priceVersion = await tx.providerPriceVersion.findFirst({
+          where: {
+            provider: "heygen-simulator",
+            currency: "INR",
+            validFrom: { lte: nowDate },
+            validUntil: { gte: nowDate }
+          }
+        });
+        if (!priceVersion) {
+          return {
+            ok: false,
+            problem: problem("VALIDATION_FAILED", 422, "Validation failed", "No active provider price version is available for this route.")
+          };
+        }
+        const durationSeconds = normalizeDurationSeconds(input.durationSeconds);
         const estimate = await tx.generationEstimate.create({
           data: {
             workspaceId: input.workspaceId,
             brandProfileId: profile.id,
             status: "awaiting_confirmation",
             provider: "heygen-simulator",
-            priceVersion: "v0.local.1",
+            priceVersion: priceVersion.priceVersion,
             maximumAuthorizedMinor: 48000n,
             currency: "INR",
             selectedScriptId: input.selectedScriptId,
-            avatarProfileId: input.avatarProfileId
+            avatarProfileId: input.avatarProfileId,
+            inputHash: computeGenerationInputHash(input),
+            expiresAt: new Date(nowDate.getTime() + estimateTtlMs(env)),
+            version: 1,
+            durationSeconds
           }
         });
         return {
@@ -2842,6 +4420,754 @@ export function createPrismaWorkspaceStore(env = process.env) {
       },
       input.workspaceId
     );
+  }
+
+  // V0-G3 Prisma: confirm a versioned estimate and atomically reserve credits
+  // for one generation job inside a single short database transaction. The
+  // estimate must still be awaiting confirmation, the optimistic version and
+  // input hash must match, the estimate must not have expired, and the wallet
+  // must hold at least the authorized maximum. Confirmation creates the
+  // GenerationJob, the active CreditReservation and the RESERVE ledger entry
+  // that debits the wallet, then transitions the estimate to credits_reserved.
+  // The partial unique index credit_reservations_one_active_per_job_idx is the
+  // database-side guard against a second active reservation for the same job
+  // under concurrent confirmation, retry or worker crash; a collision surfaces
+  // as CREDIT_RESERVATION_CONFLICT. Reservation does not imply provider
+  // submission.
+  async function confirmGenerationEstimate(actor, input) {
+    const access = await getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    try {
+      return await withActor(
+        actor,
+        async (tx) => {
+          const estimate = await tx.generationEstimate.findFirst({
+            where: { id: input.estimateId, workspaceId: input.workspaceId }
+          });
+          if (!estimate) {
+            return {
+              ok: false,
+            problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          };
+        }
+        if (estimate.status !== "awaiting_confirmation") {
+          return {
+            ok: false,
+            problem: problem("CREDIT_RESERVATION_CONFLICT", 409, "Credit reservation conflict", "Credits are already reserved for this generation.")
+          };
+        }
+        if (Number(input.version) !== estimate.version) {
+          return {
+            ok: false,
+            problem: problem("RESOURCE_VERSION_STALE", 409, "Resource version stale", "This item changed after you opened it. Review the latest version.")
+          };
+        }
+        const confirmHash = computeGenerationInputHash(input);
+        if (confirmHash !== estimate.inputHash) {
+          return {
+            ok: false,
+            problem: problem("ESTIMATE_INPUT_CHANGED", 409, "Estimate input changed", "The script, avatar or settings changed. Request a new estimate.", true)
+          };
+        }
+        if (Date.now() > estimate.expiresAt.getTime()) {
+          return {
+            ok: false,
+            problem: problem("ESTIMATE_EXPIRED", 409, "Estimate expired", "This estimate expired. Request a new estimate.", true)
+          };
+        }
+        // Atomic estimate claim: only one concurrent confirmation can transition
+        // awaiting_confirmation -> credits_reserved. The conditional updateMany
+        // row-locks the estimate; a racing caller's update sees the new status and
+        // its WHERE clause fails (count 0), so it cannot create a second job or
+        // debit a second reservation. This is the exactly-once guard that the
+        // check-then-write sequence alone cannot provide.
+        const claimed = await tx.generationEstimate.updateMany({
+          where: {
+            id: estimate.id,
+            workspaceId: input.workspaceId,
+            status: "awaiting_confirmation",
+            version: estimate.version,
+            inputHash: estimate.inputHash
+          },
+          data: { status: "credits_reserved", confirmedAt: new Date() }
+        });
+        if (claimed.count !== 1) {
+          const current = await tx.generationEstimate.findFirst({
+            where: { id: input.estimateId, workspaceId: input.workspaceId }
+          });
+          if (!current) {
+            return {
+              ok: false,
+              problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+            };
+          }
+          if (current.status !== "awaiting_confirmation") {
+            return {
+              ok: false,
+              problem: problem("CREDIT_RESERVATION_CONFLICT", 409, "Credit reservation conflict", "Credits are already reserved for this generation.")
+            };
+          }
+          if (Number(input.version) !== current.version) {
+            return {
+              ok: false,
+              problem: problem("RESOURCE_VERSION_STALE", 409, "Resource version stale", "This item changed after you opened it. Review the latest version.")
+            };
+          }
+          if (confirmHash !== current.inputHash) {
+            return {
+              ok: false,
+              problem: problem("ESTIMATE_INPUT_CHANGED", 409, "Estimate input changed", "The script, avatar or settings changed. Request a new estimate.", true)
+            };
+          }
+          return {
+            ok: false,
+            problem: problem("CREDIT_RESERVATION_CONFLICT", 409, "Credit reservation conflict", "Credits are already reserved for this generation.")
+          };
+        }
+        const updatedEstimate = await tx.generationEstimate.findFirst({
+          where: { id: estimate.id, workspaceId: input.workspaceId }
+        });
+        const wallet = await ensurePrismaCreditWallet(tx, input.workspaceId, estimate.currency);
+        // Conditional atomic debit: the wallet is debited only when its balance is
+        // at least the authorized maximum. If a concurrent reservation dropped the
+        // balance below the maximum, count is 0 and the transaction rolls back the
+        // estimate claim, so no partial confirmation survives.
+        const debited = await tx.creditWallet.updateMany({
+          where: { id: wallet.id, balanceMinor: { gte: estimate.maximumAuthorizedMinor } },
+          data: { balanceMinor: { decrement: estimate.maximumAuthorizedMinor } }
+        });
+        if (debited.count !== 1) {
+          return {
+            ok: false,
+            problem: problem("CREDIT_BALANCE_INSUFFICIENT", 409, "Credit balance insufficient", "Add creator credits before generating this video.")
+          };
+        }
+        const job = await tx.generationJob.create({
+          data: {
+            workspaceId: input.workspaceId,
+            estimateId: estimate.id,
+            brandProfileId: estimate.brandProfileId,
+            selectedScriptId: estimate.selectedScriptId,
+            avatarProfileId: estimate.avatarProfileId,
+            status: "queued",
+            idempotencyKey: input.idempotencyKey,
+            inputHash: estimate.inputHash,
+            version: estimate.version,
+            durationSeconds: estimate.durationSeconds,
+            maximumAuthorizedMinor: estimate.maximumAuthorizedMinor,
+            currency: estimate.currency,
+            priceVersion: estimate.priceVersion
+          }
+        });
+        const reservation = await tx.creditReservation.create({
+          data: {
+            workspaceId: input.workspaceId,
+            generationJobId: job.id,
+            walletId: wallet.id,
+            status: "ACTIVE",
+            amountMinor: estimate.maximumAuthorizedMinor,
+            currency: estimate.currency,
+            idempotencyKey: input.idempotencyKey,
+            expiresAt: estimate.expiresAt
+          }
+        });
+        const reserveEntry = await tx.creditLedgerEntry.create({
+          data: {
+            workspaceId: input.workspaceId,
+            walletId: wallet.id,
+            generationJobId: job.id,
+            type: "RESERVE",
+            amountMinor: -estimate.maximumAuthorizedMinor,
+            currency: estimate.currency,
+            idempotencyKey: input.idempotencyKey,
+            reason: "generation reservation"
+          }
+        });
+        const updatedWallet = await tx.creditWallet.findUnique({ where: { id: wallet.id } });
+        await tx.auditEvent.create({
+          data: {
+            workspaceId: input.workspaceId,
+            actorUserId: actor.userId,
+            eventType: "generation.confirmed",
+            targetType: "GenerationJob",
+            targetId: job.id
+          }
+        });
+        return {
+          ok: true,
+          response: {
+            estimate: publicGenerationEstimate(updatedEstimate),
+            job: publicGenerationJob(job),
+            reservation: publicCreditReservation(reservation),
+            ledgerEntry: publicCreditLedgerEntry(reserveEntry),
+            wallet: publicCreditWallet(updatedWallet)
+          }
+        };
+      },
+      input.workspaceId
+    );
+    } catch (error) {
+      // A unique-constraint or write-conflict collision (e.g. the one-active
+      // reservation per job partial index) means a concurrent confirmation won the
+      // race; surface a stable conflict, never a raw 500.
+      if (isPrismaConflictError(error)) {
+        return {
+          ok: false,
+          problem: problem("CREDIT_RESERVATION_CONFLICT", 409, "Credit reservation conflict", "Credits are already reserved for this generation.")
+        };
+      }
+      throw error;
+    }
+  }
+
+  async function getGenerationJob(actor, input) {
+    const access = await getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    return withActor(
+      actor,
+      async (tx) => {
+        const job = await tx.generationJob.findFirst({
+          where: { id: input.jobId, workspaceId: input.workspaceId }
+        });
+        if (!job) {
+          return {
+            ok: false,
+            problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          };
+        }
+        const reservation = await tx.creditReservation.findFirst({
+          where: { generationJobId: job.id, status: "ACTIVE" }
+        });
+        return {
+          ok: true,
+          response: {
+            job: publicGenerationJob(job),
+            ...(reservation ? { reservation: publicCreditReservation(reservation) } : {})
+          }
+        };
+      },
+      input.workspaceId
+    );
+  }
+
+  // V0-G4 prisma: exactly-once HeyGen submission. The operation is persisted in
+  // SUBMITTING and the job advanced to submitting inside one short transaction
+  // BEFORE the provider network I/O; the provider outcome is applied in a second
+  // short transaction after the call. A crash between the two leaves a resumable
+  // SUBMITTING operation, never a blind duplicate. Provider payloads stay
+  // adapter-private; credit capture/release is V0-G5.
+  async function submitGenerationJob(actor, input) {
+    const access = await getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    // First short transaction: exactly-once validation + durable pre-network row.
+    // A concurrent create that loses the one-operation-per-job unique race throws
+    // P2002; reconcile it to a replay or stable conflict instead of a raw 500.
+    let prepared;
+    try {
+      prepared = await withActor(
+        actor,
+        async (tx) => {
+          const existingByKey = await tx.providerOperation.findUnique({
+          where: {
+            workspaceId_idempotencyKey: {
+              workspaceId: input.workspaceId,
+              idempotencyKey: input.idempotencyKey
+            }
+          }
+        });
+        if (existingByKey) {
+          const job = await tx.generationJob.findFirst({
+            where: { id: existingByKey.generationJobId, workspaceId: input.workspaceId }
+          });
+          return {
+            replay: true,
+            operation: existingByKey,
+            job
+          };
+        }
+        // Job ownership gates the per-job operation check so a cross-workspace
+        // caller cannot learn whether a job they do not own already has a provider
+        // operation. The existence-hiding 404 is returned before any per-job
+        // conflict is observable.
+        const job = await tx.generationJob.findFirst({
+          where: { id: input.jobId, workspaceId: input.workspaceId }
+        });
+        if (!job) {
+          return {
+            problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          };
+        }
+        const existingForJob = await tx.providerOperation.findUnique({
+          where: { generationJobId: job.id }
+        });
+        if (existingForJob) {
+          return {
+            conflict: true,
+            problem: problem(
+              "IDEMPOTENCY_INPUT_CONFLICT",
+              409,
+              "Idempotency input conflict",
+              "This generation was already submitted with a different request identity."
+            )
+          };
+        }
+        if (job.status !== "queued") {
+          return {
+            problem: problem(
+              "GENERATION_JOB_NOT_SUBMITTABLE",
+              409,
+              "Generation job not submittable",
+              "This generation cannot be submitted in its current state."
+            )
+          };
+        }
+        const activeCount = await tx.providerOperation.count({
+          where: {
+            workspaceId: input.workspaceId,
+            status: { in: ["SUBMITTING", "ACCEPTED", "UNKNOWN", "PROCESSING"] }
+          }
+        });
+        if (activeCount >= heygenConcurrencyLimit(env)) {
+          return {
+            problem: problem(
+              "PROVIDER_RATE_LIMITED",
+              429,
+              "Provider rate limited",
+              "The provider is busy. This job will retry at the shown time.",
+              true
+            )
+          };
+        }
+        const requestHash = computeProviderRequestHash(job);
+        const operation = await tx.providerOperation.create({
+          data: {
+            workspaceId: input.workspaceId,
+            generationJobId: job.id,
+            provider: HEYGEN_PROVIDER,
+            operationType: HEYGEN_OPERATION_TYPE,
+            status: "SUBMITTING",
+            idempotencyKey: input.idempotencyKey,
+            requestHash,
+            priceVersion: job.priceVersion,
+            estimatedMaximumMinor: job.maximumAuthorizedMinor,
+            currency: job.currency,
+            submittedAt: new Date()
+          }
+        });
+        await tx.generationJob.update({
+          where: { id: job.id },
+          data: { status: "submitting" }
+        });
+        return { operation, job, requestHash };
+      },
+      input.workspaceId
+    );
+    } catch (error) {
+      if (isPrismaConflictError(error)) {
+        prepared = await reconcilePrismaSubmitRace(actor, input);
+      } else {
+        throw error;
+      }
+    }
+    if (prepared.problem) {
+      return { ok: false, problem: prepared.problem };
+    }
+    if (prepared.replay) {
+      return {
+        ok: true,
+        response: {
+          job: publicGenerationJob(prepared.job),
+          operation: publicProviderOperation(prepared.operation),
+          replay: true
+        }
+      };
+    }
+    // Provider network I/O outside the transaction. A timeout after possible
+    // acceptance is unknown; the caller reconciles before any retry.
+    const providerResult = submitHeygenVideo(env, {
+      operationId: prepared.operation.id,
+      requestHash: prepared.requestHash,
+      mode: input.mode
+    });
+    // Second short transaction: apply the provider outcome.
+    return withActor(
+      actor,
+      async (tx) => {
+        const operation = await tx.providerOperation.findUnique({
+          where: { id: prepared.operation.id }
+        });
+        const job = await tx.generationJob.findUnique({ where: { id: prepared.operation.generationJobId } });
+        if (!operation || !job) {
+          return {
+            ok: false,
+            problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          };
+        }
+        if (!providerResult.ok) {
+          if (providerResult.kind === "timeout") {
+            await tx.providerOperation.update({
+              where: { id: operation.id },
+              data: { status: "UNKNOWN", updatedAt: new Date() }
+            });
+            await tx.generationJob.update({
+              where: { id: job.id },
+              data: { status: "unknown" }
+            });
+            return {
+              ok: true,
+              response: {
+                job: publicGenerationJob({ ...job, status: "unknown" }),
+                operation: publicProviderOperation({ ...operation, status: "UNKNOWN" }),
+                unknown: true
+              }
+            };
+          }
+          const errorCode = providerResult.errorCode || "PROVIDER_OUTPUT_INVALID";
+          await tx.providerOperation.update({
+            where: { id: operation.id },
+            data: { status: "FAILED", lastErrorCode: errorCode, updatedAt: new Date() }
+          });
+          await tx.generationJob.update({
+            where: { id: job.id },
+            data: { status: "failed" }
+          });
+          return {
+            ok: false,
+            problem: problem(
+              errorCode,
+              422,
+              "Provider output invalid",
+              "The generated media failed validation and was not accepted."
+            )
+          };
+        }
+        const now = new Date();
+        await tx.providerOperation.update({
+          where: { id: operation.id },
+          data: { status: "ACCEPTED", externalId: providerResult.externalId, acceptedAt: now, updatedAt: now }
+        });
+        await tx.generationJob.update({
+          where: { id: job.id },
+          data: { status: "accepted" }
+        });
+        await tx.auditEvent.create({
+          data: {
+            workspaceId: input.workspaceId,
+            actorUserId: actor.userId,
+            eventType: "generation.state_changed",
+            targetType: "GenerationJob",
+            targetId: job.id,
+            reason: "accepted"
+          }
+        });
+        const response = {
+          job: publicGenerationJob({ ...job, status: "accepted" }),
+          operation: publicProviderOperation({ ...operation, status: "ACCEPTED", externalId: providerResult.externalId, acceptedAt: now })
+        };
+        if (env.HEYGEN_MODE !== "api") {
+          const envelope = {
+            workspaceId: input.workspaceId,
+            jobId: job.id,
+            operationId: operation.id,
+            externalId: providerResult.externalId,
+            eventType: "generation.completed",
+            eventId: `evt_${operation.id}`,
+            timestamp: Date.now()
+          };
+          response.callback = {
+            envelope,
+            signature: signHeygenEnvelope(envelope, heygenSimulatorSecret(env))
+          };
+        }
+        return { ok: true, response };
+      },
+      input.workspaceId
+    );
+  }
+
+  // Reconcile a concurrent submit race: a P2002 on the one-operation-per-job
+  // (or one-operation-per-key) unique index means another caller won the create.
+  // Re-read the committed operation and return a replay when the caller's key
+  // matches, or a stable IDEMPOTENCY_INPUT_CONFLICT when a different key already
+  // submitted this job. Cross-workspace existence stays hidden behind the 404.
+  // Never surfaces a raw 500.
+  async function reconcilePrismaSubmitRace(actor, input) {
+    return withActor(
+      actor,
+      async (tx) => {
+        const existingByKey = await tx.providerOperation.findUnique({
+          where: {
+            workspaceId_idempotencyKey: {
+              workspaceId: input.workspaceId,
+              idempotencyKey: input.idempotencyKey
+            }
+          }
+        });
+        if (existingByKey) {
+          const job = await tx.generationJob.findFirst({
+            where: { id: existingByKey.generationJobId, workspaceId: input.workspaceId }
+          });
+          return { replay: true, operation: existingByKey, job };
+        }
+        const job = await tx.generationJob.findFirst({
+          where: { id: input.jobId, workspaceId: input.workspaceId }
+        });
+        if (!job) {
+          return {
+            problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          };
+        }
+        const existingForJob = await tx.providerOperation.findUnique({
+          where: { generationJobId: job.id }
+        });
+        if (existingForJob) {
+          return {
+            conflict: true,
+            problem: problem(
+              "IDEMPOTENCY_INPUT_CONFLICT",
+              409,
+              "Idempotency input conflict",
+              "This generation was already submitted with a different request identity."
+            )
+          };
+        }
+        if (job.status !== "queued") {
+          return {
+            problem: problem(
+              "GENERATION_JOB_NOT_SUBMITTABLE",
+              409,
+              "Generation job not submittable",
+              "This generation cannot be submitted in its current state."
+            )
+          };
+        }
+        return {
+          conflict: true,
+          problem: problem(
+            "IDEMPOTENCY_INPUT_CONFLICT",
+            409,
+            "Idempotency input conflict",
+            "This generation was already submitted with a different request identity."
+          )
+        };
+      },
+      input.workspaceId
+    );
+  }
+
+  async function reconcileGenerationJob(actor, input) {
+    const access = await getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    return withActor(
+      actor,
+      async (tx) => {
+        const job = await tx.generationJob.findFirst({
+          where: { id: input.jobId, workspaceId: input.workspaceId }
+        });
+        if (!job) {
+          return {
+            ok: false,
+            problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          };
+        }
+        const operation = await tx.providerOperation.findUnique({
+          where: { generationJobId: job.id }
+        });
+        if (!operation) {
+          return {
+            ok: false,
+            problem: problem(
+              "GENERATION_JOB_NOT_SUBMITTABLE",
+              409,
+              "Generation job not submittable",
+              "This generation has no provider operation to reconcile."
+            )
+          };
+        }
+        if (["COMPLETED", "FAILED", "REJECTED", "CANCELLED"].includes(operation.status)) {
+          return {
+            ok: true,
+            response: { job: publicGenerationJob(job), operation: publicProviderOperation(operation), replay: true }
+          };
+        }
+        const outcome = reconcileHeygenOperation(env, {
+          operationId: operation.id,
+          requestHash: operation.requestHash,
+          externalId: operation.externalId,
+          reconcileOutcome: input.reconcileOutcome
+        });
+        if (outcome.status === "pending") {
+          return {
+            ok: true,
+            response: { job: publicGenerationJob(job), operation: publicProviderOperation(operation), pending: true }
+          };
+        }
+        const next = applyPrismaProviderOutcome(operation, job, outcome, true);
+        await tx.providerOperation.update({ where: { id: operation.id }, data: next.operation });
+        await tx.generationJob.update({ where: { id: job.id }, data: next.job });
+        return {
+          ok: true,
+          response: {
+            job: publicGenerationJob({ ...job, ...next.job }),
+            operation: publicProviderOperation({ ...operation, ...next.operation })
+          }
+        };
+      },
+      input.workspaceId
+    );
+  }
+
+  async function cancelGenerationJob(actor, input) {
+    const access = await getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    return withActor(
+      actor,
+      async (tx) => {
+        const job = await tx.generationJob.findFirst({
+          where: { id: input.jobId, workspaceId: input.workspaceId }
+        });
+        if (!job) {
+          return {
+            ok: false,
+            problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          };
+        }
+        if (job.status === "cancelled") {
+          return { ok: true, response: { job: publicGenerationJob(job), replay: true } };
+        }
+        if (job.status === "generated" || job.status === "failed") {
+          return {
+            ok: false,
+            problem: problem(
+              "GENERATION_JOB_NOT_SUBMITTABLE",
+              409,
+              "Generation job not submittable",
+              "This generation cannot be cancelled in its current state."
+            )
+          };
+        }
+        const operation = await tx.providerOperation.findUnique({ where: { generationJobId: job.id } });
+        const now = new Date();
+        if (!operation) {
+          await tx.generationJob.update({ where: { id: job.id }, data: { status: "cancelled" } });
+          return { ok: true, response: { job: publicGenerationJob({ ...job, status: "cancelled" }) } };
+        }
+        if (["SUBMITTING", "ACCEPTED", "UNKNOWN", "PROCESSING"].includes(operation.status)) {
+          const outcome = reconcileHeygenOperation(env, {
+            operationId: operation.id,
+            requestHash: operation.requestHash,
+            externalId: operation.externalId,
+            reconcileOutcome: input.reconcileOutcome
+          });
+          if (outcome.status === "pending") {
+            await tx.generationJob.update({ where: { id: job.id }, data: { status: "cancel_requested" } });
+            return {
+              ok: true,
+              response: {
+                job: publicGenerationJob({ ...job, status: "cancel_requested" }),
+                operation: publicProviderOperation(operation),
+                uncertain: true
+              }
+            };
+          }
+          if (outcome.status === "completed") {
+            const next = applyPrismaProviderOutcome(operation, job, outcome, false);
+            await tx.providerOperation.update({ where: { id: operation.id }, data: next.operation });
+            await tx.generationJob.update({ where: { id: job.id }, data: next.job });
+            return {
+              ok: false,
+              problem: problem(
+                "GENERATION_JOB_NOT_SUBMITTABLE",
+                409,
+                "Generation job not submittable",
+                "This generation cannot be cancelled in its current state."
+              )
+            };
+          }
+          await tx.providerOperation.update({
+            where: { id: operation.id },
+            data: { status: "CANCELLED", cancelledAt: now, updatedAt: now }
+          });
+          await tx.generationJob.update({ where: { id: job.id }, data: { status: "cancelled" } });
+          return {
+            ok: true,
+            response: {
+              job: publicGenerationJob({ ...job, status: "cancelled" }),
+              operation: publicProviderOperation({ ...operation, status: "CANCELLED", cancelledAt: now })
+            }
+          };
+        }
+        await tx.providerOperation.update({
+          where: { id: operation.id },
+          data: { status: "CANCELLED", cancelledAt: now, updatedAt: now }
+        });
+        await tx.generationJob.update({ where: { id: job.id }, data: { status: "cancelled" } });
+        return {
+          ok: true,
+          response: {
+            job: publicGenerationJob({ ...job, status: "cancelled" }),
+            operation: publicProviderOperation({ ...operation, status: "CANCELLED", cancelledAt: now })
+          }
+        };
+      },
+      input.workspaceId
+    );
+  }
+
+  // Map a reconciled provider outcome to prisma update payloads. Returns the
+  // partial update objects for the operation and the job.
+  function applyPrismaProviderOutcome(operation, job, outcome, reconciled) {
+    const now = new Date();
+    const operationUpdate = { updatedAt: now };
+    const jobUpdate = { updatedAt: now };
+    if (outcome.externalId && !operation.externalId) {
+      operationUpdate.externalId = outcome.externalId;
+    }
+    if (outcome.status === "accepted") {
+      operationUpdate.status = "ACCEPTED";
+      if (!operation.acceptedAt) operationUpdate.acceptedAt = now;
+      jobUpdate.status = "accepted";
+    } else if (outcome.status === "processing") {
+      operationUpdate.status = "PROCESSING";
+      jobUpdate.status = "generating";
+    } else if (outcome.status === "completed") {
+      operationUpdate.status = "COMPLETED";
+      operationUpdate.completedAt = now;
+      jobUpdate.status = "generated";
+    } else if (outcome.status === "failed") {
+      operationUpdate.status = "FAILED";
+      if (!operation.lastErrorCode) operationUpdate.lastErrorCode = "PROVIDER_OUTPUT_INVALID";
+      jobUpdate.status = "failed";
+    }
+    if (reconciled) {
+      operationUpdate.reconciledAt = now;
+    }
+    return { operation: operationUpdate, job: jobUpdate };
   }
 
   async function listBlueprints(actor, input) {
@@ -2975,6 +5301,1156 @@ export function createPrismaWorkspaceStore(env = process.env) {
         });
       }
     }
+  }
+
+  // V0-G2 Prisma creator wallet and verified credit purchase. Money is integer
+  // minor units (BigInt). The deterministic payment simulator signs the
+  // callback envelope; the handler verifies the signature over the canonical
+  // envelope, enforces a timestamp window, deduplicates via inbox_events,
+  // reconciles amount/currency/provider/workspace, then transitions the
+  // purchase and writes an append-only ledger entry under RLS.
+  async function ensurePrismaCreditWallet(tx, workspaceId, currency) {
+    const existing = await tx.creditWallet.findUnique({
+      where: { workspaceId_currency: { workspaceId, currency } }
+    });
+    if (existing) {
+      return existing;
+    }
+    return tx.creditWallet.create({
+      data: { workspaceId, currency, balanceMinor: 0n }
+    });
+  }
+
+  async function createCreditPurchase(actor, input) {
+    const access = await getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const validation = validateCreditPurchaseInput(input);
+    if (validation) {
+      return { ok: false, problem: validation };
+    }
+    return withActor(
+      actor,
+      async (tx) => {
+        const wallet = await ensurePrismaCreditWallet(tx, input.workspaceId, input.currency);
+        const purchase = await tx.creditPurchase.create({
+          data: {
+            workspaceId: input.workspaceId,
+            walletId: wallet.id,
+            provider: input.provider,
+            providerReference: `sim_${input.provider}_${randomUUID()}`,
+            status: "INITIATED",
+            amountMinor: BigInt(input.amountMinor),
+            currency: input.currency,
+            idempotencyKey: input.idempotencyKey
+          }
+        });
+        const envelope = {
+          workspaceId: input.workspaceId,
+          purchaseId: purchase.id,
+          walletId: wallet.id,
+          provider: input.provider,
+          providerReference: purchase.providerReference,
+          amountMinor: input.amountMinor,
+          currency: input.currency,
+          eventType: "payment.success",
+          eventId: `evt_${purchase.id}`,
+          timestamp: Date.now()
+        };
+        const signature = signPaymentEnvelope(envelope, paymentSimulatorSecret(env));
+        return {
+          ok: true,
+          response: {
+            purchase: publicCreditPurchase(purchase),
+            wallet: publicCreditWallet(wallet),
+            checkout: {
+              provider: input.provider,
+              providerReference: purchase.providerReference,
+              envelope,
+              signature
+            }
+          }
+        };
+      },
+      input.workspaceId
+    );
+  }
+
+  async function withCallbackWorkspace(workspaceId, fn) {
+    return prisma.$transaction(async (tx) => {
+      await setActorContext(tx, "00000000-0000-0000-0000-000000000000", workspaceId);
+      return fn(tx);
+    });
+  }
+
+  // V0-G4 prisma: process a signed HeyGen callback. Signature verified in constant
+  // time, timestamp windowed, deduplicated by (workspace, source, eventId) via
+  // inbox_events. Malformed callbacks are rejected. Provider payloads stay private.
+  async function processHeygenCallback(envelope, signature) {
+    if (!verifyHeygenSignature(envelope, signature, heygenSimulatorSecret(env))) {
+      return {
+        ok: false,
+        problem: problem(
+          "PROVIDER_CALLBACK_INVALID",
+          401,
+          "Provider callback invalid",
+          "The provider update could not be verified."
+        )
+      };
+    }
+    if (
+      !envelope ||
+      typeof envelope.workspaceId !== "string" ||
+      typeof envelope.jobId !== "string" ||
+      typeof envelope.operationId !== "string" ||
+      typeof envelope.eventType !== "string" ||
+      typeof envelope.eventId !== "string" ||
+      typeof envelope.timestamp !== "number"
+    ) {
+      return {
+        ok: false,
+        problem: problem(
+          "PROVIDER_OUTPUT_INVALID",
+          422,
+          "Provider output invalid",
+          "The provider update was malformed and was not accepted."
+        )
+      };
+    }
+    return withCallbackWorkspace(envelope.workspaceId, async (tx) => {
+      const existing = await tx.inboxEvent.findUnique({
+        where: {
+          workspaceId_source_idempotencyKey: {
+            workspaceId: envelope.workspaceId,
+            source: "heygen",
+            idempotencyKey: envelope.eventId
+          }
+        }
+      });
+      if (existing) {
+        return { ok: true, response: { ...existing.payload.response, duplicate: true } };
+      }
+      if (Math.abs(Date.now() - envelope.timestamp) > HEYGEN_CALLBACK_WINDOW_MS) {
+        return {
+          ok: false,
+          problem: problem(
+            "PROVIDER_CALLBACK_INVALID",
+            401,
+            "Provider callback invalid",
+            "The provider update could not be verified."
+          )
+        };
+      }
+      const operation = await tx.providerOperation.findFirst({
+        where: { id: envelope.operationId, workspaceId: envelope.workspaceId }
+      });
+      if (!operation) {
+        return {
+          ok: false,
+          problem: problem(
+            "PROVIDER_CALLBACK_INVALID",
+            401,
+            "Provider callback invalid",
+            "The provider update could not be verified."
+          )
+        };
+      }
+      const job = await tx.generationJob.findFirst({
+        where: { id: operation.generationJobId, workspaceId: envelope.workspaceId }
+      });
+      if (!job) {
+        return {
+          ok: false,
+          problem: problem(
+            "PROVIDER_CALLBACK_INVALID",
+            401,
+            "Provider callback invalid",
+            "The provider update could not be verified."
+          )
+        };
+      }
+      const outcomeMap = {
+        "generation.accepted": "accepted",
+        "generation.processing": "processing",
+        "generation.completed": "completed",
+        "generation.failed": "failed"
+      };
+      if (!(envelope.eventType in outcomeMap)) {
+        return {
+          ok: false,
+          problem: problem(
+            "PROVIDER_OUTPUT_INVALID",
+            422,
+            "Provider output invalid",
+            "The provider update was malformed and was not accepted."
+          )
+        };
+      }
+      const now = new Date();
+      const response = { job: publicGenerationJob(job), operation: publicProviderOperation(operation) };
+      if (["COMPLETED", "FAILED", "REJECTED", "CANCELLED"].includes(operation.status)) {
+        await tx.inboxEvent.create({
+          data: {
+            workspaceId: envelope.workspaceId,
+            source: "heygen",
+            eventType: envelope.eventType,
+            idempotencyKey: envelope.eventId,
+            payloadHash: createHash("sha256").update(stableJson(envelope)).digest("hex"),
+            payload: { response },
+            consumedAt: now
+          }
+        });
+        return { ok: true, response: { ...response, duplicate: false } };
+      }
+      const next = applyPrismaProviderOutcome(operation, job, { status: outcomeMap[envelope.eventType], externalId: envelope.externalId }, false);
+      const updatedOperation = await tx.providerOperation.update({ where: { id: operation.id }, data: next.operation });
+      const updatedJob = await tx.generationJob.update({ where: { id: job.id }, data: next.job });
+      const finalResponse = { job: publicGenerationJob(updatedJob), operation: publicProviderOperation(updatedOperation) };
+      await tx.inboxEvent.create({
+        data: {
+          workspaceId: envelope.workspaceId,
+          source: "heygen",
+          eventType: envelope.eventType,
+          idempotencyKey: envelope.eventId,
+          payloadHash: createHash("sha256").update(stableJson(envelope)).digest("hex"),
+          payload: { response: finalResponse },
+          consumedAt: now
+        }
+      });
+      return { ok: true, response: { ...finalResponse, duplicate: false } };
+    });
+  }
+
+  // V0-G5: settle a terminal provider operation against Prisma. Completed media is
+  // copied into private V0 storage through the adapter only, quarantined, validated,
+  // hashed and bound to a GeneratedSegment, a versioned GeneratedAsset and a
+  // CreativeLineage row; the reconciled provider total is recorded on the operation.
+  // The ledger is settled in a second short transaction so a crash between media
+  // retention and ledger settlement is recovered on the next call: the retained
+  // segment is detected, retain is skipped and the CAPTURE/RELEASE entry is written
+  // exactly once via its job-derived idempotency key. The transient provider URL is
+  // never retained; media is not clean until artifact validation passes.
+  async function settleGenerationJob(actor, input) {
+    const access = await getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    // First short transaction: load the job, operation and reservation, serve an
+    // idempotent replay, release on failure, or retain completed media. Returning a
+    // problem from inside the transaction rolls back any partial retain. A concurrent
+    // retain on the same job raises a Prisma unique-constraint conflict (P2002) on the
+    // generated_segments/generated_assets/creative_lineage indexes or a write conflict
+    // (P2034); those are normalized below into a replay or a recovery, never a raw 500.
+    let prepared;
+    try {
+      prepared = await withActor(
+        actor,
+        async (tx) => {
+          const job = await tx.generationJob.findFirst({
+            where: { id: input.jobId, workspaceId: input.workspaceId }
+          });
+          if (!job) {
+            return {
+              problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+            };
+          }
+          const operation = await tx.providerOperation.findUnique({
+            where: { generationJobId: job.id }
+          });
+          if (!operation) {
+            return {
+              problem: problem(
+                "GENERATION_JOB_NOT_SUBMITTABLE",
+                409,
+                "Generation job not submittable",
+                "This generation has no provider operation to settle."
+              )
+            };
+          }
+          const terminal = new Set(["COMPLETED", "FAILED", "REJECTED", "CANCELLED"]);
+          if (!terminal.has(operation.status)) {
+            return {
+              problem: problem(
+                "GENERATION_JOB_NOT_SUBMITTABLE",
+                409,
+                "Generation job not submittable",
+                "This generation cannot be settled in its current state."
+              )
+            };
+          }
+          const reservation = await tx.creditReservation.findFirst({
+            where: { generationJobId: job.id, workspaceId: input.workspaceId }
+          });
+          if (!reservation) {
+            return {
+              problem: problem(
+                "GENERATION_JOB_NOT_SUBMITTABLE",
+                409,
+                "Generation job not submittable",
+                "This generation has no credit reservation to settle."
+              )
+            };
+          }
+          const wallet = await tx.creditWallet.findUnique({
+            where: { id: reservation.walletId }
+          });
+
+          // Idempotent replay: once the reservation is captured or released the
+          // settlement is final. A replay returns the original settlement and never
+          // writes a second ledger entry.
+          if (reservation.status === "CAPTURED" || reservation.status === "RELEASED") {
+            return { replay: true, operation, job, reservation, wallet };
+          }
+
+          const failureOutcomes = new Set(["FAILED", "REJECTED", "CANCELLED"]);
+          if (failureOutcomes.has(operation.status)) {
+            return settlePrismaRelease(tx, actor, operation, job, reservation, wallet);
+          }
+          return settlePrismaRetain(tx, actor, operation, job, reservation, wallet);
+        },
+        input.workspaceId
+      );
+    } catch (error) {
+      if (isPrismaConflictError(error)) {
+        prepared = await reconcilePrismaSettleRace(actor, input);
+      } else {
+        throw error;
+      }
+    }
+    if (prepared.problem) {
+      return { ok: false, problem: prepared.problem };
+    }
+    if (prepared.replay) {
+      return { ok: true, response: await buildPrismaSettlementReplay(actor, prepared, input.workspaceId) };
+    }
+    if (prepared.released) {
+      return { ok: true, response: prepared.response };
+    }
+    // Crash-window simulator: media was retained and committed, but the ledger
+    // settlement did not happen. Return DEPENDENCY_UNAVAILABLE so the caller retries;
+    // the next call detects the retained segment and settles the ledger once.
+    if (!prepared.recovered && resolveHeygenMediaMode(env) === "crash_after_retain") {
+      return {
+        ok: false,
+        problem: problem(
+          "DEPENDENCY_UNAVAILABLE",
+          503,
+          "Dependency unavailable",
+          "Settlement was interrupted after media retention. Try again."
+        )
+      };
+    }
+    // Second short transaction: settle the CAPTURE ledger exactly once, mark the
+    // reservation captured and record the settlement timestamp. If a concurrent
+    // settlement already captured (the CAPTURE ledger entry exists), replay it without
+    // writing. A unique-constraint conflict on the capture key (P2002) or a write
+    // conflict (P2034) is normalized by the outer catch into a replay after re-reading
+    // the reservation, never a raw 500.
+    let settled;
+    try {
+      settled = await withActor(
+        actor,
+        async (tx) => {
+          const operation = await tx.providerOperation.findUnique({
+            where: { id: prepared.operation.id }
+          });
+          const job = await tx.generationJob.findUnique({ where: { id: prepared.job.id } });
+          const reservation = await tx.creditReservation.findFirst({
+            where: { generationJobId: job.id, workspaceId: input.workspaceId }
+          });
+          const wallet = await tx.creditWallet.findUnique({ where: { id: reservation.walletId } });
+          const captureKey = `g5-capture-${job.id}`;
+          const existing = await tx.creditLedgerEntry.findFirst({
+            where: { walletId: wallet.id, idempotencyKey: captureKey }
+          });
+          if (existing) {
+            // A concurrent settlement already captured this reservation. Replay the
+            // retained media and the existing ledger entry without writing a second
+            // capture, a second wallet move or a second audit row.
+            const segment = await tx.generatedSegment.findFirst({
+              where: { generationJobId: job.id, workspaceId: input.workspaceId }
+            });
+            const asset = await tx.generatedAsset.findFirst({
+              where: { generationJobId: job.id, workspaceId: input.workspaceId }
+            });
+            const lineage = await tx.creativeLineage.findFirst({
+              where: { generationJobId: job.id, workspaceId: input.workspaceId }
+            });
+            const artifact = await tx.artifact.findUnique({ where: { id: segment.artifactId } });
+            const replayWallet = await tx.creditWallet.findUnique({ where: { id: wallet.id } });
+            return {
+              ok: true,
+              response: {
+                outcome: "captured",
+                replay: true,
+                operation: publicProviderOperation(operation),
+                job: publicGenerationJob(job),
+                artifact: publicArtifact(artifact),
+                segment: publicGeneratedSegment(segment),
+                asset: publicGeneratedAsset(asset),
+                lineage: publicCreativeLineage(lineage),
+                ledgerEntry: publicCreditLedgerEntry(existing),
+                reservation: publicCreditReservation(reservation),
+                wallet: publicCreditWallet(replayWallet)
+              }
+            };
+          }
+          const actual = operation.providerTotalMinor;
+          const captureAmount = operation.estimatedMaximumMinor - actual;
+          const entry = await tx.creditLedgerEntry.create({
+            data: {
+              workspaceId: input.workspaceId,
+              walletId: wallet.id,
+              generationJobId: job.id,
+              type: "CAPTURE",
+              amountMinor: captureAmount,
+              currency: wallet.currency,
+              idempotencyKey: captureKey,
+              reason: "generation capture"
+            }
+          });
+          await tx.creditWallet.update({
+            where: { id: wallet.id },
+            data: { balanceMinor: { increment: captureAmount } }
+          });
+          const updatedOperation = await tx.providerOperation.update({
+            where: { id: operation.id },
+            data: { settledAt: new Date() }
+          });
+          const updatedReservation = await tx.creditReservation.update({
+            where: { id: reservation.id },
+            data: { status: "CAPTURED" }
+          });
+          const updatedWallet = await tx.creditWallet.findUnique({ where: { id: wallet.id } });
+          await tx.auditEvent.create({
+            data: {
+              workspaceId: input.workspaceId,
+              actorUserId: actor.userId,
+              eventType: "generation.settled",
+              targetType: "GenerationJob",
+              targetId: job.id,
+              reason: "captured"
+            }
+          });
+          const segment = await tx.generatedSegment.findFirst({
+            where: { generationJobId: job.id, workspaceId: input.workspaceId }
+          });
+          const asset = await tx.generatedAsset.findFirst({
+            where: { generationJobId: job.id, workspaceId: input.workspaceId }
+          });
+          const lineage = await tx.creativeLineage.findFirst({
+            where: { generationJobId: job.id, workspaceId: input.workspaceId }
+          });
+          const artifact = await tx.artifact.findUnique({ where: { id: segment.artifactId } });
+          return {
+            ok: true,
+            response: {
+              outcome: "captured",
+              replay: false,
+              operation: publicProviderOperation(updatedOperation),
+              job: publicGenerationJob(job),
+              artifact: publicArtifact(artifact),
+              segment: publicGeneratedSegment(segment),
+              asset: publicGeneratedAsset(asset),
+              lineage: publicCreativeLineage(lineage),
+              ledgerEntry: publicCreditLedgerEntry(entry),
+              reservation: publicCreditReservation(updatedReservation),
+              wallet: publicCreditWallet(updatedWallet)
+            }
+          };
+        },
+        input.workspaceId
+      );
+    } catch (error) {
+      if (isPrismaConflictError(error)) {
+        const reprepared = await reconcilePrismaSettleRace(actor, input);
+        if (reprepared.problem) {
+          return { ok: false, problem: reprepared.problem };
+        }
+        return { ok: true, response: await buildPrismaSettlementReplay(actor, reprepared, input.workspaceId) };
+      }
+      throw error;
+    }
+    return settled;
+  }
+
+  // Re-read the settlement state after a Prisma unique-constraint (P2002) or write
+  // conflict (P2034) during settle. A concurrent settle that already captured or
+  // released the reservation is replayed; a concurrent retain that committed media but
+  // has not yet captured is recovered into the capture phase; anything else is a stable
+  // GENERATION_JOB_NOT_SUBMITTABLE. Cross-workspace access hides behind
+  // WORKSPACE_ACCESS_DENIED. Never throws a raw DB failure.
+  async function reconcilePrismaSettleRace(actor, input) {
+    return withActor(
+      actor,
+      async (tx) => {
+        const job = await tx.generationJob.findFirst({
+          where: { id: input.jobId, workspaceId: input.workspaceId }
+        });
+        if (!job) {
+          return {
+            problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          };
+        }
+        const operation = await tx.providerOperation.findUnique({
+          where: { generationJobId: job.id }
+        });
+        if (!operation) {
+          return {
+            problem: problem(
+              "GENERATION_JOB_NOT_SUBMITTABLE",
+              409,
+              "Generation job not submittable",
+              "This generation has no provider operation to settle."
+            )
+          };
+        }
+        const terminal = new Set(["COMPLETED", "FAILED", "REJECTED", "CANCELLED"]);
+        if (!terminal.has(operation.status)) {
+          return {
+            problem: problem(
+              "GENERATION_JOB_NOT_SUBMITTABLE",
+              409,
+              "Generation job not submittable",
+              "This generation cannot be settled in its current state."
+            )
+          };
+        }
+        const reservation = await tx.creditReservation.findFirst({
+          where: { generationJobId: job.id, workspaceId: input.workspaceId }
+        });
+        if (!reservation) {
+          return {
+            problem: problem(
+              "GENERATION_JOB_NOT_SUBMITTABLE",
+              409,
+              "Generation job not submittable",
+              "This generation has no credit reservation to settle."
+            )
+          };
+        }
+        const wallet = await tx.creditWallet.findUnique({ where: { id: reservation.walletId } });
+        if (reservation.status === "CAPTURED" || reservation.status === "RELEASED") {
+          return { replay: true, operation, job, reservation, wallet };
+        }
+        // Reservation still active: a concurrent retain may have committed the retained
+        // media but not yet captured. A committed segment means recovery into the
+        // capture phase is safe; otherwise the operation is not settleable right now.
+        const segment = await tx.generatedSegment.findFirst({
+          where: { generationJobId: job.id, workspaceId: input.workspaceId }
+        });
+        if (segment) {
+          return { recovered: true, operation, job, reservation, wallet };
+        }
+        return {
+          problem: problem(
+            "GENERATION_JOB_NOT_SUBMITTABLE",
+            409,
+            "Generation job not submittable",
+            "This generation cannot be settled in its current state."
+          )
+        };
+      },
+      input.workspaceId
+    );
+  }
+
+  // Release the full reservation once when the provider operation failed. The wallet
+  // is restored by the +max RELEASE ledger entry; the reservation becomes RELEASED.
+  // No media is retained for a failed operation.
+  async function settlePrismaRelease(tx, actor, operation, job, reservation, wallet) {
+    const now = new Date();
+    const releaseKey = `g5-release-${job.id}`;
+    let entry = await tx.creditLedgerEntry.findFirst({
+      where: { walletId: wallet.id, idempotencyKey: releaseKey }
+    });
+    if (!entry) {
+      entry = await tx.creditLedgerEntry.create({
+        data: {
+          workspaceId: job.workspaceId,
+          walletId: wallet.id,
+          generationJobId: job.id,
+          type: "RELEASE",
+          amountMinor: reservation.amountMinor,
+          currency: wallet.currency,
+          idempotencyKey: releaseKey,
+          reason: "generation release"
+        }
+      });
+      await tx.creditWallet.update({
+        where: { id: wallet.id },
+        data: { balanceMinor: { increment: reservation.amountMinor } }
+      });
+    }
+    const updatedOperation = await tx.providerOperation.update({
+      where: { id: operation.id },
+      data: { settledAt: now }
+    });
+    const updatedReservation = await tx.creditReservation.update({
+      where: { id: reservation.id },
+      data: { status: "RELEASED" }
+    });
+    const updatedWallet = await tx.creditWallet.findUnique({ where: { id: wallet.id } });
+    await tx.auditEvent.create({
+      data: {
+        workspaceId: job.workspaceId,
+        actorUserId: actor.userId,
+        eventType: "generation.settled",
+        targetType: "GenerationJob",
+        targetId: job.id,
+        reason: "released"
+      }
+    });
+    return {
+      released: true,
+      response: {
+        outcome: "released",
+        replay: false,
+        operation: publicProviderOperation(updatedOperation),
+        job: publicGenerationJob(job),
+        artifact: null,
+        segment: null,
+        asset: null,
+        lineage: null,
+        ledgerEntry: publicCreditLedgerEntry(entry),
+        reservation: publicCreditReservation(updatedReservation),
+        wallet: publicCreditWallet(updatedWallet)
+      }
+    };
+  }
+
+  // Retain completed media: fetch through the adapter, validate, reconcile the
+  // provider total against the authorization, then create the artifact, segment,
+  // versioned asset and lineage row. A crash-window recovery detects an existing
+  // segment and skips retain. Returns the retained records and a recovered flag.
+  async function settlePrismaRetain(tx, actor, operation, job, reservation, wallet) {
+    const existingSegment = await tx.generatedSegment.findFirst({
+      where: { generationJobId: job.id, workspaceId: job.workspaceId }
+    });
+    if (existingSegment) {
+      const asset = await tx.generatedAsset.findFirst({
+        where: { generationJobId: job.id, workspaceId: job.workspaceId }
+      });
+      const lineage = await tx.creativeLineage.findFirst({
+        where: { generationJobId: job.id, workspaceId: job.workspaceId }
+      });
+      return { recovered: true, operation, job, reservation, wallet };
+    }
+    const mediaResult = fetchHeygenMedia(env, {
+      operationId: operation.id,
+      externalId: operation.externalId,
+      durationSeconds: job.durationSeconds,
+      estimatedMaximumMinor: operation.estimatedMaximumMinor
+    });
+    if (!mediaResult.ok) {
+      if (mediaResult.kind === "unavailable") {
+        return {
+          problem: problem(
+            "DEPENDENCY_UNAVAILABLE",
+            503,
+            "Dependency unavailable",
+            "The provider could not be reached. Try again."
+          )
+        };
+      }
+      return {
+        problem: problem(
+          mediaResult.errorCode || "ASSET_MEDIA_MALFORMED",
+          422,
+          "Asset media malformed",
+          "The generated media failed validation and was not accepted."
+        )
+      };
+    }
+    const media = mediaResult.media;
+    if (
+      !isSha256(media.sha256) ||
+      !Number.isInteger(media.byteSize) ||
+      media.byteSize <= 0 ||
+      !Number.isInteger(media.durationSeconds) ||
+      media.durationSeconds <= 0 ||
+      !supportedContentTypes.has(media.contentType) ||
+      !Number.isInteger(media.providerTotalMinor) ||
+      media.providerTotalMinor < 0
+    ) {
+      return {
+        problem: problem(
+          "ASSET_MEDIA_MALFORMED",
+          422,
+          "Asset media malformed",
+          "The generated media failed validation and was not accepted."
+        )
+      };
+    }
+    if (BigInt(media.providerTotalMinor) > operation.estimatedMaximumMinor) {
+      return {
+        problem: problem(
+          "PROVIDER_COST_EXCEEDS_AUTHORIZATION",
+          409,
+          "Provider cost exceeds authorization",
+          "The provider cost exceeded the authorized maximum and was not settled."
+        )
+      };
+    }
+    const now = new Date();
+    const artifact = await tx.artifact.create({
+      data: {
+        workspaceId: job.workspaceId,
+        fileName: `generated-${job.id}.mp4`,
+        contentType: media.contentType,
+        byteSize: media.byteSize,
+        sha256: media.sha256,
+        status: "CLEAN",
+        retentionClass: "clean-media",
+        producer: `job:${job.id}`,
+        schemaVersion: "artifact.generated.v1",
+        objectKey: `clean-media/${job.workspaceId}/${randomUUID()}`
+      }
+    });
+    const segment = await tx.generatedSegment.create({
+      data: {
+        workspaceId: job.workspaceId,
+        generationJobId: job.id,
+        providerOperationId: operation.id,
+        provider: HEYGEN_PROVIDER,
+        externalId: media.externalId,
+        segmentIndex: 0,
+        durationSeconds: media.durationSeconds,
+        contentType: media.contentType,
+        byteSize: media.byteSize,
+        sha256: media.sha256,
+        artifactId: artifact.id
+      }
+    });
+    const asset = await tx.generatedAsset.create({
+      data: {
+        workspaceId: job.workspaceId,
+        generationJobId: job.id,
+        segmentId: segment.id,
+        artifactId: artifact.id,
+        version: 1,
+        kind: "provider_video",
+        durationSeconds: media.durationSeconds,
+        contentType: media.contentType,
+        sha256: media.sha256,
+        status: "CLEAN"
+      }
+    });
+    await tx.creativeLineage.create({
+      data: {
+        workspaceId: job.workspaceId,
+        generationJobId: job.id,
+        brandProfileId: job.brandProfileId,
+        selectedScriptId: job.selectedScriptId ?? undefined,
+        avatarProfileId: job.avatarProfileId ?? undefined,
+        estimateId: job.estimateId,
+        provider: HEYGEN_PROVIDER,
+        providerOperationId: operation.id,
+        priceVersion: job.priceVersion,
+        generatedAssetId: asset.id
+      }
+    });
+    await tx.providerOperation.update({
+      where: { id: operation.id },
+      data: { providerTotalMinor: BigInt(media.providerTotalMinor), updatedAt: now }
+    });
+    return { recovered: false, operation, job, reservation, wallet };
+  }
+
+  // Reconstruct a settlement replay from the retained records. A captured settlement
+  // returns the retained media; a released settlement returns null media.
+  async function buildPrismaSettlementReplay(actor, prepared, workspaceId) {
+    return withActor(
+      actor,
+      async (tx) => {
+        const operation = await tx.providerOperation.findUnique({
+          where: { id: prepared.operation.id }
+        });
+        const job = await tx.generationJob.findUnique({ where: { id: prepared.job.id } });
+        const reservation = await tx.creditReservation.findFirst({
+          where: { generationJobId: job.id, workspaceId }
+        });
+        const wallet = await tx.creditWallet.findUnique({ where: { id: reservation.walletId } });
+        if (reservation.status === "RELEASED") {
+          const releaseKey = `g5-release-${job.id}`;
+          const entry = await tx.creditLedgerEntry.findFirst({
+            where: { walletId: wallet.id, idempotencyKey: releaseKey }
+          });
+          return {
+            outcome: "released",
+            replay: true,
+            operation: publicProviderOperation(operation),
+            job: publicGenerationJob(job),
+            artifact: null,
+            segment: null,
+            asset: null,
+            lineage: null,
+            ledgerEntry: entry ? publicCreditLedgerEntry(entry) : null,
+            reservation: publicCreditReservation(reservation),
+            wallet: publicCreditWallet(wallet)
+          };
+        }
+        const segment = await tx.generatedSegment.findFirst({
+          where: { generationJobId: job.id, workspaceId }
+        });
+        const asset = await tx.generatedAsset.findFirst({
+          where: { generationJobId: job.id, workspaceId }
+        });
+        const lineage = await tx.creativeLineage.findFirst({
+          where: { generationJobId: job.id, workspaceId }
+        });
+        const artifact = segment ? await tx.artifact.findUnique({ where: { id: segment.artifactId } }) : null;
+        const captureKey = `g5-capture-${job.id}`;
+        const entry = await tx.creditLedgerEntry.findFirst({
+          where: { walletId: wallet.id, idempotencyKey: captureKey }
+        });
+        return {
+          outcome: "captured",
+          replay: true,
+          operation: publicProviderOperation(operation),
+          job: publicGenerationJob(job),
+          artifact: artifact ? publicArtifact(artifact) : null,
+          segment: segment ? publicGeneratedSegment(segment) : null,
+          asset: asset ? publicGeneratedAsset(asset) : null,
+          lineage: lineage ? publicCreativeLineage(lineage) : null,
+          ledgerEntry: entry ? publicCreditLedgerEntry(entry) : null,
+          reservation: publicCreditReservation(reservation),
+          wallet: publicCreditWallet(wallet)
+        };
+      },
+      workspaceId
+    );
+  }
+
+  async function processPaymentCallback(source, envelope, signature) {
+    if (!verifyPaymentSignature(envelope, signature, paymentSimulatorSecret(env))) {
+      return {
+        ok: false,
+        problem: problem(
+          "PAYMENT_SIGNATURE_INVALID",
+          401,
+          "Payment signature invalid",
+          "The payment update could not be verified."
+        )
+      };
+    }
+    return withCallbackWorkspace(envelope.workspaceId, async (tx) => {
+      const existing = await tx.inboxEvent.findUnique({
+        where: {
+          workspaceId_source_idempotencyKey: {
+            workspaceId: envelope.workspaceId,
+            source,
+            idempotencyKey: envelope.eventId
+          }
+        }
+      });
+      if (existing) {
+        return { ok: true, response: { ...existing.payload.response, duplicate: true } };
+      }
+      if (Math.abs(Date.now() - envelope.timestamp) > PAYMENT_CALLBACK_WINDOW_MS) {
+        return {
+          ok: false,
+          problem: problem(
+            "PAYMENT_SIGNATURE_INVALID",
+            401,
+            "Payment signature invalid",
+            "The payment update could not be verified."
+          )
+        };
+      }
+      const purchase = await tx.creditPurchase.findFirst({
+        where: {
+          workspaceId: envelope.workspaceId,
+          provider: source,
+          providerReference: envelope.providerReference
+        }
+      });
+      if (!purchase) {
+        return {
+          ok: false,
+          problem: problem(
+            "PAYMENT_AMOUNT_MISMATCH",
+            409,
+            "Payment amount mismatch",
+            "The payment amount or currency did not match the purchase."
+          )
+        };
+      }
+      if (purchase.amountMinor !== BigInt(envelope.amountMinor) || purchase.currency !== envelope.currency) {
+        return {
+          ok: false,
+          problem: problem(
+            "PAYMENT_AMOUNT_MISMATCH",
+            409,
+            "Payment amount mismatch",
+            "The payment amount or currency did not match the purchase."
+          )
+        };
+      }
+      const transition = await applyPrismaPurchaseTransition(tx, purchase, envelope);
+      if (!transition.ok) {
+        return transition;
+      }
+      const response = transition.response;
+      await tx.inboxEvent.create({
+        data: {
+          workspaceId: envelope.workspaceId,
+          source,
+          eventType: envelope.eventType,
+          idempotencyKey: envelope.eventId,
+          payloadHash: createHash("sha256").update(stableJson(envelope)).digest("hex"),
+          payload: { response },
+          consumedAt: new Date()
+        }
+      });
+      return { ok: true, response: { ...response, duplicate: false } };
+    });
+  }
+
+  async function applyPrismaPurchaseTransition(tx, purchase, envelope) {
+    const walletId = purchase.walletId;
+    const workspaceId = purchase.workspaceId;
+    if (envelope.eventType === "payment.pending") {
+      const updated = await tx.creditPurchase.update({
+        where: { id: purchase.id },
+        data: { status: "PENDING" }
+      });
+      const wallet = await tx.creditWallet.findUnique({ where: { id: walletId } });
+      return { ok: true, response: { purchase: publicCreditPurchase(updated), ledgerEntry: null, wallet: publicCreditWallet(wallet) } };
+    }
+    if (envelope.eventType === "payment.success") {
+      if (purchase.status === "SUCCEEDED") {
+        const wallet = await tx.creditWallet.findUnique({ where: { id: walletId } });
+        return { ok: true, response: { purchase: publicCreditPurchase(purchase), ledgerEntry: null, wallet: publicCreditWallet(wallet) } };
+      }
+      const entry = await tx.creditLedgerEntry.create({
+        data: {
+          workspaceId,
+          walletId,
+          type: "PURCHASE",
+          amountMinor: purchase.amountMinor,
+          currency: purchase.currency,
+          idempotencyKey: envelope.eventId
+        }
+      });
+      const updated = await tx.creditPurchase.update({
+        where: { id: purchase.id },
+        data: { status: "SUCCEEDED" }
+      });
+      const wallet = await tx.creditWallet.update({
+        where: { id: walletId },
+        data: { balanceMinor: { increment: purchase.amountMinor } }
+      });
+      return { ok: true, response: { purchase: publicCreditPurchase(updated), ledgerEntry: publicCreditLedgerEntry(entry), wallet: publicCreditWallet(wallet) } };
+    }
+    if (envelope.eventType === "payment.refunded") {
+      if (purchase.status === "REFUNDED") {
+        const wallet = await tx.creditWallet.findUnique({ where: { id: walletId } });
+        return { ok: true, response: { purchase: publicCreditPurchase(purchase), ledgerEntry: null, wallet: publicCreditWallet(wallet) } };
+      }
+      const entry = await tx.creditLedgerEntry.create({
+        data: {
+          workspaceId,
+          walletId,
+          type: "REFUND",
+          amountMinor: -purchase.amountMinor,
+          currency: purchase.currency,
+          idempotencyKey: envelope.eventId,
+          reason: "provider refund"
+        }
+      });
+      const updated = await tx.creditPurchase.update({
+        where: { id: purchase.id },
+        data: { status: "REFUNDED" }
+      });
+      const wallet = await tx.creditWallet.update({
+        where: { id: walletId },
+        data: { balanceMinor: { decrement: purchase.amountMinor } }
+      });
+      return { ok: true, response: { purchase: publicCreditPurchase(updated), ledgerEntry: publicCreditLedgerEntry(entry), wallet: publicCreditWallet(wallet) } };
+    }
+    if (envelope.eventType === "payment.disputed") {
+      if (purchase.status === "DISPUTED" || purchase.status === "REFUNDED") {
+        const wallet = await tx.creditWallet.findUnique({ where: { id: walletId } });
+        return { ok: true, response: { purchase: publicCreditPurchase(purchase), ledgerEntry: null, wallet: publicCreditWallet(wallet) } };
+      }
+      const entry = await tx.creditLedgerEntry.create({
+        data: {
+          workspaceId,
+          walletId,
+          type: "REFUND",
+          amountMinor: -purchase.amountMinor,
+          currency: purchase.currency,
+          idempotencyKey: envelope.eventId,
+          reason: "provider dispute reversal"
+        }
+      });
+      const updated = await tx.creditPurchase.update({
+        where: { id: purchase.id },
+        data: { status: "DISPUTED" }
+      });
+      const wallet = await tx.creditWallet.update({
+        where: { id: walletId },
+        data: { balanceMinor: { decrement: purchase.amountMinor } }
+      });
+      return { ok: true, response: { purchase: publicCreditPurchase(updated), ledgerEntry: publicCreditLedgerEntry(entry), wallet: publicCreditWallet(wallet) } };
+    }
+    return {
+      ok: false,
+      problem: problem("VALIDATION_FAILED", 422, "Validation failed", "Unsupported payment event type.")
+    };
+  }
+
+  async function listWalletLedger(actor, input) {
+    const access = await getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    return withActor(
+      actor,
+      async (tx) => {
+        const wallet = await tx.creditWallet.findFirst({
+          where: { id: input.walletId, workspaceId: input.workspaceId }
+        });
+        if (!wallet) {
+          return {
+            ok: false,
+            problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          };
+        }
+        const limit = normalizeLimit(input.limit);
+        const entries = await tx.creditLedgerEntry.findMany({
+          where: { walletId: wallet.id },
+          orderBy: [{ effectiveAt: "asc" }, { id: "asc" }],
+          take: limit + 1,
+          ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {})
+        });
+        // Running balance is derived in chronological order over the full
+        // ledger so the displayed balance is correct regardless of page.
+        const all = await tx.creditLedgerEntry.findMany({
+          where: { walletId: wallet.id },
+          orderBy: [{ effectiveAt: "asc" }, { id: "asc" }]
+        });
+        const runningById = new Map();
+        let running = 0n;
+        for (const row of all) {
+          running += row.amountMinor;
+          runningById.set(row.id, running);
+        }
+        const pageRows = entries.slice(0, limit);
+        const items = pageRows.map((entry) => publicCreditLedgerEntry(entry, runningById.get(entry.id)));
+        const nextCursor = entries.length > limit ? pageRows[pageRows.length - 1].id : null;
+        const reconciliation = canPerform(access.membership.role, "view_provider_financial_reconciliation")
+          ? await prismaCreditReconciliation(tx, wallet)
+          : null;
+        return {
+          ok: true,
+          response: {
+            wallet: publicCreditWallet(wallet),
+            entries: items,
+            page: { limit, nextCursor },
+            reconciliation
+          }
+        };
+      },
+      input.workspaceId
+    );
+  }
+
+  async function prismaCreditReconciliation(tx, wallet) {
+    const ledger = await tx.creditLedgerEntry.findMany({ where: { walletId: wallet.id } });
+    const ledgerPurchaseMinor = ledger
+      .filter((entry) => entry.type === "PURCHASE")
+      .reduce((sum, entry) => sum + entry.amountMinor, 0n);
+    const ledgerRefundMinor = ledger
+      .filter((entry) => entry.type === "REFUND")
+      .reduce((sum, entry) => sum + (-entry.amountMinor), 0n);
+    const purchases = await tx.creditPurchase.findMany({
+      where: { walletId: wallet.id, status: "SUCCEEDED" }
+    });
+    const simulatorPaidMinor = purchases.reduce((sum, purchase) => sum + purchase.amountMinor, 0n);
+    return {
+      currency: wallet.currency,
+      ledgerPurchaseMinor: Number(ledgerPurchaseMinor),
+      ledgerRefundMinor: Number(ledgerRefundMinor),
+      simulatorPaidMinor: Number(simulatorPaidMinor),
+      matched: ledgerPurchaseMinor === simulatorPaidMinor
+    };
+  }
+
+  async function createCreditAdjustment(actor, input) {
+    const access = await getWorkspaceForActor(actor, input.workspaceId);
+    if (!access) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    if (!canPerform(access.membership.role, "adjust_credits")) {
+      return { ok: false, problem: problem("PERMISSION_DENIED", 403, "Permission denied", "Your role cannot perform this action.") };
+    }
+    return withActor(
+      actor,
+      async (tx) => {
+        const wallet = await tx.creditWallet.findFirst({
+          where: { id: input.walletId, workspaceId: input.workspaceId }
+        });
+        if (!wallet) {
+          return {
+            ok: false,
+            problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          };
+        }
+        const validation = validateCreditAdjustmentInput(input, wallet.currency);
+        if (validation) {
+          return { ok: false, problem: validation };
+        }
+        const signedAmount = input.direction === "credit" ? BigInt(input.amountMinor) : -BigInt(input.amountMinor);
+        const entry = await tx.creditLedgerEntry.create({
+          data: {
+            workspaceId: input.workspaceId,
+            walletId: wallet.id,
+            type: "ADJUSTMENT",
+            amountMinor: signedAmount,
+            currency: wallet.currency,
+            idempotencyKey: input.idempotencyKey,
+            reason: input.reason
+          }
+        });
+        const updatedWallet = await tx.creditWallet.update({
+          where: { id: wallet.id },
+          data: { balanceMinor: { increment: signedAmount } }
+        });
+        await tx.auditEvent.create({
+          data: {
+            workspaceId: input.workspaceId,
+            actorUserId: actor.userId,
+            eventType: "credit.adjustment.recorded",
+            targetType: "CreditLedgerEntry",
+            targetId: entry.id,
+            reason: input.reason
+          }
+        });
+        return {
+          ok: true,
+          response: {
+            ledgerEntry: publicCreditLedgerEntry(entry),
+            wallet: publicCreditWallet(updatedWallet)
+          }
+        };
+      },
+      input.workspaceId
+    );
   }
 
   async function seedBlueprintLibraryEntry(actor, input) {
@@ -4485,6 +7961,13 @@ export function createPrismaWorkspaceStore(env = process.env) {
     createBrandCrawlRun,
     approveBrandProfile,
     createGenerationEstimate,
+    confirmGenerationEstimate,
+    getGenerationJob,
+    submitGenerationJob,
+    reconcileGenerationJob,
+    cancelGenerationJob,
+    processHeygenCallback,
+    settleGenerationJob,
     listBlueprints,
     seedBlueprintLibraryEntry,
     createBlueprintRequest,
@@ -4506,6 +7989,10 @@ export function createPrismaWorkspaceStore(env = process.env) {
     expireJobLeases,
     relayOutbox,
     listAvatars,
+    createCreditPurchase,
+    processPaymentCallback,
+    listWalletLedger,
+    createCreditAdjustment,
     disconnect: () => prisma.$disconnect()
   };
 }
@@ -4864,8 +8351,64 @@ function publicGenerationEstimate(estimate) {
     currency: estimate.currency,
     selectedScriptId: estimate.selectedScriptId,
     avatarProfileId: estimate.avatarProfileId,
+    // V0-G3: version and expiry are returned so the client can present staleness
+    // and echo the version back on confirmation. The input hash is a server-side
+    // validation secret and is never exposed.
+    version: Number(estimate.version),
+    durationSeconds: Number(estimate.durationSeconds),
+    expiresAt: toIso(estimate.expiresAt),
+    confirmedAt: toIso(estimate.confirmedAt),
     createdAt: toIso(estimate.createdAt),
     updatedAt: toIso(estimate.updatedAt)
+  };
+}
+
+function publicGenerationJob(job) {
+  return {
+    id: job.id,
+    workspaceId: job.workspaceId,
+    estimateId: job.estimateId,
+    brandProfileId: job.brandProfileId,
+    selectedScriptId: job.selectedScriptId ?? null,
+    avatarProfileId: job.avatarProfileId ?? null,
+    status: String(job.status),
+    idempotencyKey: job.idempotencyKey,
+    version: Number(job.version),
+    durationSeconds: Number(job.durationSeconds),
+    maximumAuthorizedMinor: Number(job.maximumAuthorizedMinor),
+    currency: job.currency,
+    priceVersion: job.priceVersion,
+    createdAt: toIso(job.createdAt),
+    updatedAt: toIso(job.updatedAt)
+  };
+}
+
+function publicCreditReservation(reservation) {
+  return {
+    id: reservation.id,
+    workspaceId: reservation.workspaceId,
+    generationJobId: reservation.generationJobId,
+    walletId: reservation.walletId,
+    status: String(reservation.status).toLowerCase(),
+    amountMinor: Number(reservation.amountMinor),
+    currency: reservation.currency,
+    idempotencyKey: reservation.idempotencyKey,
+    expiresAt: toIso(reservation.expiresAt),
+    createdAt: toIso(reservation.createdAt),
+    updatedAt: toIso(reservation.updatedAt)
+  };
+}
+
+function publicProviderPriceVersion(version) {
+  return {
+    id: version.id,
+    provider: version.provider,
+    priceVersion: version.priceVersion,
+    currency: version.currency,
+    rateMinorPerSecond: Number(version.rateMinorPerSecond),
+    source: version.source,
+    validFrom: toIso(version.validFrom),
+    validUntil: toIso(version.validUntil)
   };
 }
 
@@ -5289,6 +8832,243 @@ function avatarConsentProblem(reason) {
     return problem("AVATAR_CONSENT_EXPIRED", 409, "Avatar consent expired", "This avatar consent expired. Renew it before generation.");
   }
   return problem("AVATAR_CONSENT_REQUIRED", 409, "Avatar consent required", "Valid likeness and voice consent is required.");
+}
+
+// V0-G2 deterministic payment simulator helpers. The simulator signs the
+// canonical callback envelope with an HMAC-SHA256 over the stable canonical
+// form; the handler verifies the same canonical form. Production providers
+// verify over raw bytes; V0 uses the deterministic canonical form so the
+// simulator is reproducible without raw-body capture. The secret is held only
+// by the simulator and the handler, never returned to clients.
+const PAYMENT_CALLBACK_WINDOW_MS = 5 * 60 * 1000;
+
+function paymentSimulatorSecret(env = process.env) {
+  return env.V0_PAYMENT_SIMULATOR_SECRET || "v0-local-payment-secret";
+}
+
+function signPaymentEnvelope(envelope, secret) {
+  return createHmac("sha256", secret).update(stableJson(envelope)).digest("hex");
+}
+
+function verifyPaymentSignature(envelope, signature, secret) {
+  if (typeof signature !== "string" || signature.length === 0) {
+    return false;
+  }
+  const expected = signPaymentEnvelope(envelope, secret);
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+const HEYGEN_CALLBACK_WINDOW_MS = 5 * 60 * 1000;
+
+// V0-G4 HeyGen callback signing. Mirrors the Razorpay simulator: the simulator
+// signs the callback envelope and the store verifies it in constant time. The
+// secret never leaves the simulator. HEYGEN_WEBHOOK_SECRET is the configured
+// production secret; V0_HEYGEN_SIMULATOR_SECRET is the deterministic local secret.
+function heygenSimulatorSecret(env = process.env) {
+  return env.V0_HEYGEN_SIMULATOR_SECRET || env.HEYGEN_WEBHOOK_SECRET || "v0-local-heygen-secret";
+}
+
+function signHeygenEnvelope(envelope, secret) {
+  return createHmac("sha256", secret).update(stableJson(envelope)).digest("hex");
+}
+
+function verifyHeygenSignature(envelope, signature, secret) {
+  if (typeof signature !== "string" || signature.length === 0) {
+    return false;
+  }
+  const expected = signHeygenEnvelope(envelope, secret);
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+// V0-G4 provider request hash: binds the submission to the exact job, script,
+// avatar, duration, price version and provider route so a changed request is
+// detectable and the operation is exactly-once per job. Server-side binding; never
+// exposed publicly.
+function computeProviderRequestHash(job) {
+  return createHash("sha256")
+    .update(
+      stableJson({
+        jobId: job.id,
+        selectedScriptId: job.selectedScriptId ?? null,
+        avatarProfileId: job.avatarProfileId ?? null,
+        durationSeconds: Number(job.durationSeconds),
+        priceVersion: job.priceVersion,
+        provider: HEYGEN_PROVIDER
+      })
+    )
+    .digest("hex");
+}
+
+function publicProviderOperation(operation) {
+  return {
+    id: operation.id,
+    workspaceId: operation.workspaceId,
+    generationJobId: operation.generationJobId,
+    provider: operation.provider,
+    operationType: operation.operationType,
+    status: String(operation.status).toLowerCase(),
+    idempotencyKey: operation.idempotencyKey,
+    externalId: operation.externalId ?? null,
+    priceVersion: operation.priceVersion,
+    estimatedMaximumMinor: Number(operation.estimatedMaximumMinor),
+    currency: operation.currency,
+    retryAfterMs: operation.retryAfterMs ?? null,
+    lastErrorCode: operation.lastErrorCode ?? null,
+    providerTotalMinor: operation.providerTotalMinor == null ? null : Number(operation.providerTotalMinor),
+    settledAt: toIso(operation.settledAt),
+    submittedAt: toIso(operation.submittedAt),
+    acceptedAt: toIso(operation.acceptedAt),
+    completedAt: toIso(operation.completedAt),
+    reconciledAt: toIso(operation.reconciledAt),
+    cancelledAt: toIso(operation.cancelledAt),
+    createdAt: toIso(operation.createdAt),
+    updatedAt: toIso(operation.updatedAt)
+  };
+}
+
+function publicGeneratedSegment(segment) {
+  return {
+    id: segment.id,
+    workspaceId: segment.workspaceId,
+    generationJobId: segment.generationJobId,
+    providerOperationId: segment.providerOperationId,
+    provider: segment.provider,
+    externalId: segment.externalId ?? null,
+    segmentIndex: Number(segment.segmentIndex),
+    durationSeconds: Number(segment.durationSeconds),
+    contentType: segment.contentType,
+    byteSize: Number(segment.byteSize),
+    sha256: segment.sha256,
+    artifactId: segment.artifactId,
+    sourceFetchedAt: toIso(segment.sourceFetchedAt),
+    createdAt: toIso(segment.createdAt),
+    updatedAt: toIso(segment.updatedAt)
+  };
+}
+
+function publicGeneratedAsset(asset) {
+  return {
+    id: asset.id,
+    workspaceId: asset.workspaceId,
+    generationJobId: asset.generationJobId,
+    segmentId: asset.segmentId,
+    artifactId: asset.artifactId,
+    version: Number(asset.version),
+    kind: asset.kind,
+    durationSeconds: Number(asset.durationSeconds),
+    contentType: asset.contentType,
+    sha256: asset.sha256,
+    status: asset.status,
+    createdAt: toIso(asset.createdAt),
+    updatedAt: toIso(asset.updatedAt)
+  };
+}
+
+function publicCreativeLineage(lineage) {
+  return {
+    id: lineage.id,
+    workspaceId: lineage.workspaceId,
+    generationJobId: lineage.generationJobId,
+    brandProfileId: lineage.brandProfileId,
+    selectedScriptId: lineage.selectedScriptId ?? null,
+    avatarProfileId: lineage.avatarProfileId ?? null,
+    estimateId: lineage.estimateId,
+    provider: lineage.provider,
+    providerOperationId: lineage.providerOperationId,
+    priceVersion: lineage.priceVersion,
+    generatedAssetId: lineage.generatedAssetId,
+    createdAt: toIso(lineage.createdAt),
+    updatedAt: toIso(lineage.updatedAt)
+  };
+}
+
+function validateCreditPurchaseInput(input) {
+  const currency = typeof input.currency === "string" ? input.currency.toUpperCase() : "";
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "Currency must be a 3-letter ISO code.");
+  }
+  let provider = typeof input.provider === "string" ? input.provider : "";
+  if (provider === "") {
+    provider = currency === "INR" ? "razorpay" : "stripe";
+  }
+  if (!["razorpay", "stripe"].includes(provider)) {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "Provider must be razorpay or stripe.");
+  }
+  if (provider === "razorpay" && currency !== "INR") {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "Razorpay is the India provider and requires INR.");
+  }
+  if (provider === "stripe" && currency === "INR") {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "Stripe is the international provider and cannot be used for INR.");
+  }
+  if (!Number.isInteger(input.amountMinor) || input.amountMinor <= 0) {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "Amount must be a positive integer in minor units.");
+  }
+  return null;
+}
+
+function validateCreditAdjustmentInput(input, walletCurrency) {
+  if (!["credit", "debit"].includes(input.direction)) {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "Direction must be credit or debit.");
+  }
+  if (!Number.isInteger(input.amountMinor) || input.amountMinor <= 0) {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "Amount must be a positive integer in minor units.");
+  }
+  const currency = typeof input.currency === "string" ? input.currency.toUpperCase() : "";
+  if (currency !== walletCurrency) {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "Adjustment currency must match the wallet currency.");
+  }
+  if (typeof input.reason !== "string" || input.reason.trim().length === 0 || input.reason.length > 500) {
+    return problem("VALIDATION_FAILED", 422, "Validation failed", "A non-empty reason is required for a compensating adjustment.");
+  }
+  return null;
+}
+
+function publicCreditWallet(wallet) {
+  return {
+    id: wallet.id,
+    workspaceId: wallet.workspaceId,
+    currency: wallet.currency,
+    balanceMinor: Number(wallet.balanceMinor),
+    createdAt: toIso(wallet.createdAt),
+    updatedAt: toIso(wallet.updatedAt)
+  };
+}
+
+function publicCreditPurchase(purchase) {
+  return {
+    id: purchase.id,
+    workspaceId: purchase.workspaceId,
+    walletId: purchase.walletId,
+    provider: purchase.provider,
+    providerReference: purchase.providerReference,
+    status: String(purchase.status).toLowerCase(),
+    amountMinor: Number(purchase.amountMinor),
+    currency: purchase.currency,
+    idempotencyKey: purchase.idempotencyKey,
+    createdAt: toIso(purchase.createdAt),
+    updatedAt: toIso(purchase.updatedAt)
+  };
+}
+
+function publicCreditLedgerEntry(entry, runningBalanceMinor) {
+  return {
+    id: entry.id,
+    workspaceId: entry.workspaceId,
+    walletId: entry.walletId,
+    generationJobId: entry.generationJobId ?? null,
+    type: entry.type,
+    amountMinor: Number(entry.amountMinor),
+    currency: entry.currency,
+    idempotencyKey: entry.idempotencyKey,
+    reason: entry.reason ?? null,
+    effectiveAt: toIso(entry.effectiveAt),
+    createdAt: toIso(entry.createdAt),
+    ...(runningBalanceMinor !== undefined ? { runningBalanceMinor: Number(runningBalanceMinor) } : {})
+  };
 }
 
 function isBlueprintCompatible(entry, profile, objectiveType) {
@@ -6797,6 +10577,41 @@ function hashRequest(input) {
   return createHash("sha256").update(stableJson(input)).digest("hex");
 }
 
+// V0-G3: the input hash binds the exact script, avatar and duration the user
+// saw at estimate time. Confirmation recomputes this over the confirm body and
+// compares it to the stored hash so a changed script, avatar or duration
+// surfaces as ESTIMATE_INPUT_CHANGED rather than a silent re-price.
+function computeGenerationInputHash(input) {
+  const durationSeconds = normalizeDurationSeconds(input.durationSeconds);
+  return createHash("sha256")
+    .update(
+      stableJson({
+        selectedScriptId: input.selectedScriptId ?? null,
+        avatarProfileId: input.avatarProfileId ?? null,
+        durationSeconds
+      })
+    )
+    .digest("hex");
+}
+
+function normalizeDurationSeconds(value) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return 30;
+  }
+  // The V0 pilot caps generation at 30 seconds; longer requests are clamped,
+  // never rejected, so the authorized maximum stays the deterministic cap.
+  return Math.min(parsed, 30);
+}
+
+function estimateTtlMs(env = process.env) {
+  const parsed = Number(env.V0_ESTIMATE_TTL_MS);
+  if (Number.isInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return 15 * 60 * 1000;
+}
+
 function stableJson(value) {
   if (Array.isArray(value)) {
     return `[${value.map((item) => stableJson(item)).join(",")}]`;
@@ -6810,7 +10625,7 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
-function problem(code, status, title, detail) {
+function problem(code, status, title, detail, retryable) {
   return {
     type: `https://errors.sakhaa-forge.invalid/v0/${code}`,
     title,
@@ -6818,6 +10633,13 @@ function problem(code, status, title, detail) {
     code,
     detail,
     trace_id: "v0-local-trace",
-    retryable: code === "IDEMPOTENCY_KEY_REQUIRED" || code === "DEPENDENCY_UNAVAILABLE"
+    retryable:
+      typeof retryable === "boolean"
+        ? retryable
+        : code === "IDEMPOTENCY_KEY_REQUIRED" ||
+          code === "DEPENDENCY_UNAVAILABLE" ||
+          code === "ESTIMATE_EXPIRED" ||
+          code === "ESTIMATE_INPUT_CHANGED" ||
+          code === "PROVIDER_RATE_LIMITED"
   };
 }

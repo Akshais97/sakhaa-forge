@@ -111,6 +111,7 @@ Provider payloads, secrets, internal paths and protected resource existence are 
 | `PROVIDER_OUTPUT_INVALID` | 422 | The generated media failed validation and was not accepted. | Conditional | Inspect provider/artifact | error |
 | `PROVIDER_COST_EXCEEDS_AUTHORIZATION` | 409 | The provider cost exceeded the authorised maximum. Settlement is blocked. | No | Admin/provider escalation | critical |
 | `GENERATION_CANCEL_UNCERTAIN` | 202 | Cancellation is requested. We must check the submitted provider operation first. | No manual retry | Reconcile | warn |
+| `GENERATION_JOB_NOT_SUBMITTABLE` | 409 | This generation cannot be submitted, cancelled or settled in its current state. | No | Reconcile the provider operation | warn |
 
 ## 8. Composition and Review Errors
 

@@ -43,9 +43,13 @@ POST   /script-tournaments
 POST   /script-tournaments/{id}/select
 GET    /avatars
 POST   /generation-estimates
+POST   /generation-estimates/{id}/confirm   Idempotency-Key required; Owner/Admin/Client Manager
 POST   /generation-jobs
 GET    /generation-jobs/{id}
-POST   /generation-jobs/{id}/cancel
+POST   /generation-jobs/{id}/submit            Idempotency-Key required; Owner/Admin/Client Manager
+POST   /generation-jobs/{id}/reconcile         Idempotency-Key required; Owner/Admin/Client Manager
+POST   /generation-jobs/{id}/cancel            Idempotency-Key required; Owner/Admin/Client Manager
+POST   /generation-jobs/{id}/settle            Idempotency-Key required; Owner/Admin/Client Manager
 POST   /composition-plans
 POST   /composition-plans/{id}/render
 POST   /review-items/{id}/comments
@@ -53,8 +57,9 @@ POST   /review-items/{id}/decisions
 POST   /calendar-posts
 POST   /calendar-posts/{id}/publish
 POST   /calendar-posts/{id}/verify
-POST   /credit-purchases
-GET    /credit-wallets/{id}/ledger
+POST   /credit-purchases                          Idempotency-Key required; Owner/Admin/Client Manager
+GET    /credit-wallets/{id}/ledger                Owner/Admin/Client Manager; Owner/Admin reconciliation
+POST   /credit-wallets/{id}/adjustments           Idempotency-Key required; Owner/Admin only
 GET    /jobs/{id}
 GET    /jobs/{id}/events
 GET    /jobs/{id}/trace
@@ -222,6 +227,216 @@ loads the supplied `avatarProfileId` from this brand-bound catalogue and rejects
 revoked, expired, missing-evidence and service-pending avatars with the stable
 `AVATAR_CONSENT_*` codes, so an avatar that is unavailable in the catalogue cannot
 enter a paid generation step.
+
+## Credit Wallet, Verified Purchase And Ledger (V0-G2)
+
+`POST /credit-purchases` initiates a verified credit purchase for the deterministic
+Razorpay (India, INR) or Stripe (international, non-INR) simulator. The request requires
+an `Idempotency-Key` and the `purchase_credits_and_view_wallet_ledger` capability (Owner,
+Admin, Client Manager). Provider currency policy is enforced: Razorpay accepts INR only
+and Stripe accepts a non-INR currency only; a violation returns `VALIDATION_FAILED` (422).
+The API creates one workspace wallet per currency (idempotent on `(workspaceId, currency)`),
+a `CreditPurchase` row in the `initiated` state with a simulator `providerReference`, and
+responds `202 Accepted` with a signed `checkout` envelope and signature. No payment
+instrument detail is ever stored or returned.
+
+`POST /callbacks/razorpay` and `POST /callbacks/stripe` are the authenticated, deduplicated,
+replay-protected payment callbacks. The handler verifies the HMAC-SHA256 signature over the
+stable envelope with the simulator secret (`PAYMENT_SIGNATURE_INVALID` 401 on mismatch),
+rejects replays outside a five-minute timestamp window and deduplicates by
+`(workspaceId, provider, providerReference)` via `InboxEvent`. A verified callback
+reconciles amount, currency, provider reference and workspace against the initiated
+purchase; a mismatch returns `PAYMENT_AMOUNT_MISMATCH` (409) and credits nothing. A matched
+callback transitions the purchase to `succeeded`, appends exactly one `PURCHASE` ledger
+entry in integer minor units, and credits the wallet. Refund and dispute callbacks append
+`REFUND` ledger entries that debit the wallet; the purchase moves to `refunded` or
+`disputed`. Ledger entries are append-only; corrections are compensating entries, never
+edits to history. A timeout after possible provider acceptance is treated as `unknown` and
+reconciled before any retry; uncertain paid operations are never blindly retried.
+
+`GET /credit-wallets/{id}/ledger` returns the append-only wallet ledger in integer minor
+units with a running balance per entry, bounded by `limit` (1-50) with a cursor. The
+endpoint requires the `purchase_credits_and_view_wallet_ledger` capability. Owner and Admin
+also receive a `reconciliation` summary that matches ledger purchase and refund totals
+against the deterministic simulator paid totals (`matched`, `mismatched`, or `unknown`);
+Client Manager receives the ledger without the reconciliation summary. A missing or
+cross-workspace wallet is hidden behind `WORKSPACE_ACCESS_DENIED` (404), never a 409 that
+leaks existence, and the other workspace id never appears in the error body.
+
+`POST /credit-wallets/{id}/adjustments` records a compensating credit adjustment as an
+append-only `ADJUSTMENT` ledger entry. The request requires an `Idempotency-Key` and the
+`adjust_credits` capability (Owner, Admin only; Client Manager is denied with
+`PERMISSION_DENIED` 403). A `debit` debits the wallet and a `credit` credits it; the
+adjustment never edits history and is reversible only by a further compensating entry. The
+public purchase status is normalized to the lowercase `V0_STATUS_ENUMS.md` contract
+(`initiated`, `pending`, `succeeded`, `failed`, `refunded`, `disputed`); the ledger `type`
+is uppercase (`PURCHASE`, `REFUND`, `ADJUSTMENT`; `RESERVE`, `CAPTURE`, `RELEASE` are
+reserved for V0-G3 atomic credit reservation and are not written in V0-G2).
+
+## Versioned Generation Estimate And Atomic Reservation (V0-G3)
+
+`POST /generation-estimates` (extended in V0-G3) binds the estimate to an active
+`ProviderPriceVersion` for the `heygen-simulator` route and INR currency, records a
+SHA-256 `inputHash` over the selected script, avatar and duration, sets an `expiresAt`
+from `V0_ESTIMATE_TTL_MS` (default 15 minutes) and an optimistic `version` of 1, and
+returns the price version, the integer-minor-units `maximumAuthorizedMinor`
+(48,000 for the 30-second pilot cap), the duration and the expiry. The `inputHash` is a
+server-side validation secret and is never returned. The estimate starts in
+`awaiting_confirmation`; reservation does not imply provider submission, which is V0-G4.
+
+`POST /generation-estimates/{estimateId}/confirm` is the V0-G3 atomic credit reservation.
+The request requires an `Idempotency-Key` and the `confirm_paid_generation` capability
+(Owner, Admin, Client Manager), and must echo the `workspaceId`, the estimate `version`,
+the `selectedScriptId`, `avatarProfileId` and `durationSeconds` the user saw. The API
+rejects, in order, an estimate that is no longer `awaiting_confirmation`
+(`CREDIT_RESERVATION_CONFLICT` 409), an optimistic-version mismatch
+(`RESOURCE_VERSION_STALE` 409), a changed script/avatar/duration (`ESTIMATE_INPUT_CHANGED`
+409, retryable), an expired estimate (`ESTIMATE_EXPIRED` 409, retryable) and a wallet
+balance below the authorized maximum (`CREDIT_BALANCE_INSUFFICIENT` 409). A passing
+confirmation creates exactly one `GenerationJob` in the `queued` state, one active
+`CreditReservation` for the authorized maximum, and exactly one `RESERVE` ledger entry
+that debits the wallet in integer minor units, all inside one short database transaction
+and before any provider network I/O. The estimate transitions to `credits_reserved` with a
+`confirmedAt` timestamp, and a durable `generation.confirmed` audit row (target type
+`GenerationJob`) is retained. The response is `202 Accepted` with the estimate, job,
+reservation, ledger entry and updated wallet. A replay with the same `Idempotency-Key`
+returns the original confirmation and never reserves a second time; a replay with
+different details returns `IDEMPOTENCY_INPUT_CONFLICT` (409). Double-click and concurrent
+confirmation of the same estimate are guarded by the estimate status check in the
+in-memory store and by the partial unique index
+`credit_reservations_one_active_per_job_idx` (`status = 'ACTIVE'`) in Postgres, so credits
+cannot be reserved twice for one job. A missing or cross-workspace estimate or job is
+hidden behind `WORKSPACE_ACCESS_DENIED` (404), never a 409 that leaks existence, and the
+other workspace id never appears in the error body.
+
+`GET /generation-jobs/{jobId}` returns the queued generation job and its active
+reservation for the workspace. The endpoint requires the `confirm_paid_generation`
+capability. A missing or cross-workspace job is hidden behind
+`WORKSPACE_ACCESS_DENIED` (404). The job status is the lowercase `V0_STATUS_ENUMS.md`
+Generation contract (`queued` in V0-G3); the reservation status is the lowercase
+Reservation contract (`active`, `captured`, `released`, `expired`, `adjusted`). Money is
+integer minor units everywhere; the input hash, signed URLs, provider payloads and secrets
+are never returned.
+
+## Exactly-Once HeyGen Submission (V0-G4)
+
+`POST /generation-jobs/{jobId}/submit` submits a `queued` generation job to the
+`heygen-simulator` provider exactly once. The request requires an `Idempotency-Key` and the
+`confirm_paid_generation` capability (Owner, Admin, Client Manager), and must echo the
+`workspaceId`. The API rejects, in order, a missing or cross-workspace job
+(`WORKSPACE_ACCESS_DENIED` 404, before any per-job conflict is observable so cross-tenant
+existence never leaks), a job that is not `queued` (`GENERATION_JOB_NOT_SUBMITTABLE` 409),
+a second idempotency key for a job that already has a provider operation
+(`IDEMPOTENCY_INPUT_CONFLICT` 409), and a workspace at the provider concurrency limit
+(`PROVIDER_RATE_LIMITED` 429, retryable, with `retryAfterMs`). A missing `Idempotency-Key`
+returns `IDEMPOTENCY_KEY_REQUIRED` (400).
+
+A passing submission persists a durable `ProviderOperation` in `SUBMITTING` inside a first
+short database transaction **before** any provider network I/O, so a crash between
+persistence and the network response leaves a resumable operation, never a blind duplicate.
+The operation binds the workspace, generation job, provider route, idempotency key, a
+SHA-256 `requestHash` (server-side binding secret, never returned), the bound price version
+and the integer-minor-units `estimatedMaximumMinor`. The provider network call runs outside
+the transaction; a second short transaction then applies the outcome. A simulator `success`
+outcome advances the operation to `ACCEPTED` with the provider `externalId` and the job to
+`accepted`, and the response is `202 Accepted` with the job, the operation and a
+simulator-only `callback` envelope (no media URL) the deterministic test harness signs and
+posts back. A simulator `timeout` outcome advances the operation to `UNKNOWN` and the job to
+`unknown`; the response is `202 Accepted` with `unknown: true` and a `callback: null`, and
+the caller must reconcile before any retry. A simulator `malformed` outcome returns
+`PROVIDER_OUTPUT_INVALID` (422) and leaves the operation in `SUBMITTING` for reconciliation;
+no callback is surfaced. The `requestHash`, provider payloads, signed URLs and secrets are
+never returned; the surfaced `callback.signature` is the deterministic simulator's HMAC
+digest (the same affordance as G2 `checkout.signature`), not a credential.
+
+`POST /generation-jobs/{jobId}/reconcile` re-reads the provider for an `UNKNOWN` (or
+`SUBMITTING`/`ACCEPTED`) operation and advances it to the resolved state without blind
+retry. The request requires an `Idempotency-Key`, the `confirm_paid_generation` capability
+and the `workspaceId`. A reconcile of an operation that the simulator reports `accepted`
+returns the existing `ACCEPTED` operation; a `processing` report advances to `PROCESSING`;
+a `completed` report advances to `COMPLETED` and the job to `generated`; a `failed` report
+advances to `FAILED` and the job to `failed`; a still-`pending` report leaves the operation
+`UNKNOWN` and the response carries `unknown: true`. A missing or cross-workspace job returns
+`WORKSPACE_ACCESS_DENIED` (404). The response is `200 OK` (or `202 Accepted` while still
+unknown).
+
+`POST /generation-jobs/{jobId}/cancel` requests cancellation of a submitted generation. The
+request requires an `Idempotency-Key`, the `confirm_paid_generation` capability and the
+workspaceId. A cancel of an `UNKNOWN` operation sets the job to `cancel_requested` and the
+operation stays `UNKNOWN` for reconcile (cancellation during uncertainty is uncertain); the
+response is `202 Accepted` with `uncertain: true`. A cancel of an `ACCEPTED`/`PROCESSING`
+operation that the simulator reports still `pending` sets the job to `cancel_requested`; a
+`completed` report rejects cancellation as `GENERATION_JOB_NOT_SUBMITTABLE` (409). A missing
+or cross-workspace job returns `WORKSPACE_ACCESS_DENIED` (404). Credit capture and release
+on terminal states is V0-G5.
+
+`POST /callbacks/heygen` is the HeyGen webhook receiver. The handler verifies the
+`x-heygen-signature` HMAC-SHA256 in constant time over the canonical envelope, enforces a
+timestamp window (`V0_HEYGEN_CALLBACK_WINDOW_MS`, default 5 minutes), deduplicates by an
+`inbox_events` row keyed `(workspaceId, 'heygen', eventId)`, and rejects a malformed,
+bad-signature, stale or unreconcilable callback with `PROVIDER_CALLBACK_INVALID` (401)
+without leaking whether the target operation exists. A verified `video.completed` event
+advances the operation to `COMPLETED` and the job to `generated` exactly once; a replay
+acknowledges the original transition with `duplicate: true` and never transitions twice. A
+`video.failed` event advances to `FAILED`. The response is `200 OK`. Provider payloads stay
+adapter-private; only the bound external id, status and timestamps are persisted.
+
+## Retained Generated Media And Settled Credits (V0-G5)
+
+`POST /generation-jobs/{jobId}/settle` settles a terminal paid generation by retaining the
+completed provider media into private V0 storage through the adapter only, validating and
+hashing it, and capturing or releasing the reserved credits exactly once. The request
+requires an `Idempotency-Key`, the `confirm_paid_generation` capability (Owner, Admin,
+Client Manager) and the `workspaceId`. The response is `202 Accepted`. Settlement never
+changes the generation job status (the job stays `generated`/`failed`); it changes the
+reservation, the credit ledger and the retained media.
+
+The API rejects, in order, a missing or cross-workspace job (`WORKSPACE_ACCESS_DENIED` 404,
+before any per-job state is observable so cross-tenant existence never leaks), a job whose
+provider operation is not terminal (`GENERATION_JOB_NOT_SUBMITTABLE` 409), and a missing
+`Idempotency-Key` (`IDEMPOTENCY_KEY_REQUIRED` 400). Replay is detected by reservation status
+(`captured`/`released`), not by the caller's `Idempotency-Key`, so a replay with a different
+key returns `replay: true` and never settles a second time.
+
+For a `completed` operation the store fetches the provider media through the HeyGen adapter
+only. The transient provider URL is never retained: the adapter returns only `externalId`,
+`sha256`, `durationSeconds`, `contentType`, `byteSize`, `resolution` and
+`providerTotalMinor`, and raw provider payloads stay adapter-private. The media is
+quarantined into a `QUARANTINED` `Artifact`, validated (SHA-256 hash, non-zero byte size,
+positive duration, supported content type, non-negative provider total), then promoted to
+`CLEAN` with retention class `clean-media`, producer `job:{jobId}` and schema version
+`artifact.generated.v1`. A `GeneratedSegment`, a versioned `GeneratedAsset` (version 1, kind
+`provider_video`, status `CLEAN`) and a `CreativeLineage` row are created. The reconciled
+`providerTotalMinor` is written onto the provider operation.
+
+The provider total is reconciled against the authorized maximum before any capture. If
+`providerTotalMinor > estimatedMaximumMinor` the settlement is refused with
+`PROVIDER_COST_EXCEEDS_AUTHORIZATION` (409) and no capture or release is written; the
+reservation stays `active` and the wallet is untouched. If the provider media is unreadable
+or fails validation the settlement is refused with `ASSET_MEDIA_MALFORMED` (422) and no
+capture is written. Media is not clean until artifact validation passes.
+
+Credit settlement is idempotent and append-only. On success a single `CAPTURE` ledger entry
+is written with amount `(estimatedMaximumMinor - providerTotalMinor)` in integer minor units
+(0 when the actual provider total equals the maximum); the reservation moves to `captured`.
+On failure (`failed`/`rejected`/`cancelled` operation) a single `RELEASE` ledger entry is
+written with the full reservation amount, the wallet is restored, and the reservation moves
+to `released`; no media is retained for a failed operation. The CAPTURE/RELEASE entries carry
+job-derived idempotency keys (`g5-capture-{jobId}` / `g5-release-{jobId}`) so crash recovery
+re-uses the same key and the store checks for an existing entry before writing, preventing
+orphaned capture or duplicate release.
+
+A crash between media retention and ledger settlement is recovered once. In the
+`crash_after_retain` simulator mode (`V0_G5_SIMULATOR_MODE`) the first call retains the media
+(commits the segment/asset/lineage/artifact and writes `providerTotalMinor`) then returns
+`DEPENDENCY_UNAVAILABLE` (503) before the ledger entry; the second call detects the existing
+segment, completes the CAPTURE ledger exactly once, and never re-retains or double-captures.
+The `requestHash`, provider payloads, transient media URLs, signed URLs and secrets are never
+returned; the retained segment `externalId` is the bound provider id, not a URL. Money is
+integer minor units everywhere; the artifact trust status is returned UPPERCASE (`CLEAN`/
+`REJECTED`) per the V0-F3 AssetTrustStatus contract, the reservation status is lowercase
+(`active`/`captured`/`released`) per `V0_STATUS_ENUMS.md`, and the ledger `type` is UPPERCASE
+(`CAPTURE`/`RELEASE`).
 
 ## Provider Callbacks
 

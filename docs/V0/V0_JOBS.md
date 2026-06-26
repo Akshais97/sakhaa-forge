@@ -85,6 +85,41 @@ Persist the operation and reserve credits before network I/O. A timeout after su
 becomes `unknown`; reconciliation queries by external ID, request hash or original
 idempotency key. Blind resubmission is prohibited.
 
+V0-G4 implements this state machine for the `heygen-simulator` route. A durable
+`ProviderOperation` is persisted in `SUBMITTING` inside a first short database transaction
+**before** the provider network call; the network call runs outside the transaction; a
+second short transaction applies the outcome. A simulator `success` outcome advances
+`SUBMITTING` → `ACCEPTED` (job `accepted`); a `timeout` outcome advances
+`SUBMITTING` → `UNKNOWN` (job `unknown`) and the caller must reconcile before any retry. A
+`malformed` outcome returns `PROVIDER_OUTPUT_INVALID` and leaves the operation
+`SUBMITTING` for reconciliation. Reconciliation (`reconcile_provider`) re-reads the
+provider without blind retry and resolves `UNKNOWN` to `accepted`/`processing`/`completed`/
+`failed`/still-`pending`; a verified `video.completed` HeyGen callback
+(`POST /callbacks/heygen`, signature-verified, windowed, deduplicated by `eventId`)
+advances the operation to `COMPLETED` and the job to `generated` exactly once;
+`video.failed` advances to `FAILED`. Cancellation during uncertainty sets the job to
+`cancel_requested` and the operation stays `UNKNOWN` for reconcile. The
+`heygen-simulator` concurrency limit defaults to 10 (`V0_HEYGEN_CONCURRENCY_LIMIT`, env
+1–10); exceeding it returns `PROVIDER_RATE_LIMITED` (429, retryable) with `retryAfterMs`.
+
+V0-G5 settles a terminal paid generation through `reconcile_credit` once the provider
+operation is `completed`, `failed`, `rejected` or `cancelled`. Settlement is a billing
+action on an already-authorized reservation, not a generation state change: the job stays
+`generated`/`failed`. The settle step fetches the completed provider media through the
+adapter only, quarantines and validates it, promotes the `Artifact` to `CLEAN`, and binds a
+`GeneratedSegment`, a versioned `GeneratedAsset` and a `CreativeLineage` row. The reconciled
+`providerTotalMinor` is checked against `estimatedMaximumMinor` before any credit movement:
+a `completed` operation captures the unused remainder once (`CAPTURE`, 0 when the actual
+total equals the maximum) and moves the reservation to `captured`; a failed/rejected/
+cancelled operation releases the full reservation once (`RELEASE`, wallet restored) and
+moves it to `released`. The `CAPTURE`/`RELEASE` ledger entries carry job-derived idempotency
+keys so a crash between media retention and ledger settlement is recovered once without
+orphaned capture or duplicate release. Replay is detected by reservation status, not by the
+caller's idempotency key. A cost mismatch refuses settlement
+(`PROVIDER_COST_EXCEEDS_AUTHORIZATION`) and corrupt media refuses settlement
+(`ASSET_MEDIA_MALFORMED`); neither moves credits. `DEPENDENCY_UNAVAILABLE` (503) marks the
+recoverable crash window.
+
 ## Pipeline Rules
 
 - Brand approval is a dependency for every production script/generation job.

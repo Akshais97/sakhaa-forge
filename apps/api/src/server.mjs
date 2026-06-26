@@ -319,11 +319,190 @@ function createF0Controller(env, store, prefix) {
         throw new HttpException(auth.problem, auth.problem.status);
       }
       await assertWorkspacePermission(store, auth.actor, request.body?.workspaceId, "confirm_paid_generation");
-      const result = await store.createGenerationEstimate(auth.actor, request.body ?? {});
+      let result;
+      try {
+        result = await store.createGenerationEstimate(auth.actor, request.body ?? {});
+      } catch (error) {
+        if (env.V0_EXPOSE_TEST_ERRORS === "1") {
+          throw new HttpException(
+            problem("RUNTIME_DB_WRITE_FAILED", 500, "Runtime database write failed", sanitizeError(error)),
+            500
+          );
+        }
+        throw error;
+      }
       if (!result.ok) {
         throw new HttpException(result.problem, result.problem.status);
       }
       return result.response;
+    }
+
+    // V0-G3: confirm a versioned estimate and atomically reserve credits for one
+    // generation. This is a costly, externally visible paid mutation, so it
+    // requires an Idempotency-Key and runs through store.runIdempotent; a replay
+    // with the same key returns the original confirmation and never reserves a
+    // second time, while a replay with different details returns
+    // IDEMPOTENCY_INPUT_CONFLICT. The capability is the same confirm_paid_generation
+    // capability that guards estimate creation.
+    async confirmGenerationEstimate(request, estimateId) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const body = request.body ?? {};
+      await assertWorkspacePermission(store, auth.actor, body.workspaceId, "confirm_paid_generation");
+      const idempotencyKey = requireIdempotencyKey(request.headers, env);
+      const input = { ...body, estimateId, idempotencyKey };
+      const result = await store.runIdempotent(
+        {
+          actor: auth.actor,
+          operation: "generation.estimate.confirm",
+          idempotencyKey: idempotencyKey.trim(),
+          input
+        },
+        async () => {
+          let confirmed;
+          try {
+            confirmed = await store.confirmGenerationEstimate(auth.actor, input);
+          } catch (error) {
+            if (env.V0_EXPOSE_TEST_ERRORS === "1") {
+              throw new HttpException(
+                problem("RUNTIME_DB_WRITE_FAILED", 500, "Runtime database write failed", sanitizeError(error)),
+                500
+              );
+            }
+            throw error;
+          }
+          if (!confirmed.ok) {
+            throw new HttpException(confirmed.problem, confirmed.problem.status);
+          }
+          return confirmed.response;
+        }
+      );
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    async getGenerationJob(request, jobId, query) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const result = await store.getGenerationJob(auth.actor, {
+        jobId,
+        workspaceId: query?.workspaceId
+      });
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    // V0-G4: submit a queued generation job to the HeyGen simulator exactly once.
+    // A costly, externally visible paid mutation: requires an Idempotency-Key and
+    // the confirm_paid_generation capability. A replay returns the existing
+    // operation and never calls the provider again.
+    async submitGenerationJob(request, jobId) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const body = request.body ?? {};
+      await assertWorkspacePermission(store, auth.actor, body.workspaceId, "confirm_paid_generation");
+      const idempotencyKey = requireIdempotencyKey(request.headers, env);
+      const input = { ...body, jobId, idempotencyKey };
+      let result;
+      try {
+        result = await store.submitGenerationJob(auth.actor, input);
+      } catch (error) {
+        if (env.V0_EXPOSE_TEST_ERRORS === "1") {
+          throw new HttpException(
+            problem("RUNTIME_DB_WRITE_FAILED", 500, "Runtime database write failed", sanitizeError(error)),
+            500
+          );
+        }
+        throw error;
+      }
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    // V0-G4: reconcile an uncertain provider operation. A recovery action: requires
+    // an Idempotency-Key and an authorised actor. Never resubmits.
+    async reconcileGenerationJob(request, jobId) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const body = request.body ?? {};
+      await assertWorkspacePermission(store, auth.actor, body.workspaceId, "confirm_paid_generation");
+      const idempotencyKey = requireIdempotencyKey(request.headers, env);
+      const input = { ...body, jobId, idempotencyKey };
+      const result = await store.reconcileGenerationJob(auth.actor, input);
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    // V0-G4: cancel a generation. Cancellation is a request: 202 Accepted. Uncertain
+    // provider operations reconcile first; if still uncertain the job is
+    // cancel_requested and the response carries uncertain: true.
+    async cancelGenerationJob(request, jobId) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const body = request.body ?? {};
+      await assertWorkspacePermission(store, auth.actor, body.workspaceId, "confirm_paid_generation");
+      const idempotencyKey = requireIdempotencyKey(request.headers, env);
+      const input = { ...body, jobId, idempotencyKey };
+      const result = await store.cancelGenerationJob(auth.actor, input);
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    // V0-G5: settle a terminal provider operation. Completed media is retained into
+    // private V0 storage, validated and bound to lineage; credits are captured once on
+    // success or released once on failure. Settlement is idempotent and crash-recoverable.
+    // A billing action: requires an Idempotency-Key and an authorised actor.
+    async settleGenerationJob(request, jobId) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const body = request.body ?? {};
+      await assertWorkspacePermission(store, auth.actor, body.workspaceId, "confirm_paid_generation");
+      const idempotencyKey = requireIdempotencyKey(request.headers, env);
+      const input = { ...body, jobId, idempotencyKey };
+      let result;
+      try {
+        result = await store.settleGenerationJob(auth.actor, input);
+      } catch (error) {
+        if (env.V0_EXPOSE_TEST_ERRORS === "1") {
+          throw new HttpException(
+            problem("RUNTIME_DB_WRITE_FAILED", 500, "Runtime database write failed", sanitizeError(error)),
+            500
+          );
+        }
+        throw error;
+      }
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    async handleHeygenCallback(request) {
+      return processPaymentCallbackResponse(
+        store.processHeygenCallback(request.body ?? {}, request.headers["x-heygen-signature"])
+      );
     }
 
     async listBlueprints(request, query) {
@@ -360,6 +539,101 @@ function createF0Controller(env, store, prefix) {
         throw new HttpException(result.problem, result.problem.status);
       }
       return result.response;
+    }
+
+    async createCreditPurchase(request) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const body = request.body ?? {};
+      await assertWorkspacePermission(store, auth.actor, body.workspaceId, "purchase_credits_and_view_wallet_ledger");
+      const idempotencyKey = requireIdempotencyKey(request.headers, env);
+      const currency = typeof body.currency === "string" ? body.currency.toUpperCase() : body.currency;
+      let provider = typeof body.provider === "string" ? body.provider : "";
+      if (provider === "") {
+        provider = currency === "INR" ? "razorpay" : "stripe";
+      }
+      const input = { ...body, currency, provider, idempotencyKey };
+      const result = await store.runIdempotent(
+        {
+          actor: auth.actor,
+          operation: "credit.purchase.create",
+          idempotencyKey: idempotencyKey.trim(),
+          input
+        },
+        async () => {
+          const created = await store.createCreditPurchase(auth.actor, input);
+          if (!created.ok) {
+            throw new HttpException(created.problem, created.problem.status);
+          }
+          return created.response;
+        }
+      );
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    async getWalletLedger(request, walletId, query) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      await assertWorkspacePermission(store, auth.actor, query?.workspaceId, "purchase_credits_and_view_wallet_ledger");
+      const result = await store.listWalletLedger(auth.actor, {
+        walletId,
+        workspaceId: query.workspaceId,
+        limit: query.limit ? Number.parseInt(query.limit, 10) : undefined,
+        cursor: query.cursor
+      });
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    async createCreditAdjustment(request, walletId) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const body = request.body ?? {};
+      await assertWorkspacePermission(store, auth.actor, body.workspaceId, "adjust_credits");
+      const idempotencyKey = requireIdempotencyKey(request.headers, env);
+      const input = { ...body, walletId, idempotencyKey };
+      const result = await store.runIdempotent(
+        {
+          actor: auth.actor,
+          operation: "credit.adjustment.create",
+          idempotencyKey: idempotencyKey.trim(),
+          input
+        },
+        async () => {
+          const adjusted = await store.createCreditAdjustment(auth.actor, input);
+          if (!adjusted.ok) {
+            throw new HttpException(adjusted.problem, adjusted.problem.status);
+          }
+          return adjusted.response;
+        }
+      );
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    async handleRazorpayCallback(request) {
+      return processPaymentCallbackResponse(
+        store.processPaymentCallback("razorpay", request.body ?? {}, request.headers["x-razorpay-signature"])
+      );
+    }
+
+    async handleStripeCallback(request) {
+      return processPaymentCallbackResponse(
+        store.processPaymentCallback("stripe", request.body ?? {}, request.headers["stripe-signature"])
+      );
     }
 
     async seedBlueprintLibraryEntry(request) {
@@ -799,8 +1073,20 @@ function createF0Controller(env, store, prefix) {
   route("brands/crawl-runs/:crawlRunId/candidates", F0Controller, "listBrandCandidates", [Req(), Param("crawlRunId")], 200);
   postRoute("brands/:brandId/approvals", F0Controller, "approveBrandProfile", [Req(), Param("brandId")], 201);
   postRoute("generation-estimates", F0Controller, "createGenerationEstimate", [Req()], 202);
+  postRoute("generation-estimates/:estimateId/confirm", F0Controller, "confirmGenerationEstimate", [Req(), Param("estimateId")], 202);
+  route("generation-jobs/:jobId", F0Controller, "getGenerationJob", [Req(), Param("jobId"), Query()], 200);
+  postRoute("generation-jobs/:jobId/submit", F0Controller, "submitGenerationJob", [Req(), Param("jobId")], 202);
+  postRoute("generation-jobs/:jobId/reconcile", F0Controller, "reconcileGenerationJob", [Req(), Param("jobId")], 200);
+  postRoute("generation-jobs/:jobId/cancel", F0Controller, "cancelGenerationJob", [Req(), Param("jobId")], 202);
+  postRoute("generation-jobs/:jobId/settle", F0Controller, "settleGenerationJob", [Req(), Param("jobId")], 202);
   route("blueprints", F0Controller, "listBlueprints", [Req(), Query()], 200);
   route("avatars", F0Controller, "listAvatars", [Req(), Query()], 200);
+  postRoute("credit-purchases", F0Controller, "createCreditPurchase", [Req()], 202);
+  route("credit-wallets/:walletId/ledger", F0Controller, "getWalletLedger", [Req(), Param("walletId"), Query()], 200);
+  postRoute("credit-wallets/:walletId/adjustments", F0Controller, "createCreditAdjustment", [Req(), Param("walletId")], 200);
+  postRoute("callbacks/razorpay", F0Controller, "handleRazorpayCallback", [Req()], 200);
+  postRoute("callbacks/stripe", F0Controller, "handleStripeCallback", [Req()], 200);
+  postRoute("callbacks/heygen", F0Controller, "handleHeygenCallback", [Req()], 200);
   postRoute("blueprints/library-entries", F0Controller, "seedBlueprintLibraryEntry", [Req()], 201);
   postRoute("blueprint-requests", F0Controller, "createBlueprintRequest", [Req()], 202);
   postRoute("blueprint-requests/:blueprintRequestId/ready-blueprint", F0Controller, "createReadyBlueprint", [Req(), Param("blueprintRequestId")], 202);
@@ -862,6 +1148,32 @@ function assertWorker(headers, env) {
       401
     );
   }
+}
+
+function requireIdempotencyKey(headers, env) {
+  const idempotencyKey = headers["idempotency-key"];
+  if (typeof idempotencyKey !== "string" || idempotencyKey.trim().length === 0) {
+    throw new HttpException(
+      problem(
+        "IDEMPOTENCY_KEY_REQUIRED",
+        400,
+        "Idempotency key required",
+        "This action needs a request identity. Refresh and try again.",
+        true
+      ),
+      400
+    );
+  }
+  return idempotencyKey.trim();
+}
+
+function processPaymentCallbackResponse(resultPromise) {
+  return Promise.resolve(resultPromise).then((result) => {
+    if (!result.ok) {
+      throw new HttpException(result.problem, result.problem.status);
+    }
+    return result.response;
+  });
 }
 
 function problem(code, status, title, detail, retryable = false) {
