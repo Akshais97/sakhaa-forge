@@ -35,7 +35,8 @@ enum CreditPurchaseStatus { INITIATED PENDING SUCCEEDED FAILED REFUNDED DISPUTED
 enum CreditReservationStatus { ACTIVE CAPTURED RELEASED EXPIRED ADJUSTED }
 enum ProviderOperationStatus { CREATED SUBMITTING ACCEPTED UNKNOWN PROCESSING COMPLETED REJECTED FAILED CANCELLED }
 enum AssetTrustStatus { QUARANTINED VALIDATING CLEAN REJECTED DELETED }
-enum PublishStatus { DRAFT SCHEDULED SUBMITTING ACCEPTED PUBLISHED_UNVERIFIED PUBLISHED_VERIFIED FAILED CANCELLED }
+enum PublishStatus { DRAFT APPROVED SCHEDULED SUBMITTING ACCEPTED PUBLISHED_UNVERIFIED PUBLISHED_VERIFIED FAILED CANCELLED }
+enum PublishOperationStatus { CREATED SUBMITTING ACCEPTED UNKNOWN PROCESSING COMPLETED REJECTED FAILED CANCELLED }
 enum VerificationStatus { PENDING CHECKING PROCESSING_WAIT RETRY_SCHEDULED VERIFIED FAILED IDENTITY_MISMATCH VISIBILITY_RESTRICTED MANUAL_URL_REQUIRED }
 ```
 
@@ -436,37 +437,271 @@ model GeneratedAsset {
   @@map("generated_assets")
 }
 
-// V0-G5 creative lineage: immutable ancestry of a generated asset from the approved brand
-// profile, selected script (nullable, no FK), consent-safe avatar, estimate, provider
-// operation and price version. One lineage row per generation job.
-// unique(workspace_id, generation_job_id). RLS policy creative_lineage_workspace_isolation;
-// no BYPASSRLS.
+// V0-G5 / V0-C2 creative lineage: immutable ancestry of a retained media object. A
+// generation-job lineage row (generationJobId set, finalVideoId null) ties a generated asset
+// back through the approved brand profile, selected script (nullable, no FK), consent-safe
+// avatar, estimate, provider operation and price version; unique(workspace_id,
+// generation_job_id). A V0-C2 render-level lineage row (generationJobId null, finalVideoId set)
+// ties a final video back through the composition instruction, AE plan and render attempt that
+// produced it, copying the G5 generated-asset ancestry in-row (brandProfileId, estimateId,
+// provider, providerOperationId, priceVersion are always present because the referenced asset
+// was generated and settled in V0-G5); unique(workspace_id, final_video_id). SQL NULLs are
+// distinct, so each unique constraint scopes only its non-null row kind. Append-only; a
+// revision creates a new render-level row and never overwrites the prior row. RLS policy
+// creative_lineage_workspace_isolation; no BYPASSRLS.
 model CreativeLineage {
-  id                  String   @id @default(uuid()) @db.Uuid
-  workspaceId         String   @db.Uuid
-  generationJobId     String   @db.Uuid
-  brandProfileId      String   @db.Uuid
-  selectedScriptId    String?  @db.Uuid
-  avatarProfileId     String?  @db.Uuid
-  estimateId          String   @db.Uuid
-  provider            String   @db.VarChar(40)
-  providerOperationId String   @db.Uuid
-  priceVersion        String   @db.VarChar(80)
-  generatedAssetId    String   @db.Uuid
-  createdAt           DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt           DateTime @updatedAt @db.Timestamptz(6)
-  workspace           Workspace         @relation(fields: [workspaceId], references: [id])
-  generationJob       GenerationJob     @relation(fields: [generationJobId], references: [id])
-  brandProfile        BrandProfile      @relation(fields: [brandProfileId], references: [id])
-  avatarProfile       AvatarProfile?    @relation(fields: [avatarProfileId], references: [id])
-  estimate            GenerationEstimate @relation(fields: [estimateId], references: [id])
-  providerOperation   ProviderOperation @relation(fields: [providerOperationId], references: [id])
-  generatedAsset      GeneratedAsset    @relation(fields: [generatedAssetId], references: [id])
+  id                       String   @id @default(uuid()) @db.Uuid
+  workspaceId              String   @db.Uuid
+  generationJobId          String?  @db.Uuid
+  compositionInstructionId String?  @db.Uuid
+  aePlanId                 String?  @db.Uuid
+  renderAttemptId          String?  @db.Uuid
+  finalVideoId             String?  @db.Uuid
+  brandProfileId           String   @db.Uuid
+  selectedScriptId         String?  @db.Uuid
+  avatarProfileId          String?  @db.Uuid
+  estimateId               String   @db.Uuid
+  provider                 String   @db.VarChar(40)
+  providerOperationId      String   @db.Uuid
+  priceVersion             String   @db.VarChar(80)
+  generatedAssetId         String   @db.Uuid
+  createdAt                DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt                DateTime @updatedAt @db.Timestamptz(6)
+  workspace                Workspace              @relation(fields: [workspaceId], references: [id])
+  generationJob            GenerationJob?        @relation(fields: [generationJobId], references: [id])
+  compositionInstruction   CompositionInstruction? @relation(fields: [compositionInstructionId], references: [id])
+  aePlan                   AePlan?                @relation(fields: [aePlanId], references: [id])
+  renderAttempt            RenderAttempt?         @relation(fields: [renderAttemptId], references: [id])
+  finalVideo               FinalVideo?            @relation(fields: [finalVideoId], references: [id])
+  brandProfile             BrandProfile           @relation(fields: [brandProfileId], references: [id])
+  avatarProfile            AvatarProfile?         @relation(fields: [avatarProfileId], references: [id])
+  estimate                 GenerationEstimate     @relation(fields: [estimateId], references: [id])
+  providerOperation        ProviderOperation     @relation(fields: [providerOperationId], references: [id])
+  generatedAsset           GeneratedAsset         @relation(fields: [generatedAssetId], references: [id])
 
-  @@unique([workspaceId, generationJobId])
+  @@unique([workspaceId, generationJobId], map: "creative_lineage_workspace_job_idx")
+  @@unique([workspaceId, finalVideoId], map: "creative_lineage_one_final_video_idx")
   @@index([workspaceId, generatedAssetId])
+  @@index([workspaceId, finalVideoId])
   @@map("creative_lineage")
 }
+
+enum CompositionStatus {
+  DRAFT
+  PLANNING
+  VALIDATION_FAILED
+  VALIDATED
+  RENDERING
+  RENDERED
+  FAILED
+  SUPERSEDED
+
+  @@map("composition_status")
+}
+
+// V0-C1 composition instruction: user direction bound to a retained generated asset. The
+// raw direction is internal context, never returned to the browser. generationAssetId is a
+// plain UUID, not a FK: the application layer (resolveAsset) is the sole validator of asset
+// existence, workspace ownership and CLEAN status, and a validation_failed plan for a
+// missing or cross-workspace asset must still be retained (a FK would leak existence and
+// block recording failed attempts). C1 reaches PLANNING/VALIDATION_FAILED/VALIDATED;
+// RENDERING/RENDERED/FAILED/SUPERSEDED are owned by later composition sprints.
+model CompositionInstruction {
+  id                 String           @id @default(uuid()) @db.Uuid
+  workspaceId         String           @map("workspace_id") @db.Uuid
+  actorUserId         String           @map("actor_user_id") @db.Uuid
+  generationAssetId   String           @map("generation_asset_id") @db.Uuid
+  inputMode           String           @map("input_mode") @db.VarChar(40)
+  rawDirection        String?          @map("raw_direction") @db.VarChar(2000)
+  status             CompositionStatus @default(PLANNING)
+  version            Int              @default(1)
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace           Workspace        @relation(fields: [workspaceId], references: [id])
+  aePlans             AePlan[]
+  renderAttempts      RenderAttempt[]
+  finalVideos         FinalVideo[]
+  creativeLineages    CreativeLineage[]
+
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, updatedAt, id])
+  @@map("composition_instructions")
+}
+
+// V0-C1 AE plan: a versioned timeline JSON validated against the deterministic AE
+// capability registry. A valid plan is VALIDATED with a CLEAN plan artifact (application/json,
+// retention class plan-artifact); a malformed plan or capability mismatch is
+// VALIDATION_FAILED with every unsupported item explained in unsupportedItems. The timeline
+// JSON, plan artifact sha256 and referenced asset ids are retained server-side only.
+model AePlan {
+  id                       String           @id @default(uuid()) @db.Uuid
+  workspaceId              String           @map("workspace_id") @db.Uuid
+  compositionInstructionId String           @map("composition_instruction_id") @db.Uuid
+  version                  Int              @default(1)
+  capabilityVersion        String           @map("capability_version") @db.VarChar(80)
+  schemaVersion            String           @map("schema_version") @db.VarChar(80)
+  timeline                 Json
+  status                   CompositionStatus @default(PLANNING)
+  unsupportedItems         Json             @map("unsupported_items") @default("[]")
+  planArtifactId           String?          @map("plan_artifact_id") @db.Uuid
+  validatedAt              DateTime?        @map("validated_at") @db.Timestamptz(6)
+  createdAt                DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace                Workspace        @relation(fields: [workspaceId], references: [id])
+  compositionInstruction   CompositionInstruction @relation(fields: [compositionInstructionId], references: [id])
+  planArtifact             Artifact?       @relation(fields: [planArtifactId], references: [id])
+  renderAttempts           RenderAttempt[]
+  creativeLineages         CreativeLineage[]
+
+  @@index([workspaceId, compositionInstructionId, version])
+  @@index([workspaceId, status, createdAt])
+  @@map("ae_plans")
+}
+
+// V0-C2 render attempt status. The render is a costly worker mutation producing retained
+// artifacts, so a RenderAttempt is persisted RUNNING before the AE worker runs and moves to
+// SUCCEEDED (final media retained) or FAILED (capability drift, incompatible output, crash
+// that could not recover). The public mapper lowercases the value.
+enum RenderAttemptStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+
+  @@map("render_attempt_status")
+}
+
+// V0-C2 final video revision status. Exactly one CURRENT final video exists per composition
+// instruction; a new revision supersedes the prior CURRENT row (set to SUPERSEDED) without
+// overwriting it, preserving the immutable revision lineage. The public mapper lowercases.
+enum FinalVideoStatus {
+  CURRENT
+  SUPERSEDED
+
+  @@map("final_video_status")
+}
+
+// V0-C2 render attempt: the durable record of one AE render of a validated plan. Persisted
+// RUNNING before the AE worker runs, then SUCCEEDED with the retained final-video output hash
+// or FAILED. inputHash is the plan canonical timeline hash and inputAssetHashes are the
+// referenced generated-asset sha256s; both are server-side validation bindings.
+// idempotencyInputHash is the sha256 of the canonical render request
+// (compositionInstructionId, aePlanId, planCanonicalHash, inputAssetHashes, capabilityVersion)
+// and binds render idempotency to the full input, not just the key: the same Idempotency-Key
+// replays or resumes only when it hashes to the same input for the same composition, and the
+// same key against a different composition, plan, input assets or capability version returns
+// IDEMPOTENCY_INPUT_CONFLICT (409). logsArtifactId is the CLEAN render-logs Artifact. One RUNNING
+// attempt per composition instruction (partial unique index) and one attempt per idempotency
+// key are enforced by partial unique indexes.
+model RenderAttempt {
+  id                       String             @id @default(uuid()) @db.Uuid
+  workspaceId              String             @map("workspace_id") @db.Uuid
+  compositionInstructionId String             @map("composition_instruction_id") @db.Uuid
+  aePlanId                 String             @map("ae_plan_id") @db.Uuid
+  version                  Int                @default(1)
+  renderer                 String             @db.VarChar(80)
+  inputHash                String             @map("input_hash") @db.Char(64)
+  inputAssetHashes         Json               @map("input_asset_hashes")
+  workerCapabilityVersion  String             @map("worker_capability_version") @db.VarChar(80)
+  idempotencyInputHash     String?            @map("idempotency_input_hash") @db.Char(64)
+  outputHash               String?            @map("output_hash") @db.Char(64)
+  status                   RenderAttemptStatus @default(RUNNING)
+  logsArtifactId           String?            @map("logs_artifact_id") @db.Uuid
+  costMinor                Int                @default(0) @map("cost_minor")
+  idempotencyKey           String             @map("idempotency_key") @db.VarChar(120)
+  startedAt                DateTime           @default(now()) @map("started_at") @db.Timestamptz(6)
+  completedAt              DateTime?          @map("completed_at") @db.Timestamptz(6)
+  createdAt                DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace                Workspace          @relation(fields: [workspaceId], references: [id])
+  compositionInstruction   CompositionInstruction @relation(fields: [compositionInstructionId], references: [id])
+  aePlan                   AePlan             @relation(fields: [aePlanId], references: [id])
+  logsArtifact             Artifact?          @relation(fields: [logsArtifactId], references: [id])
+  finalVideos              FinalVideo[]
+  creativeLineages         CreativeLineage[]
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, compositionInstructionId, version])
+  @@index([workspaceId, status, createdAt])
+  @@map("render_attempts")
+}
+
+// V0-C2 final video: the approved production object retained from a succeeded render, with
+// thumbnail, captions and a media fingerprint (sha256). Versioned per composition instruction;
+// exactly one CURRENT final video per instruction (partial unique index). The sha256 is the
+// deterministic golden render hash for the plan. The artifact ids bind the retained CLEAN
+// final-video, thumbnail and captions media.
+model FinalVideo {
+  id                       String           @id @default(uuid()) @db.Uuid
+  workspaceId              String           @map("workspace_id") @db.Uuid
+  compositionInstructionId String           @map("composition_instruction_id") @db.Uuid
+  renderAttemptId          String           @map("render_attempt_id") @db.Uuid
+  version                  Int              @default(1)
+  status                   FinalVideoStatus @default(CURRENT)
+  finalVideoArtifactId     String           @map("final_video_artifact_id") @db.Uuid
+  thumbnailArtifactId      String           @map("thumbnail_artifact_id") @db.Uuid
+  captionsArtifactId       String           @map("captions_artifact_id") @db.Uuid
+  durationSeconds          Int              @map("duration_seconds")
+  resolution               String           @db.VarChar(20)
+  codec                    String           @db.VarChar(40)
+  sha256                   String           @db.Char(64)
+  byteSize                 Int              @map("byte_size")
+  capabilityVersion        String           @map("capability_version") @db.VarChar(80)
+  schemaVersion            String           @map("schema_version") @db.VarChar(80)
+  createdAt                DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace                Workspace        @relation(fields: [workspaceId], references: [id])
+  compositionInstruction   CompositionInstruction @relation(fields: [compositionInstructionId], references: [id])
+  renderAttempt            RenderAttempt    @relation(fields: [renderAttemptId], references: [id])
+  finalVideoArtifact       Artifact         @relation("FinalVideoFinalVideoArtifact", fields: [finalVideoArtifactId], references: [id])
+  thumbnailArtifact        Artifact         @relation("FinalVideoThumbnailArtifact", fields: [thumbnailArtifactId], references: [id])
+  captionsArtifact         Artifact         @relation("FinalVideoCaptionsArtifact", fields: [captionsArtifactId], references: [id])
+  creativeLineages         CreativeLineage[]
+
+  @@unique([workspaceId, compositionInstructionId, version])
+  @@index([workspaceId, status, createdAt])
+  @@map("final_videos")
+}
+
+model CalendarPost {
+  id                  String        @id @default(uuid()) @db.Uuid
+  workspaceId         String        @map("workspace_id") @db.Uuid
+  platform            String        @db.VarChar(40)
+  account             String        @db.VarChar(240)
+  caption             String        @db.VarChar(2000)
+  finalVideoId        String        @map("final_video_id") @db.Uuid
+  finalVideoSha256    String        @map("final_video_sha256") @db.Char(64)
+  finalVideoVersion   Int           @map("final_video_version")
+  approvalToken       String        @map("approval_token") @db.Char(64)
+  scheduledAt         DateTime?     @map("scheduled_at") @db.Timestamptz(6)
+  timezone            String        @db.VarChar(60)
+  manualExport        Boolean       @default(false) @map("manual_export")
+  manualLiveUrl       String?       @map("manual_live_url") @db.VarChar(500)
+  manualUrlProvidedAt DateTime?     @map("manual_url_provided_at") @db.Timestamptz(6)
+  exportArtifactId    String?       @map("export_artifact_id") @db.Uuid
+  status              PublishStatus @default(APPROVED) @map("status")
+  createdByUserId     String        @map("created_by_user_id") @db.Uuid
+  version             Int           @default(1)
+  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace           Workspace     @relation(fields: [workspaceId], references: [id])
+  finalVideo          FinalVideo    @relation(fields: [finalVideoId], references: [id])
+  exportArtifact      Artifact?     @relation("CalendarPostExportArtifact", fields: [exportArtifactId], references: [id])
+  publishOperations   PublishOperation[]
+
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, scheduledAt, id])
+  @@index([workspaceId, platform, account, scheduledAt])
+  @@map("calendar_posts")
+}
+
+// V0-U1 edit: `version` (Int @default(1)) backs optimistic-concurrency edits via
+// `PATCH /calendar-posts/{id}` (caller supplies `expectedVersion`); a successful edit increments
+// `version`. No migration was required for the edit route. The 60-second schedule-conflict window
+// has no exclusion constraint; instead both create and edit acquire a transaction-scoped
+// `pg_advisory_xact_lock(hashtext('{workspaceId}:{platform}:{account}'))` inside the RLS
+// transaction so the app-level window check is authoritative under concurrency (the lock is never
+// persisted and adds no schema object). The edit path additionally locks on the post id so the
+// version check cannot race a concurrent edit.
 
 model BlueprintLibraryEntry {
   id              String @id @default(uuid()) @db.Uuid
@@ -783,6 +1018,149 @@ model ProviderOperation {
   @@unique([provider, idempotencyKey])
   @@index([workspaceId, status, updatedAt])
   @@map("provider_operations")
+}
+
+// V0-U2/V0-U3: one idempotent publish operation per calendar post. The provider is derived
+// server-side from CalendarPost.platform (meta -> meta-simulator, youtube-shorts ->
+// youtube-simulator) and stored in this VarChar(40) (no enum, so a new platform needs no
+// migration). The requestHash is a server-side binding secret (never returned); the externalId
+// is bound on acceptance and the publicUrl only on completion. retryAfterMs is set on a
+// quota-exhausted refusal. acceptedAt/completedAt/reconciledAt record the lifecycle; a YouTube
+// upload that is accepted but still processing uses the PROCESSING status while the post stays
+// accepted. Publishing is not a
+// V0 credit op, so there is no price/currency/estimatedMaximum/settledAt.
+model PublishOperation {
+  id              String                 @id @default(uuid()) @db.Uuid
+  workspaceId     String                 @map("workspace_id") @db.Uuid
+  calendarPostId  String                 @map("calendar_post_id") @db.Uuid
+  provider        String                 @db.VarChar(40)
+  operationType   String                 @db.VarChar(40)
+  status          PublishOperationStatus @default(CREATED)
+  idempotencyKey  String                 @db.VarChar(200)
+  requestHash     String                 @db.Char(64)
+  externalId      String?                @db.VarChar(200)
+  publicUrl       String?                @db.VarChar(500)
+  retryAfterMs    Int?
+  lastErrorCode   String?                @db.VarChar(80)
+  submittedAt     DateTime?              @db.Timestamptz(6)
+  acceptedAt      DateTime?              @db.Timestamptz(6)
+  completedAt     DateTime?              @db.Timestamptz(6)
+  reconciledAt    DateTime?              @db.Timestamptz(6)
+  cancelledAt     DateTime?              @db.Timestamptz(6)
+  createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace       Workspace              @relation(fields: [workspaceId], references: [id])
+  calendarPost    CalendarPost           @relation(fields: [calendarPostId], references: [id])
+
+  @@unique([workspaceId, idempotencyKey])
+  @@unique([calendarPostId])
+  @@index([workspaceId, status, updatedAt])
+  @@index([workspaceId, calendarPostId, status])
+  @@map("publish_operations")
+}
+
+// V0-U4: the audience-facing verification record for one calendar post, exactly one row per post
+// (unique(calendarPostId)). The provider is derived server-side (`verify-simulator`) and stored in
+// this VarChar(40). status is the uppercase VerificationStatus DB enum; the public API lowercases it
+// at the mapper boundary. The match flags are Boolean? (null while PROCESSING_WAIT). The observed
+// identity (observedAccount, observedMediaSha256, observedCaption, observedPublishedAt),
+// propagationDelayMs and lastErrorCode are server-private and never returned by the public mapper.
+// evidenceArtifactId binds the immutable audience-evidence Artifact (a public sha256 fingerprint;
+// the object key is never surfaced). verifiedAt is set only on VERIFIED. The new table inherits
+// workspace-isolation RLS keyed on app.current_workspace_id; no role is granted an RLS bypass.
+model PostVerification {
+  id                   String             @id @default(uuid()) @db.Uuid
+  workspaceId          String             @map("workspace_id") @db.Uuid
+  calendarPostId       String             @map("calendar_post_id") @db.Uuid
+  evidenceArtifactId   String?            @map("evidence_artifact_id") @db.Uuid
+  provider             String             @db.VarChar(40)
+  status               VerificationStatus @default(PENDING) @map("status")
+  attempts             Int                @default(0) @map("attempts")
+  accountMatched       Boolean?           @map("account_matched")
+  mediaSha256Matched   Boolean?           @map("media_sha256_matched")
+  captionMatched       Boolean?           @map("caption_matched")
+  visibility           String?            @db.VarChar(40)
+  observedAccount      String?            @map("observed_account") @db.VarChar(240)
+  observedMediaSha256  String?            @map("observed_media_sha256") @db.Char(64)
+  observedCaption      String?            @map("observed_caption") @db.VarChar(2000)
+  observedPublishedAt  DateTime?          @map("observed_published_at") @db.Timestamptz(6)
+  propagationDelayMs   Int?               @map("propagation_delay_ms")
+  lastErrorCode        String?            @map("last_error_code") @db.VarChar(80)
+  verifiedAt           DateTime?          @map("verified_at") @db.Timestamptz(6)
+  createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace            Workspace          @relation(fields: [workspaceId], references: [id])
+  calendarPost         CalendarPost       @relation(fields: [calendarPostId], references: [id])
+  evidenceArtifact     Artifact?          @relation("PostVerificationEvidenceArtifact", fields: [evidenceArtifactId], references: [id])
+
+  @@unique([calendarPostId], map: "post_verifications_one_per_post_idx")
+  @@index([workspaceId, status, updatedAt])
+  @@index([workspaceId, calendarPostId, status])
+  @@map("post_verifications")
+}
+
+// V0-U1/V0-R1/V0-U4: one logical notification per (workspaceId, payloadHash). The payloadHash is a
+// server-side binding secret (sha256 over the stable workspaceId+calendarPostId/reviewItemId+
+// notificationType+recipientUserId tuple; never returned). reviewItemId is set for review-channel
+// notifications and calendarPostId for V0-U4 publish-completion notifications (both nullable).
+// recipientUserId is a storage secret and never appears in the API response or rendered UI. status
+// is the uppercase NotificationStatus DB enum. The new table inherits workspace-isolation RLS keyed
+// on app.current_workspace_id; no role is granted an RLS bypass.
+model Notification {
+  id               String             @id @default(uuid()) @db.Uuid
+  workspaceId       String             @map("workspace_id") @db.Uuid
+  reviewItemId      String?            @map("review_item_id") @db.Uuid
+  calendarPostId    String?            @map("calendar_post_id") @db.Uuid
+  notificationType  String             @map("notification_type") @db.VarChar(80)
+  channel           String             @db.VarChar(40)
+  recipientUserId   String             @map("recipient_user_id") @db.Uuid
+  payloadHash       String             @map("payload_hash") @db.Char(64)
+  status            NotificationStatus @default(PENDING)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  sentAt            DateTime?          @map("sent_at") @db.Timestamptz(6)
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id])
+  reviewItem        ReviewItem?        @relation(fields: [reviewItemId], references: [id])
+  calendarPost      CalendarPost?      @relation(fields: [calendarPostId], references: [id])
+
+  @@unique([workspaceId, payloadHash], map: "notifications_one_logical_per_payload_idx")
+  @@index([workspaceId, recipientUserId, createdAt])
+  @@index([workspaceId, calendarPostId, createdAt])
+  @@map("notifications")
+}
+
+// V0-U4 initial performance observation; V0-A1 owns performance_collect as a synchronous,
+// idempotent API write (POST /calendar-posts/{id}/performance-collect), not a queued job. One
+// immutable PerformanceSnapshot anchors the observation window at audience-verification time with
+// platform and source provenance. Later observations create new rows rather than editing existing
+// metric evidence (metric snapshots are immutable). The initial snapshot carries an empty metrics
+// object and a zero-width observation window bounded by the verification instant; the V0-A1
+// collect write appends a fresh snapshot (source performance_collect_simulator, observation
+// simulated, a widened window and populated observed metrics) and never mutates the initial row;
+// a same-Idempotency-Key replay returns the same row with replay: true. The public mapper carries
+// id, calendarPostId, platform, source, observation (derived from source: simulated for a
+// collect-simulator snapshot, null for the initial snapshot — the table has no observation column),
+// observationWindowStart, observationWindowEnd, a read-time stale flag (true when the post is no
+// longer published_verified) and the observed metrics (views, likes, comments, shares, saves); the
+// server-side sourceHash and any platform account id stay private. The metrics are observations of
+// past platform state only, never a prediction of reach, virality, conversion or causal performance.
+// The table inherits workspace-isolation RLS keyed on app.current_workspace_id; no role is granted
+// an RLS bypass.
+model PerformanceSnapshot {
+  id                    String   @id @default(uuid()) @db.Uuid
+  workspaceId           String   @map("workspace_id") @db.Uuid
+  calendarPostId        String   @map("calendar_post_id") @db.Uuid
+  platform              String   @db.VarChar(40)
+  source                String   @db.VarChar(40)
+  observationWindowStart DateTime @map("observation_window_start") @db.Timestamptz(6)
+  observationWindowEnd  DateTime @map("observation_window_end") @db.Timestamptz(6)
+  metrics               Json     @default("{}") @map("metrics")
+  sourceHash            String   @map("source_hash") @db.Char(64)
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  workspace             Workspace @relation(fields: [workspaceId], references: [id])
+  calendarPost          CalendarPost @relation(fields: [calendarPostId], references: [id])
+
+  @@index([workspaceId, calendarPostId, createdAt])
+  @@map("performance_snapshots")
 }
 
 // V0-G2: one workspace wallet per currency. balanceMinor is integer minor units,

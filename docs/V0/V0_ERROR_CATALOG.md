@@ -123,6 +123,15 @@ Provider payloads, secrets, internal paths and protected resource existence are 
 | `AE_TIMELINE_INVALID` | 422 | The timeline contains invalid timing or overlaps. | No | None | info |
 | `AE_RENDER_FAILED` | 422 | The final render failed. Review the render details before retrying. | Conditional | Inspect worker | error |
 | `REVIEW_VERSION_STALE` | 409 | A newer video version exists. Review the latest version. | No | None | info |
+
+V0-C2 reuses the existing AE and dependency error codes for the render boundary: a
+non-validated plan returns `AE_PLAN_SCHEMA_INVALID` (422); capability drift between the plan
+and the AE worker returns `AE_CAPABILITY_UNAVAILABLE` (409); an incompatible worker output
+(codec, resolution, duration or output hash mismatch) returns `AE_RENDER_FAILED` (422); a
+fresh render attempt during a worker crash window returns `DEPENDENCY_UNAVAILABLE` (503)
+while the existing attempt stays `running`. No new error code is introduced. A timeout after
+possible worker acceptance is preserved as `unknown` and reconciled before any retry; the
+caller must never blindly retry an uncertain render.
 | `REVIEW_DECISION_ALREADY_RECORDED` | 409 | A decision is already recorded for this review version. | No | Audit if conflict | warn |
 | `REVIEW_APPROVAL_REQUIRED` | 409 | Approve this exact video version before scheduling. | No | None | info |
 
@@ -135,12 +144,18 @@ Provider payloads, secrets, internal paths and protected resource existence are 
 | `PUBLISH_MEDIA_STALE` | 409 | The scheduled media is no longer the approved current version. | No | None | warn |
 | `PUBLISH_OPERATION_UNKNOWN` | 202 | We are checking whether the platform accepted this post. Do not publish again. | No manual retry | Reconcile | warn |
 | `PUBLISH_DUPLICATE_BLOCKED` | 409 | This post already has a publishing operation. | No | Reconcile if needed | warn |
+| `PUBLISH_ACCOUNT_MISMATCH` | 409 | The account in the request does not match the calendar post's bound account. | No | None | warn |
+| `PUBLISH_NOT_SUBMITTABLE` | 409 | This manual-export calendar post cannot be submitted to a provider. | No | None | info |
+| `PUBLISH_POST_LOCKED` | 409 | This calendar post can no longer be edited. | No | None | info |
 | `PUBLISH_QUOTA_EXHAUSTED` | 429 | The platform quota is exhausted. Choose the shown retry time or export manually. | Later | Provider/quota review | warn |
+| `PUBLISH_PLATFORM_UNSUPPORTED` | 409 | This platform has no V0 direct-publication adapter. Export manually. | No | None | info |
 | `VERIFY_PROCESSING_WAIT` | 202 | The platform is still processing the post. We will check again. | Automatic | Monitor ageing | info |
 | `VERIFY_IDENTITY_MISMATCH` | 409 | The live post does not match the approved account or media. | No | Wrong-publication incident | critical |
 | `VERIFY_VISIBILITY_RESTRICTED` | 409 | The post is not visible to the required audience. | After correction | Account/privacy review | warn |
 | `VERIFY_MANUAL_URL_REQUIRED` | 409 | Add the live post URL before verification. | After input | None | info |
 | `NOTIFICATION_DUPLICATE_BLOCKED` | 409 | This notification was already sent. | No | None | info |
+| `PERFORMANCE_NOT_OBSERVABLE` | 409 | Platform metrics can only be observed for a verified post. | After verification | None | info |
+| `PERFORMANCE_PROCESSING_WAIT` | 202 | The platform is still reporting. We will check again. | Automatic | Monitor ageing | info |
 
 ## 10. Admin Recovery Rules
 

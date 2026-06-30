@@ -162,9 +162,16 @@ Prices are versioned database records, not environment variables.
 | `AE_FONT_MANIFEST_PATH` | absolute file path | AE worker | Sensitive reference | Fail |
 | `AE_RENDER_TIMEOUT_SECONDS` | integer | No | Internal | `1800` |
 | `AE_OUTPUT_CODEC` | approved codec enum | No | Internal | `h264` |
+| `AE_WORKER_MODE` | enum `simulator` | No | Internal | `simulator`; any other value refuses renders with `AE_RENDER_FAILED` |
+| `V0_C2_SIMULATOR_MODE` | enum `success,crash,bad_output,capability_drift` | No | Internal (test) | `success`; drives the deterministic AE render simulator in V0-C2 |
 | `FFMPEG_PATH` | absolute path | media workers | Sensitive reference | Fail |
 
-A readiness render must pass before the worker accepts leases.
+A readiness render must pass before the worker accepts leases. V0 runs the AE render worker
+as a deterministic simulator; `AE_WORKER_MODE` gates acceptance and `V0_C2_SIMULATOR_MODE`
+selects the simulator path (`success` produces a valid golden render, `crash` leaves the
+attempt `running` for crash-recovery proof, `bad_output` returns an incompatible output,
+`capability_drift` reports an unexpected capability version). Production AE worker mode is
+out of V0 scope.
 
 ## 12. Payments
 
@@ -190,6 +197,12 @@ Finance/provider owner rotates payment secrets; ledger state is never configurat
 | `META_WEBHOOK_VERIFY_TOKEN` | secret | Meta mode | Secret | Callback fails |
 | `YOUTUBE_CLIENT_ID` | provider ID | YouTube mode | Internal | YouTube disabled |
 | `YOUTUBE_CLIENT_SECRET` | secret | YouTube mode | Secret | Disabled |
+| `YOUTUBE_WEBHOOK_SECRET` | signing secret | YouTube API mode | Secret | Callback verification fails |
+| `YOUTUBE_MODE` | enum `simulator,api` | Yes | Internal | local `simulator`; `api` is the live YouTube route (out of V0 scope); any other value refuses submission with `PROVIDER_UNAVAILABLE` |
+| `V0_YOUTUBE_SIMULATOR_SECRET` | signing secret | No | Internal (test) | `v0-local-youtube-secret`; deterministic local callback signing secret (production uses `YOUTUBE_WEBHOOK_SECRET`) |
+| `V0_YOUTUBE_SIMULATOR_MODE` | enum `success,timeout,malformed,duplicate,processing` | No | Internal (test) | `success`; drives the deterministic YouTube Shorts publish simulator |
+| `V0_YOUTUBE_SIMULATOR_QUOTA` | enum `exhausted` | No | Internal (test) | unset; `exhausted` forces a pre-flight `PUBLISH_QUOTA_EXHAUSTED` refusal (models the 3 uploads/day quota) |
+| `V0_YOUTUBE_SIMULATOR_RECONCILE` | enum `accepted,processing,completed,failed,pending` | No | Internal (test) | `completed`; drives the deterministic YouTube reconcile outcome |
 | `PUBLISH_CALLBACK_BASE_URL` | HTTPS URL | Provider mode | Internal | Fail |
 | `VERIFY_RETRY_SCHEDULE_SECONDS` | comma-separated bounded integers | No | Internal | `0,60,180,420,900` |
 

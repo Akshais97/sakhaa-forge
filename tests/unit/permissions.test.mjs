@@ -28,6 +28,13 @@ test("reviewer can submit comments only", () => {
   assert.equal(canPerform("REVIEWER", "schedule_publish_approved_media"), false);
 });
 
+test("lineage and performance reads are restricted to owner, admin and client manager", () => {
+  assert.equal(canPerform("OWNER", "view_lineage_and_performance"), true);
+  assert.equal(canPerform("ADMIN", "view_lineage_and_performance"), true);
+  assert.equal(canPerform("CLIENT_MANAGER", "view_lineage_and_performance"), true);
+  assert.equal(canPerform("REVIEWER", "view_lineage_and_performance"), false);
+});
+
 test("avatar consent management is restricted to owner, admin and client manager", () => {
   assert.equal(canPerform("OWNER", "manage_avatars_consent"), true);
   assert.equal(canPerform("ADMIN", "manage_avatars_consent"), true);

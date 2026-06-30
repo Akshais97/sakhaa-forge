@@ -20,9 +20,14 @@ POST   /workspaces                 Idempotency-Key required
 POST   /workspaces/{workspace_id}/capabilities  Owner/Admin capability control
 GET    /workspaces/{workspace_id}/operations/metrics  Owner/Admin operational metrics
 POST   /workspaces/{workspace_id}/service-credentials  Owner/Admin credential metadata
+POST   /workspaces/{workspace_id}/service-credentials/{credentialId}/rotate  Owner/Admin credential rotation (V0-A2)
 POST   /workspaces/{workspace_id}/simulator-mode       Local/staging simulator control
 POST   /workspaces/{workspace_id}/restore-drills       Owner/Admin restore evidence
 POST   /workspaces/{workspace_id}/redaction-scan       Owner/Admin log redaction proof
+POST   /workspaces/{workspace_id}/b2-benchmark         Owner/Admin India-to-B2 transfer benchmark (V0-A2)
+POST   /workspaces/{workspace_id}/backlog-simulation   Owner/Admin two-hour load-shaped backlog simulation (V0-A2)
+POST   /workspaces/{workspace_id}/incident-rehearsal   Owner/Admin incident/runbook rehearsal record (V0-A2)
+GET    /workspaces/{workspace_id}/operations/alerts    Owner/Admin operational alert states (V0-A2)
 POST   /brands/crawl-runs       Idempotency-Key required; B1 safe brand intake
 GET    /brands/crawl-runs/{crawl_run_id}/candidates
 POST   /brands/assets/uploads      Idempotency-Key required
@@ -42,6 +47,7 @@ POST   /viral-candidates/{candidate_id}/scene-blueprint
 POST   /script-tournaments
 POST   /script-tournaments/{id}/select
 GET    /avatars
+POST   /avatars/{avatarProfileId}/consent-revocation  Owner/Admin/Client Manager consent revocation (V0-A2)
 POST   /generation-estimates
 POST   /generation-estimates/{id}/confirm   Idempotency-Key required; Owner/Admin/Client Manager
 POST   /generation-jobs
@@ -52,11 +58,20 @@ POST   /generation-jobs/{id}/cancel            Idempotency-Key required; Owner/A
 POST   /generation-jobs/{id}/settle            Idempotency-Key required; Owner/Admin/Client Manager
 POST   /composition-plans
 POST   /composition-plans/{id}/render
-POST   /review-items/{id}/comments
-POST   /review-items/{id}/decisions
-POST   /calendar-posts
-POST   /calendar-posts/{id}/publish
-POST   /calendar-posts/{id}/verify
+POST   /review-items                            Idempotency-Key required; Owner/Admin/Client Manager
+GET    /review-items                             Owner/Admin/Client Manager
+GET    /review-items/{id}                        Owner/Admin/Client Manager/Reviewer
+POST   /review-items/{id}/comments               Idempotency-Key required; Owner/Admin/Client Manager/Reviewer
+GET    /review-items/{id}/comments                Owner/Admin/Client Manager/Reviewer
+POST   /review-items/{id}/decisions               Idempotency-Key required; Owner/Admin/Client Manager
+POST   /calendar-posts                            Idempotency-Key required; Owner/Admin/Client Manager (V0-U1)
+PATCH  /calendar-posts/{id}                       Idempotency-Key required; Owner/Admin/Client Manager (V0-U1 edit)
+POST   /calendar-posts/{id}/publish               Idempotency-Key required; Owner/Admin/Client Manager (V0-U2, V0-U3)
+POST   /calendar-posts/{id}/publish/reconcile     Idempotency-Key required; Owner/Admin/Client Manager (V0-U2, V0-U3)
+POST   /calendar-posts/{id}/verify                 No Idempotency-Key; Owner/Admin/Client Manager (V0-U4)
+GET    /lineage/{finalVideoId}                     Owner/Admin/Client Manager (V0-A1); NOT Reviewer
+POST   /calendar-posts/{id}/performance-collect     Idempotency-Key required; Owner/Admin/Client Manager (V0-A1)
+GET    /calendar-posts/{id}/performance             Owner/Admin/Client Manager (V0-A1); NOT Reviewer
 POST   /credit-purchases                          Idempotency-Key required; Owner/Admin/Client Manager
 GET    /credit-wallets/{id}/ledger                Owner/Admin/Client Manager; Owner/Admin reconciliation
 POST   /credit-wallets/{id}/adjustments           Idempotency-Key required; Owner/Admin only
@@ -220,13 +235,27 @@ sensitive and never appears in the response or analytics. A missing or cross-wor
 brand profile is hidden behind `WORKSPACE_ACCESS_DENIED` (404), never a 409 that leaks
 existence. The endpoint requires the `manage_avatars_consent` capability (Owner, Admin,
 Client Manager). The deterministic consent simulator idempotently materializes the
-brand-bound catalogue on first read; V0 defines no public avatar creation or
-revocation endpoint, so no client can mutate consent state through `/api/v0`.
+brand-bound catalogue on first read; V0 defines no public avatar creation endpoint,
+so no client can synthesize an avatar through `/api/v0`.
 The catalogue is the source of truth for the downstream consent guard: `POST /generation-estimates`
 loads the supplied `avatarProfileId` from this brand-bound catalogue and rejects
 revoked, expired, missing-evidence and service-pending avatars with the stable
 `AVATAR_CONSENT_*` codes, so an avatar that is unavailable in the catalogue cannot
 enter a paid generation step.
+
+`POST /avatars/{avatarProfileId}/consent-revocation` (V0-A2) records a real consent
+revocation for one avatar, bounded by the avatar's workspace and brand profile. The
+request requires the `manage_avatars_consent` capability (Owner, Admin, Client Manager)
+and a non-empty `reason` (≤ 500 chars). Revocation is monotonic and idempotent: the first
+call stamps `revokedAt` and `revokedByUserId`, returns the avatar with
+`eligibility.reason: "consent_revoked"`, and writes one `consent.revoked` audit row; a
+repeat call against an already-revoked avatar returns the same state and writes no
+additional audit row. An avatar without a prior consent record is rejected with
+`AVATAR_CONSENT_REQUIRED` (409). A revoked avatar is immediately blocked at
+`POST /generation-estimates` with `AVATAR_CONSENT_REVOKED` (409), with no evidence ref
+or consent URL surfaced. A missing, non-owned or cross-workspace avatar or brand profile
+is hidden behind `WORKSPACE_ACCESS_DENIED` (404); the response never echoes the
+workspace or brand identifiers of the denied object.
 
 ## Credit Wallet, Verified Purchase And Ledger (V0-G2)
 
@@ -438,6 +467,365 @@ integer minor units everywhere; the artifact trust status is returned UPPERCASE 
 (`active`/`captured`/`released`) per `V0_STATUS_ENUMS.md`, and the ledger `type` is UPPERCASE
 (`CAPTURE`/`RELEASE`).
 
+## Validated Composition Intent And AE Plan (V0-C1)
+
+`POST /composition-plans` synchronously validates a composition intent bound to a retained
+generated asset against the deterministic AE capability registry. Composition planning is
+not a paid or externally visible mutation, so no `Idempotency-Key` is required and no credit
+ledger entry is written. The caller supplies the workspace, the retained generated asset id,
+the input mode (`structured`) and optional raw direction, plus a versioned timeline
+(`schemaVersion` `ae.plan.v1`, `capabilityVersion` `ae.local.1`, `durationSeconds`,
+`resolution`, `tracks`, `overlays`, `effects`, `fonts`, `plugins`, `templates`). The
+registry is the only source of supported fonts, plugins, templates, effects, codecs, safe
+zones, duration bounds, resolutions and the AE worker capability version; the LLM cannot
+invent assets, fonts, plugins or effects.
+
+A valid plan is retained as `validated` with a CLEAN plan artifact (`Artifact` row,
+`application/json`, retention class `plan-artifact`, producer `composition:{instructionId}`,
+schema version `ae.plan.v1`). The response carries the composition instruction, the AE plan
+(status, capability version, schema version, plan version, plan artifact id, explained
+unsupported items), the plan artifact (status, content type, sha256, retention class) and a
+`composition.plan_validated` audit. A malformed plan or capability mismatch is retained as
+`validation_failed` with every unsupported item explained; the response is an RFC 9457
+problem with the primary error code, `planStatus: "validation_failed"`, `compositionId`,
+`planId` and the full `unsupported` list, plus a `composition.validation_failed` audit. The
+primary error code follows the catalog priority `AE_PLAN_SCHEMA_INVALID` (422) >
+`AE_CAPABILITY_UNAVAILABLE` (409) > `AE_ASSET_MISSING` (422) > `AE_TIMELINE_INVALID` (422).
+A referenced asset that is missing, cross-workspace or not clean is reported as
+`AE_ASSET_MISSING` so cross-workspace existence never leaks; a missing workspace is hidden
+behind `WORKSPACE_ACCESS_DENIED` (404). Only Owner, Admin or Client Manager
+(`select_blueprint_and_run_scripts`) may create a plan. The timeline JSON, plan artifact
+sha256 and referenced asset ids are retained server-side only and never appear in the
+response.
+
+`POST /composition-plans/{id}/render` renders a validated composition plan into one retained
+9:16 final MP4, thumbnail and captions through the deterministic AE worker. Render is a costly
+mutation producing retained artifacts, so an `Idempotency-Key` is required and the
+`RenderAttempt` is persisted `running` (with a CLEAN render-logs `Artifact` and a
+`composition.render_started` audit) before the worker runs — the external side-effect operation
+is persisted before the work. Render idempotency is input-bound, not key-bound: the request is
+hashed over `compositionInstructionId`, `aePlanId`, the plan canonical hash, the input asset
+hashes and the capability version, and the same `Idempotency-Key` replays or resumes only when it
+hashes to the same input for the same composition; the same key against a different composition,
+plan, input assets or capability version returns `IDEMPOTENCY_INPUT_CONFLICT` (409) and creates
+no final video and no attempt. The worker output is validated against the plan (capability
+version, plan input hash, codec, resolution, duration, deterministic golden output hash) before
+any final media is retained. A succeeded render retains a versioned `FinalVideo` (`current`)
+with an immutable revision lineage: a new revision creates a new row (version N+1, `current`)
+and supersedes the prior `current` row (set to `superseded`) without overwriting it, with a
+`composition.video_superseded` audit; the final-video sha256 is the deterministic golden render
+hash, so the same plan renders to the same hash across revisions. A succeeded render also
+retains a V0-C2 render-level `CreativeLineage` row that binds the final video back through the
+composition instruction, AE plan and render attempt that produced it (copying the V0-G5
+generated-asset ancestry in-row); a revision creates a new render-level lineage row for the new
+final video and never overwrites the prior row. The render response carries the render attempt
+(status, version, output hash), the final video (status, version, resolution, codec, duration,
+capability/schema version, golden render hash), the render-level creative lineage (generation
+job id null, composition instruction id, AE plan id, render attempt id, final video id), the
+composition (status `rendered`), the four CLEAN artifacts (final-video `video/mp4`,
+final-thumbnail `image/jpeg`, final-captions `text/vtt`, render-logs `application/json`), the
+`composition.render_succeeded` audit, and for a revision the superseded final video and
+`composition.video_superseded` audit. The plan input hash, input asset hashes, idempotency input
+hash, artifact object keys, signed URLs, the render-logs payload contents and raw worker
+payloads never appear in the response; artifact ids and sha256s are surfaced as public content
+fingerprints, and the golden render hash is surfaced as the final-video sha256 and the render
+attempt output hash. A worker crash returns `DEPENDENCY_UNAVAILABLE` (503, retryable) with the
+`running` attempt persisted; a second call with the same idempotency key and input resumes and
+completes, and a further replay returns the same final video, attempt and lineage. Capability
+drift returns `AE_CAPABILITY_UNAVAILABLE` (409) and incompatible worker output returns
+`AE_RENDER_FAILED` (422); neither retains a final video, both report `attemptStatus: "failed"`
+with `compositionId` and `attemptId`. A non-validated plan returns `AE_PLAN_SCHEMA_INVALID`
+(422). Cross-workspace and missing workspaces hide behind `WORKSPACE_ACCESS_DENIED` (404). Only
+Owner, Admin or Client Manager (`select_blueprint_and_run_scripts`) may render a plan. A
+missing `Idempotency-Key` returns `IDEMPOTENCY_KEY_REQUIRED` (400).
+
+## Exact-Version Review And Comments (V0-R1)
+
+`POST /review-items` opens a review item bound to one exact final-video version, capturing
+`finalVideoId`, `finalVideoSha256`, `finalVideoVersion` and `compositionInstructionId` from the
+retained `FinalVideo` at open time. The bound final video must be `current`; an
+already-superseded final video returns `REVIEW_VERSION_STALE` (409) and opens no review item.
+One review item exists per workspace + final video: the create is resource-bound find-or-create,
+so a second open for the same exact version with a fresh `Idempotency-Key` replays the same
+review item and the retained `review.created` audit rather than creating a second item. The open
+mutation is also key-bound (input-bound) through `runIdempotent` with operation
+`review.item.create`: the idempotency input is `workspaceId` + `finalVideoId` + `reviewStage`, so
+the same `Idempotency-Key` with the same input replays the same review item, and the same
+`Idempotency-Key` with different input (a different `finalVideoId` or `reviewStage`) returns
+`IDEMPOTENCY_INPUT_CONFLICT` (409) and opens no review item. The resource-level
+one-review-item-per-final-video replay and the key-bound replay compose: a fresh key for the same
+final video replays the one review item, while a reused key with a different final video is
+rejected before any review item is written. The
+review stage is `internal_review` or `client_review` and becomes the initial review item
+status. The response carries the review item (id, status, review stage, final video id/sha256/
+version, composition instruction id, created-by user id) and the `review.created` audit (target
+type `ReviewItem`). An `Idempotency-Key` is required; a missing key returns
+`IDEMPOTENCY_KEY_REQUIRED` (400) and an invalid review stage returns `VALIDATION_FAILED` (422).
+
+`POST /review-items/{id}/comments` adds a timestamped append-only comment (1–2000 characters,
+`timestampMs` ≥ 0). Comment idempotency is key-bound: the same `Idempotency-Key` with the same
+input replays the same comment and notification, and with different input returns
+`IDEMPOTENCY_INPUT_CONFLICT` (409). A comment against a review item whose bound final video is no
+longer `current` (superseded) returns `REVIEW_VERSION_STALE` (409), archives the review item
+idempotently under RLS, and preserves prior comments; the rejected comment is not appended. A
+second open for an already-superseded final video is also `REVIEW_VERSION_STALE`. Repeated
+comment activity on one review item collapses to one logical notification, unique by workspace +
+payload hash (over `workspaceId`, `reviewItemId`, `notificationType`, `recipientUserId`): the
+first comment creates the notification (`duplicateCollapsed` false), and any subsequent comment
+collapses to the same notification (`duplicateCollapsed` true) with no second notification row.
+The response carries the comment (author user id, body, timestamp ms, thread id), the review
+item, the notification (id, notification type, channel, status, `duplicateCollapsed`), and the
+`review.comment_added` audit (target type `ReviewItem`). Only Owner, Admin, Client Manager or
+Reviewer (`submit_review_comments`) may comment.
+
+`GET /review-items/{id}` returns the review item, a preview of the bound final video and its
+CLEAN artifacts (final-video, thumbnail, captions as public artifacts), and the preserved
+comments in creation order. `GET /review-items` lists review items for a workspace newest first
+with cursor pagination. `GET /review-items/{id}/comments` lists the append-only comments in
+creation order with cursor pagination. All three require `submit_review_comments` except
+`GET /review-items`, which requires `select_blueprint_and_run_scripts`.
+
+`POST /review-items/{id}/decisions` records one terminal, auditable approval decision bound to
+the exact final-video version captured when the review item was opened
+(`finalVideoSha256`, `finalVideoVersion`). Only Owner, Admin or Client Manager
+(`approve_reject_final_video`) may record a decision; a Reviewer is denied. The decision is one
+of `approve`, `reject` or `request_changes` (`normalizeApprovalDecision` rejects anything else
+with `VALIDATION_FAILED` 422) and an optional `reason` (≤ 2000 characters). An
+`Idempotency-Key` is required; a missing key returns `IDEMPOTENCY_KEY_REQUIRED` (400).
+Decision idempotency is key-bound: the same `Idempotency-Key` with the same input replays the
+same decision and audit, and with different input returns `IDEMPOTENCY_INPUT_CONFLICT` (409).
+A second fresh-key decision on the same review item returns
+`REVIEW_DECISION_ALREADY_RECORDED` (409); one terminal decision exists per review item
+(`review_decisions_one_per_review_item_idx`). A decision whose `expectedFinalVideoVersion` does
+not match the captured `finalVideoVersion`, or whose bound final video is no longer `current`
+(superseded), returns `REVIEW_VERSION_STALE` (409) and archives the review item idempotently
+under RLS; no decision is recorded against a superseded version. `approve` moves the review item
+to `approved`, `reject` to `rejected` and `request_changes` to `change_requested`. Only `approve`
+mints a deterministic approval token (`sha256("review-approval:{workspaceId}:{reviewItemId}:
+{finalVideoId}:{finalVideoVersion}")`), persisted as the `approvalReference` for downstream
+scheduling; `reject` and `request_changes` mint no token and persist `approval_token` `NULL`.
+Token uniqueness is enforced only over non-null tokens. The response carries the decision
+(id, decision, reason, final-video id/sha256/version, decided-by user id, created at), the
+`approvalReference` (approve only: token, review item id, final-video id/sha256/version, decided
+by/at) and the `review.decision_recorded` audit (target type `ReviewItem`). The response is
+`202 Accepted`. The approval token is a public deterministic reference, not a secret; it is
+surfaced for scheduling and is never a signed URL or provider payload.
+
+Signed URLs, object keys, recipient user ids, notification payload hashes, raw provider
+payloads and secrets never appear in any review response; the final-video sha256 is a public
+content fingerprint and is surfaced as the bound golden render hash. Cross-workspace and missing
+workspaces hide behind `WORKSPACE_ACCESS_DENIED` (404) and never leak the owning workspace id.
+
+`POST /calendar-posts` creates one calendar post bound to one approved exact final-video version
+(`finalVideoId` + captured `finalVideoSha256` + `finalVideoVersion` + the R2 `approvalToken`).
+Only Owner, Admin or Client Manager (`schedule_publish_approved_media`) may create a post; a
+Reviewer is denied. The body carries `platform` (≤ 40), `account` (≤ 240), `caption` (≤ 2000),
+`timezone` (IANA, defaults to `Asia/Kolkata` for display only), `manualExport` (boolean) and, for a
+scheduled post, `scheduledAt`. An `Idempotency-Key` is required; a missing key returns
+`IDEMPOTENCY_KEY_REQUIRED` (400). Create idempotency is key-bound: the same `Idempotency-Key` with
+the same input replays the same post, and with different input returns `IDEMPOTENCY_INPUT_CONFLICT`
+(409). A scheduled post (`manualExport` false) requires a valid future `scheduledAt` as an
+ISO-8601 instant with an explicit UTC offset; a past, malformed or offset-less value, or a
+`scheduledAt` supplied on a manual export, returns `PUBLISH_SCHEDULE_INVALID` (422). The bound
+final video must still be `current`; a superseded version returns `PUBLISH_MEDIA_STALE` (409). The
+`approvalToken` must match a recorded `approve` decision bound to the exact version, else
+`REVIEW_APPROVAL_REQUIRED` (409). A schedule conflict — a second scheduled post for the same
+`workspaceId` + `platform` + `account` whose `scheduledAt` falls within the 60-second conflict
+window — returns `PUBLISH_SCHEDULE_INVALID` (422). The conflict check is database-protected: the
+create runs inside a PostgreSQL transaction that first acquires a transaction-scoped
+`pg_advisory_xact_lock` keyed by `{workspaceId}:{platform}:{account}`, so concurrent creates for
+the same account serialise and the 60-second window check is authoritative under concurrency
+(the lock is never persisted and `hashtext` collisions only cause harmless false serialisation).
+A scheduled post is created `SCHEDULED` with the offset-respected UTC
+`scheduledAt`; a manual-export post (`manualExport` true) is created `APPROVED` with no
+`scheduledAt` and produces a retained manual-export `Artifact` whose `sha256` is the deterministic
+package hash (`sha256("manual-export:{workspaceId}:{finalVideoId}:{finalVideoVersion}:
+{approvalToken}:{platform}:{account}:{caption}")`), `retentionClass` `manual-export`,
+`schemaVersion` `calendar.manual_export.v1` and `status` `CLEAN`; `manualLiveUrl` is left null for
+the later verification path. A `calendar.post_created` audit is retained (target type
+`CalendarPost`, reason `scheduled` or `manual_export`). The response carries the `calendarPost`
+(id, platform, account, caption, bound final-video id/sha256/version, approval token, scheduledAt
+or null, timezone, manualExport, manualLiveUrl, exportArtifactId, status, created-by user id,
+version, timestamps), the `exportArtifact` (manual export only, omitting the object key) and the
+audit. The response is `202 Accepted`. The approval token is a public deterministic reference and
+the export artifact `sha256` is a public content hash; neither is a secret, signed URL or provider
+payload, and the export artifact object key never reaches the browser. Cross-workspace and missing
+workspaces (including a `finalVideoId` from another workspace) hide behind
+`WORKSPACE_ACCESS_DENIED` (404) and never leak the owning workspace id.
+
+`PATCH /calendar-posts/{id}` edits an existing calendar post before it is submitted. Only Owner,
+Admin or Client Manager (`schedule_publish_approved_media`) may edit; a Reviewer is denied. The
+body carries the integer `expectedVersion` (optimistic concurrency against `CalendarPost.version`)
+and an optional patch of `caption`, `platform`, `account`, `timezone`, `manualExport` and, for a
+scheduled post, `scheduledAt`; omitted fields keep their current value. An `Idempotency-Key` is
+required; a missing key returns `IDEMPOTENCY_KEY_REQUIRED` (400). Edit idempotency is key-bound
+exactly as create: same key + same input replays, same key + different input returns
+`IDEMPOTENCY_INPUT_CONFLICT` (409). An edit is only allowed on an editable pre-publish post
+(status `scheduled` or `approved`); a post that already has a `PublishOperation`, a supplied
+`manualLiveUrl`, or a terminal/processing status is locked and returns `PUBLISH_POST_LOCKED`
+(409). A stale `expectedVersion` returns `RESOURCE_VERSION_STALE` (409). The bound final video is
+immutable on edit but is re-checked for `current`; a superseded version returns
+`PUBLISH_MEDIA_STALE` (409). The merged full state is validated with the same rules as create, so
+an invalid `scheduledAt`, a `scheduledAt` supplied on a manual export, or an over-length field
+returns `PUBLISH_SCHEDULE_INVALID` (422) or `VALIDATION_FAILED` (422), and a schedule conflict
+returns `PUBLISH_SCHEDULE_INVALID` (422) with the same advisory-lock protection as create (the
+post's own row is excluded from conflict candidates). On success the post's `version` is
+incremented, `status` is recomputed (`APPROVED` for a manual export, else `SCHEDULED`), a
+manual-export post regenerates the retained manual-export `Artifact` with a versioned file name
+and object key (the prior row is retained as evidence), and a switch back to scheduled clears
+`exportArtifactId`. A `calendar.post_updated` audit is retained (target type `CalendarPost`,
+reason a comma-joined list of changed fields or `no_change`). The response carries the updated
+`calendarPost`, the `exportArtifact` (manual export only) and the audit, and is `202 Accepted`.
+Cross-workspace edits hide behind `WORKSPACE_ACCESS_DENIED` (404).
+
+## Idempotent Platform Publication (V0-U2, V0-U3)
+
+`POST /calendar-posts/{id}/publish` publishes an approved scheduled calendar post to the provider
+bound to its platform exactly once. The provider is derived server-side from the calendar post's
+`platform` (`meta` -> `meta-simulator`, `youtube-shorts` -> `youtube-simulator`); the request body
+carries no `provider` field. Only Owner, Admin or Client Manager (`schedule_publish_approved_media`)
+may publish; a Reviewer is denied. The body carries `workspaceId` and `account`. An
+`Idempotency-Key` is required; a missing key returns `IDEMPOTENCY_KEY_REQUIRED` (400). A durable
+`PublishOperation` is persisted `SUBMITTING` before the provider network I/O so a crash between
+persistence and the network response leaves a resumable operation, never a blind duplicate. The
+operation binds the workspace, the calendar post, the provider route, the idempotency key and a
+server-side `requestHash` (`sha256` over the canonical bound inputs including the provider); the
+`requestHash` is a server-side binding secret and never appears in any response. One
+`PublishOperation` exists per `CalendarPost` (one operation per post). The request `account` must
+equal the calendar post's bound `account`; a mismatch returns `PUBLISH_ACCOUNT_MISMATCH` (409) and
+never calls the provider. A manual-export post (`manualExport` true) cannot be submitted to a
+provider and returns `PUBLISH_NOT_SUBMITTABLE` (409). A platform with no V0 publish adapter (for
+example `tiktok`; Direct Post is out of scope) returns `PUBLISH_PLATFORM_UNSUPPORTED` (409) before
+any network I/O and never calls the provider. A platform with an upload-quota gate (YouTube: 3
+uploads/day per client) refuses submission when the quota is exhausted: it returns
+`PUBLISH_QUOTA_EXHAUSTED` (429) with a `retryAfterMs` BEFORE any network I/O, writes no
+`PublishOperation` row, and never calls the provider; the user retries at the shown time or exports
+manually. A timeout after possible acceptance marks the operation `UNKNOWN` and the calendar post
+stays `submitting`; the response carries `unknown: true` and no callback, and the caller must
+reconcile before any retry. A malformed provider response returns `PROVIDER_OUTPUT_INVALID` (422)
+and no callback. On success the operation advances to `ACCEPTED` with the external post id bound and
+the calendar post advances to `accepted`; a `publish.state_changed` audit is retained (target type
+`CalendarPost`, reason `accepted`); the public post URL is `null` until the post is live. A YouTube
+upload that is accepted but still being processed returns the operation `processing` while the
+calendar post stays `accepted`; the simulator surfaces a `publish.processing` callback (no public
+URL yet) and a later `publish.completed` callback or reconciliation drives the operation to
+`completed`. The response is `202 Accepted` and carries the `calendarPost`, the `operation` (id,
+provider, calendarPostId, operationType, status, externalId, publicUrl, timestamps; omitting
+`requestHash` and `workspaceId`), and, in simulator mode, a signed `callback` envelope
+(`{envelope, signature}`) carrying the public post URL for the deterministic test to post back. A
+replay with the same `Idempotency-Key` and the same post + account returns the existing operation
+with `replay: true`; the same key against a different post or account returns
+`IDEMPOTENCY_INPUT_CONFLICT` (409). Cross-workspace and missing posts hide behind
+`WORKSPACE_ACCESS_DENIED` (404) and never leak the owning workspace id. No secret, signed URL,
+object key, request hash or raw provider payload reaches the response; the public post URL is the
+only URL surfaced and only once the post is live.
+
+`POST /calendar-posts/{id}/publish/reconcile` reconciles an uncertain publish operation. Only
+Owner, Admin or Client Manager (`schedule_publish_approved_media`) may reconcile; a Reviewer is
+denied. The body carries `workspaceId` and an optional `reconcileOutcome` (simulator override). An
+`Idempotency-Key` is required. Reconciliation never resubmits; it resolves `unknown`/`submitting`/
+`accepted`/`processing` to a terminal state, records `reconciledAt`, and on `completed` binds the
+public post URL and advances the calendar post to `published_unverified`. A terminal operation
+replays with `replay: true`. A calendar post with no publish operation returns
+`PUBLISH_NOT_SUBMITTABLE` (409); a platform with no V0 publish adapter returns
+`PUBLISH_PLATFORM_UNSUPPORTED` (409). The response is `200 OK` and carries the `calendarPost` and
+`operation`. Cross-workspace and missing posts hide behind `WORKSPACE_ACCESS_DENIED` (404).
+
+`POST /calendar-posts/{id}/verify` independently verifies the audience-facing live post against
+the approved calendar post before any publication is claimed as done. Only Owner, Admin or Client
+Manager (`schedule_publish_approved_media`) may verify; a Reviewer is denied. No `Idempotency-Key`
+is required: exactly-once here is the one-`PostVerification`-row-per-post rule, not a request key.
+The body carries `workspaceId`, an optional simulator `mode`, and for a manual-export post an
+optional `manualLiveUrl`. The deterministic verifier simulator independently observes the live
+post and reports whether the target account, media identity (the approved final-video sha256),
+caption, visibility and publish time match; raw provider payloads stay adapter-private and never
+reach the response. A provider post that is not yet live (`accepted`/`submitting`/`processing`) is
+not yet verifiable: provider acknowledgement alone never becomes success, so the response is
+`202 Accepted` with a `VERIFY_PROCESSING_WAIT` body, a `retryAfterMs` and no verification record.
+A still-processing observation on a live post also returns `202` with a `processing_wait`
+`PostVerification` row. A `verified` observation advances the calendar post to
+`published_verified`, retains an immutable audience-evidence `Artifact` (a public sha256
+fingerprint; the object key is never surfaced), sends exactly one deduplicated
+`publish_completed` `in_app` notification (a second verify collapses into the existing
+notification with `duplicateCollapsed: true` and never sends a duplicate), anchors an initial
+immutable `PerformanceSnapshot` (source `audience_verification_initial`, empty metrics, zero-width
+window) and records `calendar.verification_completed`. An `identity_mismatch` observation
+(wrong account and/or media) returns `VERIFY_IDENTITY_MISMATCH` (409), retains the evidence and a
+`identity_mismatch` row, records `calendar.verification_failed` and sends no notification. A
+`visibility_restricted` observation returns `VERIFY_VISIBILITY_RESTRICTED` (409) and likewise sends
+no notification. A manual-export post without a live URL returns `VERIFY_MANUAL_URL_REQUIRED`
+(409) until one is supplied; the supplied URL is then bound and verified in the same call. An
+already-`published_verified` post replays the existing verification, evidence, notification and
+snapshot with `replay: true`. The public `PostVerification` carries `status` (lowercased),
+`attempts`, `accountMatched`, `mediaSha256Matched`, `captionMatched`, `visibility`,
+`evidenceArtifactId` and `verifiedAt`; the raw observed account, observed media sha256, observed
+caption, observed published at, propagation delay and last error code stay server-side. The
+`200 OK` response carries `calendarPost`, `verification`, `evidenceArtifact`, `notification` and
+`performanceSnapshot`. Cross-workspace and missing posts hide behind `WORKSPACE_ACCESS_DENIED`
+(404).
+
+`GET /lineage/{finalVideoId}` exports the complete creative ancestry of one final video as a
+bounded, redacted, hash-manifested record (V0-A1). Only Owner, Admin or Client Manager
+(`view_lineage_and_performance`) may export; a Reviewer is denied. The `{finalVideoId}` path
+parameter and `workspaceId` query select the final video; a cross-workspace or missing final
+video hides behind `WORKSPACE_ACCESS_DENIED` (404) so the owning workspace id never leaks. The
+export traverses the immutable ancestry anchored on the `CreativeLineage` row
+(brandProfile -> selectedScript -> avatarProfile -> estimate -> providerOperation ->
+generatedAsset -> compositionInstruction -> aePlan -> renderAttempt -> finalVideo) and extends it
+through the publication and observation ancestry for the bound calendar post
+(calendarPost -> postVerification -> performanceSnapshotInitial). The `status` is `complete` when
+every ancestry kind is retained, `incomplete` when one or more kinds are missing (named in
+`missing`), or `blocked` when a final-video sha256 does not equal its render-attempt output hash
+(named in `mismatches`); an unrecognised body maps to `unknown`. The `entries` list is bounded and
+each artifact entry carries only its public content `sha256`, `contentType` and `version`; the
+object key never surfaces. The `cost` attribution surfaces `providerTotalMinor`,
+`estimatedMaximumMinor`, `currency` and `priceVersion` as observations. The `providerTimestamps`
+surface `submittedAt`, `acceptedAt` and `completedAt`. The `manifestSha256` is the sha256 over the
+stable JSON of the entries sorted by `{kind, id}` and is stable across reads. The `200 OK`
+response carries `workspaceId`, `finalVideoId`, `status`, `missing`, `mismatches`,
+`manifestSha256`, `generatedAt`, `cost`, `providerTimestamps` and `entries`. No secret, signed URL,
+object key, raw provider payload, request hash or cross-workspace reference leaks; the export is a
+record of what was produced, not a prediction of reach, virality, conversion or causal performance.
+
+`POST /calendar-posts/{id}/performance-collect` collects a fresh observed platform performance
+snapshot for one calendar post (V0-A1). Only Owner, Admin or Client Manager
+(`schedule_publish_approved_media`) may collect; a Reviewer is denied. An `Idempotency-Key` is
+required: a replay with the same key returns the same `PerformanceSnapshot` with `replay: true` and
+never writes a second row; changed input returns `IDEMPOTENCY_INPUT_CONFLICT` (409). A post that is
+not yet `published_verified` is not observable and returns `PERFORMANCE_NOT_OBSERVABLE` (409). The
+deterministic performance simulator observes the post and reports observed metrics only (views,
+likes, comments, shares, saves); the source hash and any platform account id stay adapter-private.
+A `processing_wait` observation returns `202 Accepted` with `PERFORMANCE_PROCESSING_WAIT`,
+`retryAfterMs` and no snapshot. An `observed` observation retains a NEW immutable
+`PerformanceSnapshot` (source `performance_collect_simulator`, observation `simulated`, a widened
+observation window and populated `metrics`) and never mutates the initial snapshot anchored at
+verification. The `200 OK` response carries `performanceSnapshot`; a replay also carries `replay:
+true`. Cross-workspace and missing posts hide behind `WORKSPACE_ACCESS_DENIED` (404). The metrics
+are observations of past platform state only, never a prediction, forecast or promise of reach,
+virality, conversion or causal performance.
+
+`GET /calendar-posts/{id}/performance` reads every immutable `PerformanceSnapshot` for one calendar
+post (V0-A1). Only Owner, Admin or Client Manager (`view_lineage_and_performance`) may read; a
+Reviewer is denied. The `{calendarPostId}` path parameter and `workspaceId` query select the post; a
+cross-workspace or missing post hides behind `WORKSPACE_ACCESS_DENIED` (404). The read returns the
+`calendarPost` (with its `status`) and the bounded `snapshots` list, each carrying `id`, `source`,
+`observation`, `observationWindowStart`, `observationWindowEnd`, a `stale` flag (true when the post
+is no longer `published_verified`) and the observed `metrics`. The initial
+`audience_verification_initial` snapshot keeps empty metrics forever; later
+`performance_collect_simulator` snapshots carry the observed counts. No secret, signed URL, object
+key, source hash, account id or predictive claim (reach/virality/conversion) leaks.
+
+`POST /callbacks/publishing/{provider}` is the signed publishing callback receiver. The `{provider}`
+path selects the signature header (`meta` -> `x-meta-signature`, `youtube` ->
+`x-youtube-signature`). The handler verifies the header in constant time, windows the timestamp,
+deduplicates by `(workspaceId, source, eventId)` via `inbox_events`, and advances the
+`PublishOperation` and `CalendarPost` in lockstep. A `publish.processing` event keeps the operation
+`processing` while the post stays `accepted`; the public post URL is bound only on
+`publish.completed`. A bad signature or out-of-window callback returns `PROVIDER_CALLBACK_INVALID`
+(401); a malformed envelope returns `PROVIDER_OUTPUT_INVALID` (422); both hide cross-workspace
+existence. A replayed callback returns the prior response with `duplicate: true` and never
+transitions a second time. The response is `200 OK`.
+
 ## Provider Callbacks
 
 ```text
@@ -499,6 +887,35 @@ authorizes work.
   jobs only when no completion artifact exists. Credential endpoints retain secret-manager
   references, never plaintext secret values. Simulator controls are limited to local,
   test and staging environments. Redaction scans must redact API keys and signed URLs.
+- V0-A2 credential rotation (`POST /workspaces/{workspace_id}/service-credentials/{credentialId}/rotate`)
+  requires the `manage_provider_credentials` capability (Owner, Admin). It marks the
+  prior credential `REVOKED`, creates a fresh `ACTIVE` credential row carrying the new
+  `secret-manager://` reference, stamps `lastRotatedAt`, and writes one
+  `service_credential.rotated` audit row bound to the prior credential id. The response
+  returns the new credential and a `previous` summary (`id`, `rotationStatus: "REVOKED"`,
+  `lastRotatedAt`, `updatedAt`) that never echoes `secretRef`. A rotation input carrying
+  a plaintext secret field (`secretValue`, `apiKey`, `password`, etc.) is rejected with
+  `VALIDATION_FAILED` (422). A missing or non-owned credential is hidden behind
+  `WORKSPACE_ACCESS_DENIED` (404).
+- V0-A2 hardening drills (`POST /workspaces/{workspace_id}/b2-benchmark`,
+  `POST /workspaces/{workspace_id}/backlog-simulation`,
+  `POST /workspaces/{workspace_id}/incident-rehearsal`,
+  `GET /workspaces/{workspace_id}/operations/alerts`) require the `run_restore_drills`
+  capability for the three drill endpoints and `view_operations` for the alerts endpoint
+  (Owner, Admin). They run against the deterministic simulators only; a non-simulator
+  provider mode refuses with a 503 `*_UNAVAILABLE` problem and writes no audit. The B2
+  benchmark returns a visibly `simulated` India-to-B2 latency within the owner-pinned budget
+  and an integer minor-unit egress cost, and retains one `benchmark.b2_recorded` audit row.
+  The backlog simulation returns a deterministic two-hour growth-then-drain curve with an
+  SLO breach and the `duplicatePaidWork: false` / `silentJobLoss: false` invariants, and
+  retains one `backlog.simulation_recorded` audit row. The incident rehearsal records one
+  owner-pinned scenario as a deterministic script of recovery steps with a `forward` or
+  `rollback` recovery type and retains one `incident.rehearsal_recorded` audit row bound to
+  the run id. The alerts endpoint is read-only and derives deterministic alert states
+  (queue-age SLO breach, dead letters, lease-expiry spike, retry storm) from the operational
+  metrics against owner-pinned thresholds; it writes no audit. An invalid drill input is
+  rejected with `VALIDATION_FAILED` (422); a missing, non-owned or cross-workspace target is
+  hidden behind `WORKSPACE_ACCESS_DENIED` (404); an unauthenticated call is rejected with 401.
 - V0-B3 approval endpoints require human approval, optimistic version checks and one
   active approved brand profile per workspace/brand before downstream production use.
 - Request body size, upload size, string length, enum and provider-specific limits are

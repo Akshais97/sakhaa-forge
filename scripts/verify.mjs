@@ -27,4 +27,4 @@ for (const [command, args, extraEnv] of commands) {
   }
 }
 
-console.log("\nV0-F0/F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1/G2/G3/G4/G5 local verification passed.");
+console.log("\nV0-F0/F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1/G2/G3/G4/G5/C1/C2/R1/R2/U1/U2/U3/U4 local verification passed.");

@@ -13,7 +13,11 @@ implementation mapping is `V0_PRISMA_SCHEMA.md`. Product V2's separate model rem
 - `Membership`: user role and status within a workspace.
 - `ServiceCredential`: encrypted metadata for provider credentials; secrets stay in a
   secret manager. V0 stores the secret-manager reference, provider, purpose, environment
-  and rotation status only.
+  and rotation status only. Rotation (V0-A2) is append-style: the prior row is marked
+  `REVOKED`, a fresh `ACTIVE` row is created with a new `secret-manager://` reference and
+  a stamped `lastRotatedAt`, and one `service_credential.rotated` audit row is retained
+  against the prior id. `secretRef` is never echoed for a revoked credential and a
+  rotation input carrying a plaintext secret field is rejected.
 - `WorkspaceCapability`: workspace-scoped capability switch for unfinished or temporarily
   disabled V0 behaviours. Owner/Admin updates are audited; disabled capabilities do not
   create new downstream job state.
@@ -97,6 +101,11 @@ profiles. Historical lineage keeps the exact profile version originally used.
   is held as a secret-manager style `evidenceRef` and never appears in public
   responses or analytics. `expiresAt` and `revokedAt` drive derived eligibility;
   revocation blocks future use immediately while historical audit records remain.
+  V0-A2 exposes a real, audited consent-revocation write
+  (`POST /avatars/{avatarProfileId}/consent-revocation`) that stamps `revokedAt` and
+  `revokedByUserId` and writes one `consent.revoked` audit row; it is monotonic and
+  idempotent, so a repeat revocation writes no second audit row, and an avatar with no
+  prior consent record is rejected with `AVATAR_CONSENT_REQUIRED`.
 - `GenerationEstimate`: provider, route, price version, maximum authorized cost. When
   `avatarProfileId` is supplied it must resolve to an avatar in the same workspace bound
   to the active approved brand profile, and the avatar must be consent-safe; the estimate
@@ -153,17 +162,78 @@ profiles. Historical lineage keeps the exact profile version originally used.
   positive `version` and a status (`CLEAN`/`REJECTED`/`SUPERSEDED`, default `CLEAN`; returned
   UPPERCASE per the V0-F3 AssetTrustStatus contract). Unique on `(workspaceId,
   generationJobId, version)` so asset creation is exactly-once per version per job.
-- `CreativeLineage`: V0-G5 immutable ancestry of a generated asset from the approved
-  `BrandProfile`, `SelectedScript` (nullable), consent-safe `AvatarProfile`, `GenerationEstimate`,
-  `ProviderOperation` and bound `priceVersion` (`v0.local.1`). One lineage row per
-  `GenerationJob` (`unique(workspaceId, generationJobId)`).
+- `CreativeLineage`: the immutable ancestry of a retained media object. A V0-G5
+  generation-job lineage row ties a generated asset back through the approved `BrandProfile`,
+  `SelectedScript` (nullable), consent-safe `AvatarProfile`, `GenerationEstimate`,
+  `ProviderOperation` and bound `priceVersion` (`v0.local.1`); it is identified by
+  `generationJobId` (one row per `GenerationJob`, `unique(workspaceId, generationJobId)`,
+  `generationJobId` set, `finalVideoId` null). A V0-C2 render-level lineage row ties a final
+  video back through the `CompositionInstruction`, `AePlan` and `RenderAttempt` that produced it,
+  copying the G5 generated-asset ancestry in-row (`generatedAssetId`, `brandProfileId`,
+  `estimateId`, `provider`, `providerOperationId`, `priceVersion`); it is identified by
+  `finalVideoId` (one row per `FinalVideo`, `unique(workspaceId, finalVideoId)`,
+  `generationJobId` null, `finalVideoId` set). Both row kinds are append-only; a V0-C2 revision
+  creates a new render-level lineage row for the new final video and never overwrites the prior
+  row. SQL treats NULLs as distinct, so each unique constraint scopes only its non-null row kind.
 
 ## Composition
 
-- `CompositionInstruction`: user instruction and normalized intent.
-- `AePlan`: versioned timeline JSON and supported-capability validation.
-- `RenderAttempt`: renderer, input hashes, result, logs reference and cost.
-- `FinalVideo`: approved production object, thumbnail, captions and media fingerprint.
+- `CompositionInstruction`: user instruction and normalized intent. V0-C1 binds a retained
+  CLEAN generated asset (`generationAssetId`) to structured composition direction
+  (`inputMode`, `rawDirection`) and normalizes it into a versioned AE timeline. Status is the
+  lowercase `V0_STATUS_ENUMS.md` Composition contract; V0-C1 reaches `planning`,
+  `validation_failed` and `validated`, and V0-C2 reaches `rendered` on a succeeded render
+  (rendering/failed are later sprints; superseded is reached by a prior final video on a new
+  revision). `generationAssetId` is a plain UUID, not a FK: the application layer
+  (`resolveAsset`) is the sole validator of asset existence, workspace ownership and CLEAN
+  status, and a `validation_failed` plan for a missing or cross-workspace asset must still be
+  retained. The raw direction is internal context and never returned to the browser.
+- `AePlan`: versioned timeline JSON and supported-capability validation. V0-C1 validates the
+  timeline against the deterministic AE capability registry (`aeCapabilityRegistry`,
+  capability version `ae.local.1`, schema version `ae.plan.v1`): a valid plan is `validated`
+  with a CLEAN plan artifact (`Artifact` row, `application/json`, retention class
+  `plan-artifact`, producer `composition:{instructionId}`, schema version `ae.plan.v1`); a
+  malformed plan or capability mismatch is `validation_failed` with every unsupported item
+  explained in `unsupportedItems` (`{ code, field, detail }`). The primary error code follows
+  the catalog priority `AE_PLAN_SCHEMA_INVALID` > `AE_CAPABILITY_UNAVAILABLE` >
+  `AE_ASSET_MISSING` > `AE_TIMELINE_INVALID`. The timeline JSON, plan artifact sha256
+  (canonical timeline hash) and referenced asset ids are retained server-side only; the
+  public mapper surfaces status, capability version, schema version, plan version, the plan
+  artifact id and the explained unsupported items.
+- `RenderAttempt`: the durable record of one AE render of a validated plan. V0-C2 persists it
+  `running` (with a CLEAN render-logs `Artifact`, `retentionClass` `render-logs`, and a
+  `composition.render_started` audit) before the AE worker runs — the external side-effect
+  operation is persisted before the work — then `succeeded` (final media retained, `outputHash`
+  set to the deterministic golden render hash) or `failed` (capability drift, incompatible
+  worker output, or an unrecovered crash; a `composition.render_failed` audit retains the
+  failure code as its reason). It carries the renderer, the plan canonical timeline hash
+  (`inputHash`), the referenced generated-asset sha256s (`inputAssetHashes`), the worker
+  capability version, the `aePlanId` it rendered, the logs artifact id, the cost in integer
+  minor units, the idempotency key and the `idempotencyInputHash` (a sha256 of the canonical
+  render request: `compositionInstructionId`, `aePlanId`, `planCanonicalHash`,
+  `inputAssetHashes` and `capabilityVersion`). One `running` attempt per composition instruction
+  (partial unique index) is the concurrency guard; render idempotency is input-bound, not
+  key-bound — the same `Idempotency-Key` replays or resumes only when the render request hashes
+  to the same `idempotencyInputHash` for the same composition, and the same key against a
+  different composition, plan, input assets or capability version returns
+  `IDEMPOTENCY_INPUT_CONFLICT` (409) without creating a final video or attempt. A worker crash
+  leaves the attempt `running` and the caller resumes with the same idempotency key and input;
+  `running` is a real state. The input hash, asset hashes and input idempotency hash are
+  server-side validation bindings; the public mapper (`publicRenderAttempt`) surfaces status,
+  version, renderer, worker capability version and the output hash (the golden render
+  fingerprint).
+- `FinalVideo`: the approved production object retained from a succeeded render, with
+  thumbnail, captions and a media fingerprint (sha256). V0-C2 retains exactly one `current`
+  `FinalVideo` per composition instruction (partial unique index); a new revision creates a new
+  row (version N+1, `current`) and supersedes the prior `current` row (set to `superseded`,
+  `composition.video_superseded` audit) without overwriting it, preserving the immutable
+  revision lineage. It carries the duration, resolution (`1080x1920`), codec (`h264`), the
+  deterministic golden render sha256 (so the same plan renders to the same hash across
+  revisions), byte size, capability version (`ae.local.1`) and schema version (`ae.render.v1`),
+  and binds the retained CLEAN final-video (`final-video`), thumbnail (`final-thumbnail`) and
+  captions (`final-captions`) artifacts. The artifact ids are server-side bindings; the public
+  mapper (`publicFinalVideo`) surfaces status, version, duration, resolution, codec, capability
+  and schema versions and the golden render hash.
 
 ## Credits and Payments
 
@@ -206,24 +276,116 @@ to Owner/Admin.
 
 - `ReviewItem`: final-video version submitted to internal/client review.
 - `ReviewComment`: thread or timestamped feedback.
-- `ReviewDecision`: approve, reject or request changes with actor and reason.
-- `CalendarPost`: platform, account, caption, schedule and approved media version.
-- `PublishOperation`: idempotent platform submission and external post identity.
-- `PostVerification`: audience-facing checks, attempts, evidence and final result.
-- `Notification`: idempotent processing, success or failure message.
+- `ReviewDecision`: one terminal `approve`, `reject` or `request_changes` bound to one exact
+  final-video version (`finalVideoSha256`, `finalVideoVersion`) with actor, reason and a
+  deterministic approval token (`approvalToken`, nullable) minted only on `approve`; `reject` and
+  `request_changes` store `NULL`. Token uniqueness is enforced only over non-null tokens (partial
+  unique index `review_decisions_one_approval_token_idx ... WHERE approval_token IS NOT NULL`), so
+  many non-approve decisions coexist without collision. One decision per review item.
+- `CalendarPost`: one calendar post bound to one approved exact final-video version
+  (`finalVideoId`, `finalVideoSha256`, `finalVideoVersion`, R2 `approvalToken`), with `platform`,
+  `account`, `caption`, `timezone`, `scheduledAt` (nullable), `manualExport`, `manualLiveUrl`
+  (nullable, supplied later by verification), `exportArtifactId` (nullable, the manual-export
+  `Artifact`), `status` (`PublishStatus`) and `createdByUserId`. A scheduled post is created
+  `SCHEDULED` with the offset-respected UTC `scheduledAt`; a manual-export post is created
+  `APPROVED` with no `scheduledAt` and a retained manual-export `Artifact` whose `sha256` is the
+  deterministic package hash; `manualLiveUrl` is null until the later verification path supplies it.
+  `CalendarPost.version` (integer, default 1) supports optimistic-concurrency edits via
+  `PATCH /calendar-posts/{id}` (caller supplies `expectedVersion`); a successful edit increments
+  `version`. An edit is only allowed on an editable pre-publish post (`scheduled` or `approved`);
+  a post with a `PublishOperation`, a supplied `manualLiveUrl`, or a terminal/processing status is
+  locked (`PUBLISH_POST_LOCKED`). The 60-second schedule-conflict window is database-protected by a
+  transaction-scoped `pg_advisory_xact_lock` keyed by `{workspaceId}:{platform}:{account}` on both
+  create and edit (the post's own row is excluded on edit).
+- `PublishOperation`: V0-U2/V0-U3 idempotent platform submission and external post identity for one
+  `CalendarPost` (one operation per post). Binds `workspaceId`, `calendarPostId`, `provider`
+  (`meta-simulator` for `meta`, `youtube-simulator` for `youtube-shorts`; derived server-side from
+  the `CalendarPost.platform`), `operationType` (`publish_post`), `idempotencyKey` and a server-side
+  `requestHash` (`sha256` over the canonical bound inputs including the provider; never returned),
+  with `status` (`PublishOperationStatus`), `externalId` (bound on acceptance), `publicUrl` (bound
+  only on completion), `retryAfterMs` (set on a quota-exhausted refusal; otherwise null),
+  `lastErrorCode`, and `submittedAt`/`acceptedAt`/`completedAt`/`reconciledAt`/`cancelledAt`
+  timestamps. Persisted `SUBMITTING` before the provider network I/O so a crash leaves a resumable
+  operation, never a blind duplicate. A timeout after possible acceptance is `UNKNOWN` and
+  reconciled before any retry; a YouTube upload that is accepted but still processing is
+  `PROCESSING` while the `CalendarPost` stays `accepted`, then a verified `publish.processing`/
+  `publish.completed` callback or reconciliation drives `completed` and binds the `publicUrl`,
+  advancing the `CalendarPost` to `published_unverified` in lockstep. A platform with no V0 publish
+  adapter is rejected (`PUBLISH_PLATFORM_UNSUPPORTED`) before any row is written; an exhausted
+  upload quota is a pre-flight refusal (`PUBLISH_QUOTA_EXHAUSTED`) that writes no row. Publishing is
+  not a V0 credit op, so there is no price, currency, estimated maximum or settlement.
+- `PostVerification`: the audience-facing verification record for one `CalendarPost`, exactly one
+  row per post (unique `calendarPostId`). Binds `workspaceId`, `calendarPostId`, `provider`
+  (`verify-simulator`, derived server-side), `status` (`VerificationStatus`: `processing_wait`,
+  `verified`, `identity_mismatch`, `visibility_restricted`, `manual_url_required` is a transient
+  pre-row guard, not a stored status), `attempts` (incremented per observation), the match flags
+  `accountMatched`/`mediaSha256Matched`/`captionMatched` (booleans for an observed result, null
+  while `processing_wait`), `visibility` (the observed audience visibility), the server-private
+  observed identity (`observedAccount`, `observedMediaSha256`, `observedCaption`,
+  `observedPublishedAt`, never surfaced in API responses), `propagationDelayMs`, `lastErrorCode`
+  (`VERIFY_IDENTITY_MISMATCH`/`VERIFY_VISIBILITY_RESTRICTED` for the non-success results, null when
+  verified), the retained `evidenceArtifactId` (the audience-evidence `Artifact`), and
+  `verifiedAt` (set only on a verified result). Provider acknowledgement alone never produces a
+  verified row: a not-yet-live post returns `VERIFY_PROCESSING_WAIT` with no row, and a
+  still-processing live observation writes a `processing_wait` row that a later verified
+  observation advances in place. Wrong media/account (`identity_mismatch`) and restricted
+  visibility (`visibility_restricted`) are stored non-successes that retain the evidence and write
+  `calendar.verification_failed`; they send no notification. Only a `verified` row advances the
+  `CalendarPost` to `published_verified`.
+- `Notification`: idempotent, deduplicated delivery of one logical message to one recipient.
+  Binds `workspaceId`, `notificationType` (V0-U4 `publish_completed`), `channel` (`in_app`),
+  `recipientUserId`, a server-side `payloadHash` (`sha256` over the stable
+  `workspaceId`+`calendarPostId`+`notificationType`+`recipientUserId` tuple; never surfaced), the
+  nullable `reviewItemId` (review-channel notifications) and the nullable `calendarPostId`
+  (publish-completion notifications, V0-U4), `status` (`SENT`) and `sentAt`. One logical
+  notification per `(workspaceId, payloadHash)`: a second verify of the same post collapses into
+  the existing notification (`duplicateCollapsed: true`) and never sends a duplicate. The
+  `payloadHash` and `recipientUserId` are storage secrets and never appear in the API response or
+  rendered UI.
 
 ## Performance and Lineage
 
-- `PerformanceSnapshot`: immutable platform metrics and observation window.
+- `PerformanceSnapshot`: immutable platform metrics and observation window. V0-U4 anchors the
+  initial snapshot at the verified instant (source `audience_verification_initial`, empty `metrics`
+  object, zero-width window bounded by `verifiedAt`); the public surface carries `id`,
+  `calendarPostId`, `platform`, `source`, `observation` (derived from `source`: `simulated` for a
+  collect-simulator snapshot, null for the initial snapshot — the table has no `observation`
+  column), `observationWindowStart`, `observationWindowEnd`, a read-time `stale` flag (true when the
+  post is no longer `published_verified`) and the observed `metrics` (views, likes, comments,
+  shares, saves), while the server-side `sourceHash` and any platform account id stay private.
+  V0-A1 `POST /calendar-posts/{id}/performance-collect` appends a fresh immutable snapshot (source
+  `performance_collect_simulator`, observation `simulated`, a widened window and populated
+  `metrics`) and never mutates the initial snapshot; a replay with the same `Idempotency-Key`
+  returns the same row with `replay: true`. V0-A1 `GET /calendar-posts/{id}/performance` returns
+  the bounded snapshot list. The metrics are observations of past platform state only, never a
+  prediction, forecast or promise of reach, virality, conversion or causal performance.
 - `CreativeLineage`: brand, blueprint, formula, script, avatar, provider and final-video
   ancestry. V0-G5 writes the lineage row binding a generated asset to the approved brand
   profile, selected script, consent-safe avatar, estimate, provider operation and price
-  version; one row per generation job.
+  version; one row per generation job. V0-C2 extends the row with the composition instruction, AE
+  plan, render attempt and final video (one row per final video via the unique
+  `(workspaceId, finalVideoId)` constraint). V0-A1 `GET /lineage/{finalVideoId}` exports the
+  immutable ancestry as a bounded, redacted, hash-manifested record: `status`
+  (`complete`/`incomplete`/`blocked`/`unknown`), the named `missing` and `mismatches` lists, the
+  `manifestSha256` (sha256 over the stable JSON of the entries sorted by `{kind, id}`), the `cost`
+  attribution (`providerTotalMinor`, `estimatedMaximumMinor`, `currency`, `priceVersion`), the
+  `providerTimestamps` (`submittedAt`, `acceptedAt`, `completedAt`) and the redacted `entries`
+  (each artifact entry carries only its public content `sha256`, `contentType` and `version`; the
+  object key never surfaces). The export extends the row ancestry through the bound calendar post
+  (`calendar_post`, `post_verification`, `performance_snapshot_initial`). The export is a record of
+  what was produced, not a prediction of reach, virality, conversion or causal performance.
 - `Artifact`: any immutable file with schema, hash, producer and retention class.
 - `AuditEvent`: append-only security, billing, review and production event. V0-G1
   retains an `avatar.selected` audit event (target type `AvatarProfile`) when an eligible
   avatar enters a generation estimate, so avatar selection is durable lineage rather than
-  local UI state; rejected avatars write no audit.
+  local UI state; rejected avatars write no audit. V0-A2 retains three hardening-drill audit
+  rows against the deterministic simulators: `benchmark.b2_recorded` (target type
+  `Workspace`) for an India-to-B2 transfer benchmark, `backlog.simulation_recorded` (target
+  type `Workspace`) for a two-hour load-shaped backlog simulation, and
+  `incident.rehearsal_recorded` (target type `IncidentRehearsal`, target id = the run id) for
+  an incident/runbook rehearsal. Each carries the actor and a bounded `reason` and never
+  persists the simulated latency, cost, curve, recovery script or recovered entity ids; the
+  operational alerts endpoint is read-only and writes no audit.
 - `IdempotencyRecord`: request hash and stable response for costly mutations.
 - `OutboxEvent`: committed event awaiting internal/future delivery.
 - `InboxEvent`: consumed callback/event used for de-duplication.
@@ -279,6 +441,9 @@ V0 may create export-ready events, but delivery to V2 is not required for V0 acc
 - Immutable final-video, blueprint, script and ledger records after publication/capture.
 - Domain mutation and outbox event commit together.
 - Published success requires a verified `PostVerification`.
+- Exactly one `PostVerification` row per `CalendarPost`; one logical completion notification per
+  `(workspaceId, payloadHash)`. Wrong media/account and restricted visibility are non-successes
+  that send no notification.
 - Captured generation credits require a policy-defined successful provider/output state.
 
 ## Deletion

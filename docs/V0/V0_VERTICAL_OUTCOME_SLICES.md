@@ -869,11 +869,22 @@ reconciliation totals and rollback rehearsal.
 
 This slice also proves:
 
-- workspace export is bounded, authorized and hash-manifested;
 - consent revocation blocks future avatar use immediately;
-- deletion revokes access before binary lifecycle purge;
 - financial, audit and published-lineage records follow their retention basis;
 - provider credentials can be rotated without exposing secret values.
+
+The following two "also proves" dimensions are not pinned to a deterministic contract by V0-A2
+and are deferred pending an owner-pinned contract (owner-decision per CLAUDE.md §1/§19, not
+blockers of the failure contract above). A2 delivers the partial proof each names; the
+remaining step is gated on the owner pinning the missing contract:
+
+- workspace export is bounded, authorized and hash-manifested — the per-final-video lineage
+  export shipped in V0-A1 demonstrates the bounded/authorized/hash-manifested pattern; a
+  full-workspace export manifest (which tables, which retention class, which artifacts) is
+  deferred pending an owner-pinned export scope contract;
+- deletion revokes access before binary lifecycle purge — the monotonic consent revocation
+  and credential revocation shipped here demonstrate revoke-before-purge at the data layer;
+  the binary purge step is deferred pending an owner-pinned retention/deletion contract.
 
 **Depends on:** All preceding functional slices used by the reference journey.  
 **Gate:** V0-G8.
@@ -883,9 +894,9 @@ This slice also proves:
 **Outcome:** One India-first real-estate workspace completes brand intake through verified
 publication without manual intervention inside the pipeline, while V1 and V2 are absent.
 
-**Includes:** real/staging-approved providers, exact screenshots, stable IDs/hashes,
-ledger reconciliation, manual-intervention time capture, first-video timing, revisions, cost and
-pilot scorecard evidence.
+**Includes:** real/staging-approved providers, stable IDs/hashes, ledger reconciliation,
+manual-intervention time capture, first-video timing, revisions, cost and deterministic
+technical scorecard evidence.
 
 **Primary records:** All V0 production records.
 
@@ -894,17 +905,28 @@ pilot scorecard evidence.
 **Failure contract:** No manual database edits, hidden provider retries, unrecorded file
 movement, V1/V2 calls or evidence gaps are permitted.
 
-**Evidence:**
+**Evidence (A3 technical closure):**
 
-- brand approval screenshot and ID;
+- brand approval ID and approval audit;
 - blueprint choice and immutable artifact hashes;
 - complete script tournament and selected-script ID;
 - estimate, reservation, provider operation and settled ledger;
 - AE plan, final-video hash and review decision;
 - calendar post, external ID, public URL and audience verification;
 - complete lineage manifest;
-- recovery/security reports;
-- founder-reviewed pilot scorecard.
+- recovery/security reports surfaced inside the reference journey workspace;
+- deterministic technical scorecard (retained IDs, content hashes, integer-minor cost,
+  reconciled ledger, `observationsOnly`, `v1V2Absent`, `noClaimOf`).
+
+A3 closes technical completion only (per `docs/V0/V0.md` "V0 Completion Rule"). Two artifact
+types named by the broader V0 acceptance contracts are **not** A3 closure evidence: the
+**founder-reviewed measured pilot scorecard** is the human business acceptance step before
+external launch (`docs/V0/V0.md`, `docs/Project/Governance/PROJECT_GOVERNANCE_FOUNDER_RISK_ACCEPTANCE.md`),
+not automatable and not claimed by A3; and **screenshots** of the user journey screens remain
+required V0 acceptance evidence retained at the final V0 acceptance run / Build Gate V0-G8,
+not reproducible in a headless generated-client local verification, where the deterministic
+proof (stable IDs, content hashes, public URLs, complete lineage manifest) stands in for
+screenshot evidence for this local verification scope only.
 
 **Depends on:** V0-A1, V0-A2.  
 **Gate:** Completes V0-G8 and Product V0.
@@ -972,7 +994,7 @@ evidence.
 |---|---|---|---|
 | `V0-A1` | Lineage export silently omits ancestry, accepts hash mismatch or leaks cross-workspace references. | Implement bounded lineage traversal/export from brand through performance snapshot, cost attribution, timestamps and artifact manifest. | Full ancestry assertion, immutable snapshot test, bounded export and hash-verified manifest. |
 | `V0-A2` | Recovery/load/security drills expose tenant data, duplicate paid work, lose lineage or falsely report publication success. | Run zero-tolerance security suite, queue backlog simulation, Redis loss, worker crash, callback replay, provider uncertainty, restore, B2 benchmark and reconciliation drills. | Signed test report, restore report, India-to-B2 benchmark, alert screenshots, reconciliation totals and rollback rehearsal. |
-| `V0-A3` | The reference real-estate journey needs manual database edits, hidden retries, V1/V2 calls or has evidence gaps. | Execute the full production-shaped journey with V1/V2 absent, approved providers/simulators as allowed, screenshots, IDs, hashes, cost and pilot scorecard. | Brand approval, blueprint choice, selected script, estimate/reservation/provider/ledger, AE plan, final hash, review, calendar, external ID, public URL, verification, lineage manifest and founder-reviewed scorecard. |
+| `V0-A3` | The reference real-estate journey needs manual database edits, hidden retries, V1/V2 calls or has evidence gaps. | Execute the full production-shaped journey through the generated `/api/v0` client with V1/V2 absent, approved providers/simulators as allowed, retaining stable IDs, content hashes, integer-minor cost and the deterministic technical scorecard. | Brand approval, blueprint choice, selected script, estimate/reservation/provider/ledger, AE plan, final hash, review, calendar, external ID, public URL, verification, lineage manifest and deterministic technical scorecard. Founder-reviewed pilot scorecard and screenshots are post-A3 human / V0-G8 acceptance gates, not A3 closure evidence (per `docs/V0/V0.md`). |
 
 ## 13. Slice Dependency Graph
 

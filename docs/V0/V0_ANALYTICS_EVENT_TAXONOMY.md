@@ -118,6 +118,38 @@ generation estimate; it is retained as a durable `avatar.selected` audit row (ta
 `AvatarProfile`) at estimate creation, so selection is lineage rather than local UI state.
 A revoked, expired, missing-evidence or service-pending avatar emits no event and writes
 no audit.
+
+V0-A2 consent revocation emits `avatar_consent_revoked` (web surface) and retains a
+durable `consent.revoked` audit row (target type `AvatarProfile`) stamped with the actor
+(`revokedByUserId`) and a bounded `reason`. Revocation is monotonic and idempotent: the
+first call writes the one audit row; a repeat call against an already-revoked avatar
+returns the same state and writes no second audit row. No consent evidence reference,
+consent URL or reason beyond the bounded field appears in the event or audit row. A
+missing, non-owned or cross-workspace avatar is hidden behind `WORKSPACE_ACCESS_DENIED`
+and writes no audit.
+
+V0-A2 credential rotation emits `service_credential_rotated` (web surface) and retains a
+durable `service_credential.rotated` audit row (target type `ServiceCredential`, target
+id = the prior credential id) stamped with the actor (`updatedByUserId`) and a bounded
+`reason`. The new `secret-manager://` reference and the prior `secretRef` never appear in
+the event or audit row; only the credential ids, rotation statuses and `lastRotatedAt`
+are surfaced. A missing or non-owned credential is hidden behind
+`WORKSPACE_ACCESS_DENIED` and writes no audit.
+
+V0-A2 hardening drills retain three new durable audit rows against the deterministic
+simulators. The B2 transfer benchmark retains a `benchmark.b2_recorded` audit row (target
+type `Workspace`) stamped with the actor and a bounded `reason`; the row records that an
+Owner/Admin ran the India-to-B2 benchmark, never the simulated latency, cost or seed (those
+live only in the API response). The load-shaped backlog simulation retains a
+`backlog.simulation_recorded` audit row (target type `Workspace`) stamped with the actor and
+a bounded `reason`; it records that the two-hour backlog drill ran, never the curve points
+or invariants. The incident/runbook rehearsal retains an `incident.rehearsal_recorded` audit
+row (target type `IncidentRehearsal`, target id = the run id) stamped with the actor and a
+bounded `reason`; it records which owner-pinned scenario was rehearsed and its `forward` or
+`rollback` recovery type, never the recovery step script or recovered entity ids. The
+operational alerts endpoint is read-only and writes no audit row. A non-simulator provider
+mode refuses with a 503 `*_UNAVAILABLE` problem and writes no audit; a missing, non-owned or
+cross-workspace target is hidden behind `WORKSPACE_ACCESS_DENIED` and writes no audit.
 | `credit_purchase_started` | API | `provider`, `currency`, `amount_bucket` |
 | `credit_purchase_completed` | API | `provider`, `result`, `amount_bucket`, `error_code` |
 | `credit_adjustment_recorded` | API | `direction=debit\|credit`, `reason_bucket` |
@@ -184,19 +216,166 @@ No event contains exact wallet balance or exact payment/provider identifiers.
 | `composition_plan_submitted` | API | `input_mode`, `capability_version` |
 | `composition_plan_validated` | API | `result`, `unsupported_count_bucket`, `error_code` |
 | `final_video_rendered` | API | `duration_bucket`, `render_duration_bucket`, `revision_number` |
+| `final_video_revision_superseded` | API | `revision_number`, `prior_revision_number` |
 | `review_opened` | web | `review_stage`, `reviewer_role` |
 | `review_comment_added` | API | `timestamped`, `reviewer_role` |
 | `review_decision_recorded` | API | `decision`, `reviewer_role`, `revision_number` |
+
+V0-C2 emits `final_video_rendered` as a durable `composition.render_succeeded` audit row
+(target type `CompositionInstruction`) when a validated plan renders through the
+deterministic AE worker and a new `current` `FinalVideo` is retained, carrying
+`duration_bucket`, `render_duration_bucket` and `revision_number`, never the golden output
+hash, signed URL, render log payload, provider payload or exact render cost. A new revision
+emits `final_video_revision_superseded` as a durable `composition.video_superseded` audit
+row (target type `CompositionInstruction`) when the prior `current` `FinalVideo` is set to
+`superseded` without being overwritten, carrying `revision_number` and
+`prior_revision_number`. The retained `RenderAttempt` (with `render_started` audit),
+`FinalVideo` and four CLEAN artifacts (final-video, final-thumbnail, final-captions,
+render-logs) are records of truth, not analytics events. A `AE_PLAN_SCHEMA_INVALID`,
+`AE_CAPABILITY_UNAVAILABLE`, `AE_RENDER_FAILED` or cross-workspace render emits no
+`final_video_rendered` event; a failed render is retained as a `composition.render_failed`
+audit row carrying `error_code`, never the failing payload. A worker crash leaves the
+attempt `running` and emits no terminal event until a same-idempotency-key resume completes;
+`unknown` is preserved for an uncertain worker outcome. A replayed idempotent render
+acknowledges the original render and emits no second event.
+
+V0-R1 emits `review_opened` (web) when a comment-capable role opens a review item bound to one
+exact final-video version, and `review_comment_added` (API) for each timestamped append-only
+comment, carrying `review_stage`, `reviewer_role` and a `timestamped` flag. The durable records
+of truth are the `review.created` audit row (target type `ReviewItem`, emitted at open) and one
+`review.comment_added` audit row per comment, never the notification payload. Repeated comment
+activity on one review item collapses to one logical `Notification` (unique by workspace + payload
+hash); the collapse is reported per-request as a `duplicateCollapsed` flag, not as a separate
+analytics event, and a key-bound idempotent replay acknowledges the original comment and emits no
+second event. A comment against a superseded bound version returns `REVIEW_VERSION_STALE`, archives
+the review item, emits no `review_comment_added` event and preserves prior comments. The recipient
+user id, notification payload hash, object key, signed URL and any secret never appear in an
+analytics event or audit row; the final-video sha256 is a public content fingerprint.
+
+V0-R2 emits `review_decision_recorded` (API) when Owner, Admin or Client Manager records one
+terminal `ReviewDecision` bound to the exact final-video version captured at open time, carrying
+`decision` (`approve`/`reject`/`request_changes`), `reviewer_role` and `revision_number`. The
+durable record of truth is the `review.decision_recorded` audit row (target type `ReviewItem`),
+retained once per review item. Decision idempotency is key-bound: a same-key replay acknowledges
+the original decision and emits no second event, and a same-key+different-input attempt returns
+`IDEMPOTENCY_INPUT_CONFLICT` and emits no event. A second fresh-key decision on the same review
+item returns `REVIEW_DECISION_ALREADY_RECORDED` and emits no event; one terminal decision exists
+per review item. A decision whose `expectedFinalVideoVersion` does not match the captured
+`finalVideoVersion`, or whose bound final video has been superseded, returns `REVIEW_VERSION_STALE`,
+archives the review item idempotently, emits no `review_decision_recorded` event and records no
+decision. Only `approve` mints a deterministic approval token surfaced as the `approvalReference`
+for downstream scheduling; `reject` and `request_changes` mint no token. The approval token is a
+public deterministic reference, never a signed URL or provider payload. The decided-by user id and
+the approval token object key never appear in an analytics event or audit row as copyable leaks.
 
 ## 12. Publishing Events
 
 | Event | Trigger | Properties |
 |---|---|---|
 | `calendar_post_created` | API | `platform`, `schedule_lead_bucket`, `manual_export` |
+| `calendar_post_updated` | API | `platform`, `manual_export`, `changed_fields` |
 | `publish_submitted` | API | `platform`, `account_confirmed`, `manual_export` |
 | `publish_state_changed` | API | `platform`, `from_status`, `to_status`, `error_code` |
 | `audience_verification_completed` | API | `platform`, `result`, `attempt_bucket`, `propagation_delay_bucket` |
 | `completion_notification_sent` | API | `channel`, `notification_type` |
+| `performance_observation_collected` | API | `platform`, `source`, `observation`, `metric_count_bucket` |
+| `creative_lineage_exported` | API | `status`, `entry_count_bucket`, `has_cost` |
+
+V0-U1 emits `calendar_post_created` (API) when Owner, Admin or Client Manager creates one
+`CalendarPost` bound to one approved exact final-video version, carrying `platform`,
+`schedule_lead_bucket` and `manual_export`. The durable record of truth is the
+`calendar.post_created` audit row (target type `CalendarPost`, reason `scheduled` or
+`manual_export`), retained once per post. Create idempotency is key-bound: a same-key replay
+acknowledges the original post and emits no second event, and a same-key+different-input attempt
+returns `IDEMPOTENCY_INPUT_CONFLICT` and emits no event. A superseded bound version returns
+`PUBLISH_MEDIA_STALE`, a missing approval returns `REVIEW_APPROVAL_REQUIRED`, and a past, malformed,
+offset-less or conflicting schedule returns `PUBLISH_SCHEDULE_INVALID`; each rejected path emits no
+event and records no post. The bound final-video sha256 and the approval token are public
+references; the export artifact object key and the created-by user id never appear in an analytics
+event or audit row as copyable leaks.
+
+V0-U1 emits `calendar_post_updated` (API) when Owner, Admin or Client Manager edits an existing
+pre-submit `CalendarPost` via `PATCH /calendar-posts/{id}`, carrying `platform`, `manual_export`
+and `changed_fields` (a comma-joined list of the changed fields, or `no_change` for an idempotent
+no-op edit). The durable record of truth is the `calendar.post_updated` audit row (target type
+`CalendarPost`, reason the same changed-field list or `no_change`), retained once per successful
+edit; the post's `version` is incremented. A locked post returns `PUBLISH_POST_LOCKED`, a stale
+`expectedVersion` returns `RESOURCE_VERSION_STALE`, a superseded bound version returns
+`PUBLISH_MEDIA_STALE`, and an invalid or conflicting merged schedule returns `PUBLISH_SCHEDULE_INVALID`;
+each rejected path emits no event and records no edit. Edit idempotency is key-bound exactly as
+create: a same-key replay acknowledges the original edit and emits no second event, and a
+same-key+different-input attempt returns `IDEMPOTENCY_INPUT_CONFLICT` and emits no event. No
+secret, signed URL, object key or raw provider payload appears in the event or audit row.
+
+V0-U2 emits `publish_state_changed` (API) when Owner, Admin or Client Manager publishes an approved
+scheduled calendar post to the provider bound to its platform (`meta` or `youtube-shorts`) and the
+operation advances to `accepted`, carrying `platform`, `from_status`, `to_status` and `error_code`.
+V0-U3 reuses the same event for the YouTube Shorts route, including the `processing` advance when a
+YouTube upload is accepted but still being processed. The durable record of truth is the
+`publish.state_changed` audit row (target type `CalendarPost`, reason `accepted`), retained once per
+accepted publish. The durable `PublishOperation` is persisted `SUBMITTING` before the provider
+network I/O so a crash leaves a resumable operation, never a blind duplicate; a same-key replay
+acknowledges the existing operation and emits no second event. A wrong-account publish returns
+`PUBLISH_ACCOUNT_MISMATCH`, a manual-export publish returns `PUBLISH_NOT_SUBMITTABLE`, an
+unsupported platform returns `PUBLISH_PLATFORM_UNSUPPORTED`, and a malformed provider response
+returns `PROVIDER_OUTPUT_INVALID`; each rejected path emits no event and records no operation. An
+exhausted platform upload quota (`PUBLISH_QUOTA_EXHAUSTED`) is a pre-flight refusal: it emits no
+event, writes no operation, and carries only the `retryAfterMs`. A timeout after possible acceptance
+is `unknown`, emits no `publish_state_changed` to a terminal state, and is reconciled before any
+retry (the `reconciledAt` timestamp records reconciliation, not a separate event). The request hash,
+the external provider account id, the signed callback signature and the raw provider payload never
+appear in an analytics event or audit row; the public post URL is the only URL surfaced and only once
+the post is live.
+
+V0-U4 emits `audience_verification_completed` (API) when an authorised Owner, Admin or Client Manager
+independently verifies the audience-facing live post and the observation is `verified`, carrying
+`platform`, `result`, `attempt_bucket` and `propagation_delay_bucket`. The durable record of truth
+is the `calendar.verification_completed` audit row (target type `CalendarPost`, reason `verified`),
+retained once per post; a same-post replay acknowledges the existing `PostVerification` and emits no
+second event. A `processing_wait` observation emits no `audience_verification_completed` event (the
+post is not yet verified) and writes no audit row; an `identity_mismatch` or `visibility_restricted`
+observation emits no completion event and retains the `calendar.verification_failed` audit row
+(reason `identity_mismatch` or `visibility_restricted`) instead. The raw observed account, observed
+media sha256, observed caption, observed published at, propagation delay, evidence object key and
+verifier provider payload never appear in the analytics event or audit row; the audience-evidence
+sha256 is a public content fingerprint and is retained on the immutable evidence `Artifact`, not in
+the analytics event.
+
+V0-U4 emits `completion_notification_sent` (API) when the one logical `publish_completed` `in_app`
+notification is sent to the production user who created the calendar post, carrying `channel` and
+`notification_type`. Exactly one logical notification per `(workspaceId, payloadHash)` is sent: a
+second verify of the same post collapses into the existing notification (`duplicateCollapsed: true`)
+and emits no second `completion_notification_sent` event. `identity_mismatch`, `visibility_restricted`
+and `VERIFY_MANUAL_URL_REQUIRED` paths send no notification and emit no event. The recipient user id
+and the notification payload hash are storage secrets and never appear in the analytics event; the
+event carries only the channel and notification type. V0-U4 also anchors an initial immutable
+`PerformanceSnapshot` (source `audience_verification_initial`, empty metrics, zero-width window) at
+the verified instant; V0-A1 owns the `performance_collect` job that later populates the metrics
+object as fresh immutable rows.
+
+V0-A1 emits `performance_observation_collected` (API) when an authorised Owner, Admin or Client
+Manager collects a fresh observed `PerformanceSnapshot` for one `CalendarPost` via
+`POST /calendar-posts/{id}/performance-collect`, carrying `platform`, `source`
+(`performance_collect_simulator`), `observation` (`simulated`) and a coarse `metric_count_bucket`
+over the observed metrics (views, likes, comments, shares, saves). Collect idempotency is
+key-bound: a same-key replay returns the same snapshot with `replay: true` and emits no second
+event; a same-key+different-input attempt returns `IDEMPOTENCY_INPUT_CONFLICT` and emits no event.
+A not-yet-`published_verified` post returns `PERFORMANCE_NOT_OBSERVABLE` and emits no event; a
+`processing_wait` observation returns `PERFORMANCE_PROCESSING_WAIT` (202) and emits no event. The
+observed metric values, the snapshot id, the source hash and any platform account id never appear in
+the analytics event; only the coarse bucket and the source/observation labels are carried. The
+metrics are observations of past platform state only, never a prediction, forecast or promise of
+reach, virality, conversion or causal performance.
+
+V0-A1 emits `creative_lineage_exported` (API) when an authorised Owner, Admin or Client Manager
+exports the complete creative ancestry of one final video via `GET /lineage/{finalVideoId}`,
+carrying `status` (`complete`/`incomplete`/`blocked`/`unknown`), an `entry_count_bucket` over the
+bounded entry list and a boolean `has_cost`. A cross-workspace or missing final video returns
+`WORKSPACE_ACCESS_DENIED` (404) and emits no event. The manifest sha256, the individual ancestry
+ids, the cost minor-unit totals, the provider timestamps, the object keys and any raw provider
+payload never appear in the analytics event; only the status, the coarse entry-count bucket and the
+cost-presence flag are carried. The export is a record of what was produced, not a prediction of
+reach, virality, conversion or causal performance.
 
 ## 13. Pilot Metrics
 

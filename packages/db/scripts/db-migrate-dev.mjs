@@ -98,6 +98,51 @@ const migrations = [
     path: "packages/db/prisma/migrations/0023_v0_g5_retained_generated_media_and_settled_credits/migration.sql",
     sentinel:
       "SELECT to_regclass('public.generated_segments') IS NOT NULL AND to_regclass('public.generated_assets') IS NOT NULL AND to_regclass('public.creative_lineage') IS NOT NULL"
+  },
+  {
+    path: "packages/db/prisma/migrations/0024_v0_c1_validated_composition_intent_and_ae_plan/migration.sql",
+    sentinel:
+      "SELECT to_regclass('public.composition_instructions') IS NOT NULL AND to_regclass('public.ae_plans') IS NOT NULL AND to_regtype('public.composition_status') IS NOT NULL"
+  },
+  {
+    path: "packages/db/prisma/migrations/0025_v0_c2_reproducible_final_branded_render/migration.sql",
+    sentinel:
+      "SELECT to_regclass('public.render_attempts') IS NOT NULL AND to_regclass('public.final_videos') IS NOT NULL AND to_regtype('public.render_attempt_status') IS NOT NULL AND to_regtype('public.final_video_status') IS NOT NULL"
+  },
+  {
+    path: "packages/db/prisma/migrations/0026_v0_c2_render_level_lineage_and_input_bound_idempotency/migration.sql",
+    sentinel:
+      "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'creative_lineage' AND column_name = 'final_video_id') AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'render_attempts' AND column_name = 'idempotency_input_hash')"
+  },
+  {
+    path: "packages/db/prisma/migrations/0027_v0_r1_exact_version_review_and_comments/migration.sql",
+    sentinel:
+      "SELECT to_regclass('public.review_items') IS NOT NULL AND to_regclass('public.review_comments') IS NOT NULL AND to_regclass('public.notifications') IS NOT NULL AND to_regtype('public.review_item_status') IS NOT NULL AND to_regtype('public.notification_status') IS NOT NULL"
+  },
+  {
+    path: "packages/db/prisma/migrations/0028_v0_r2_auditable_approval_bound_to_final_media/migration.sql",
+    sentinel:
+      "SELECT to_regclass('public.review_decisions') IS NOT NULL AND to_regtype('public.approval_decision') IS NOT NULL"
+  },
+  {
+    path: "packages/db/prisma/migrations/0029_v0_u1_approved_calendar_and_manual_export_fallback/migration.sql",
+    sentinel:
+      "SELECT to_regclass('public.calendar_posts') IS NOT NULL AND to_regtype('public.publish_status') IS NOT NULL"
+  },
+  {
+    path: "packages/db/prisma/migrations/0030_v0_u2_idempotent_meta_publication/migration.sql",
+    sentinel:
+      "SELECT to_regclass('public.publish_operations') IS NOT NULL AND to_regtype('public.publish_operation_status') IS NOT NULL"
+  },
+  {
+    path: "packages/db/prisma/migrations/0031_v0_r2_nullable_approval_token_only_on_approve/migration.sql",
+    sentinel:
+      "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'review_decisions' AND column_name = 'approval_token' AND is_nullable = 'YES')"
+  },
+  {
+    path: "packages/db/prisma/migrations/0032_v0_u4_audience_facing_verification_and_one_completion_notification/migration.sql",
+    sentinel:
+      "SELECT to_regclass('public.post_verifications') IS NOT NULL AND to_regclass('public.performance_snapshots') IS NOT NULL AND to_regtype('public.verification_status') IS NOT NULL AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'notifications' AND column_name = 'calendar_post_id')"
   }
 ];
 
@@ -116,7 +161,7 @@ const databaseUrl = process.env.DIRECT_DATABASE_URL || process.env.DATABASE_URL;
 
 if (!databaseUrl) {
   console.log(
-    "V0-F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1/G2/G3/G4/G5 db:migrate:dev dry-run: DIRECT_DATABASE_URL and DATABASE_URL are not set; migration SQL validated but not applied."
+    "V0-F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1/G2/G3/G4/G5/C1/C2/U4 db:migrate:dev dry-run: DIRECT_DATABASE_URL and DATABASE_URL are not set; migration SQL validated but not applied."
   );
   process.exit(0);
 }
@@ -151,7 +196,7 @@ for (const migration of migrations) {
   }
 }
 
-console.log("V0-F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1/G2/G3/G4/G5 migrations applied.");
+console.log("V0-F1/F2/F3/F4/F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1/G2/G3/G4/G5/C1/C2/R1/R2/U1/U2/U4 migrations applied.");
 
 function isMigrationApplied(psqlCommand, databaseUrl, sentinel) {
   const result = spawnSync(psqlCommand, [databaseUrl, "-t", "-A", "-v", "ON_ERROR_STOP=1", "-c", sentinel], {
