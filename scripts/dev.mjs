@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 
 const services = [
   ["api", "node", ["apps/api/src/server.mjs"], { PORT: "3001" }],
-  ["web", "node", ["apps/web/src/server.mjs"], { PORT: "3000" }],
+  ["web", "pnpm", ["--filter", "@sakhaa-forge/web", "dev"], { PORT: "3000" }],
   ["queue", "node", ["workers/queue/src/processor.mjs"], {}]
 ];
 

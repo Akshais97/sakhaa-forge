@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "dev:web": "node apps/web/src/server.mjs",
+    "dev:web": "pnpm --filter @sakhaa-forge/web dev",
     "dev:api": "node apps/api/src/server.mjs",
     "dev:queue": "node workers/queue/src/processor.mjs",
     "services:up": "node scripts/services.mjs up",
