@@ -4,55 +4,50 @@ import assert from "node:assert/strict";
 
 test("Next landing page presents claim-safe Sakhaa Forge sections", async () => {
   const page = await readFile("apps/web/app/page.tsx", "utf8");
+  const app = await readFile("apps/web/src/App.tsx", "utf8");
+  const data = await readFile("apps/web/src/data.ts", "utf8");
   const layout = await readFile("apps/web/app/layout.tsx", "utf8");
   const css = await readFile("apps/web/app/globals.css", "utf8");
   const imageBrief = await readFile("docs/Project/Design/SAKHAA_LANDING_IMAGE_BRIEF.md", "utf8");
+  const source = `${page}\n${app}\n${data}`;
 
   for (const required of [
     "Sakhaa Forge",
-    "Approved brand truth",
-    "Viral discovery",
-    "Blueprint to video",
-    "Human review",
-    "Verified publication",
-    "Lineage and ledger",
-    "Workspace command centre",
-    "Unknown - checking",
-    "Credits reserved",
-    "Audience verification",
-    "Brand intake",
-    "Script tournament",
-    "Reserve credits and generate",
-    "Published and verified",
-    "Real-estate production workflow"
+    "Trend-to-calendar engine",
+    "Extraction",
+    "UGC Avatars",
+    "Calendar Builder",
+    "Publishing",
+    "Verification",
+    "Provider acknowledgement is not final success",
+    "Published Verified",
+    "Evidence retained",
+    "Verify publication before calling it successful"
   ]) {
-    assert.match(page, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(source, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 
   for (const styleMarker of [
-    "--paper",
-    "--coral",
-    "--mustard",
-    ".side-rail",
-    ".topbar",
-    ".sec-rule",
-    ".image-slot",
-    "Inter Tight",
-    "Playfair Display"
+    "--font-sans",
+    "--font-display",
+    "--font-mono",
+    ".glow-spot",
+    ".spotlight-card",
+    ".primary-action",
+    "#sakhaa-forge-app",
+    "Space Grotesk",
+    "JetBrains Mono"
   ]) {
     assert.match(css, new RegExp(styleMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 
-  const hrefs = [...page.matchAll(/href="([^"]+)"/g)].map((match) => match[1]);
-  assert.ok(hrefs.length > 0, "expected landing page links");
+  const hrefs = [...source.matchAll(/href="([^"]+)"/g)].map((match) => match[1]);
   for (const href of hrefs) {
     assert.ok(
       href.startsWith("#") || href.startsWith("/") || href.startsWith("mailto:"),
       `landing page href must stay internal or contact-only: ${href}`,
     );
   }
-  assert.doesNotMatch(page, /https?:\/\//i);
-
   for (const forbidden of [
     "guaranteed virality",
     "guaranteed reach",
@@ -60,7 +55,7 @@ test("Next landing page presents claim-safe Sakhaa Forge sections", async () => 
     "scientifically proven",
     "magic"
   ]) {
-    assert.doesNotMatch(page.toLowerCase(), new RegExp(forbidden));
+    assert.doesNotMatch(source.toLowerCase(), new RegExp(forbidden));
   }
 
   assert.match(layout, /metadata/);

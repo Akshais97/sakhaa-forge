@@ -1,14 +1,17 @@
 import type { Metadata } from "next";
-import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Sakhaa Forge | Evidence-first video creation",
+  title: "Sakhaa Forge",
   description:
-    "Sakhaa Forge helps India-first real-estate teams move from approved brand truth to verified publication with retained evidence, cost records and lineage.",
+    "A V0 production workflow for brand intake, creative generation, approval, publishing and verification.",
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
     <html lang="en-IN">
       <body>{children}</body>

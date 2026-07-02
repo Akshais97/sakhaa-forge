@@ -1,0 +1,6 @@
+{
+  "name": "Sakhaa Forge",
+  "description": "The premium video production command centre for high-end social creatives, turning brand truth into verified publication.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

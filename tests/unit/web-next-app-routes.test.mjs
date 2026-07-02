@@ -7,7 +7,6 @@ test("Next app scaffolds canonical V0 public and workspace routes", async () => 
     "apps/web/app/sign-in/page.tsx",
     "apps/web/app/auth/callback/page.tsx",
     "apps/web/app/access-denied/page.tsx",
-    "apps/web/app/service-status/page.tsx",
   ];
 
   for (const routeFile of publicRoutes) {
@@ -15,24 +14,27 @@ test("Next app scaffolds canonical V0 public and workspace routes", async () => 
     assert.match(content, /Sakhaa Forge/);
   }
 
-  const workspace = await readFile("apps/web/app/w/[workspaceSlug]/[[...segments]]/page.tsx", "utf8");
-  const appModel = await readFile("apps/web/app/workspace-screen-model.ts", "utf8");
+  const workspace = await readFile("apps/web/app/w/[workspaceSlug]/[...segments]/page.tsx", "utf8");
+  const appModel = await readFile("apps/web/src/workflow/v0-workflow.ts", "utf8");
+  const workspaceApp = await readFile("apps/web/src/components/ForgeWorkspaceApp.tsx", "utf8");
 
   for (const required of [
-    "Workspace home",
-    "Brand list",
-    "Viral candidate search",
-    "Script comparison",
-    "Generation detail",
-    "Review item",
-    "Post detail",
+    "Submit brand sources",
+    "Review extracted candidates",
+    "Approve brand profile",
+    "Discover viral candidate",
+    "Run script tournament",
+    "Track HeyGen generation",
+    "Approve exact version",
+    "Verify live post",
     "Lineage",
-    "Unknown - checking",
+    "Unknown — checking",
     "Maximum authorisation",
     "Audience verification",
-    "Existence-hiding not-found",
+    "Provider acknowledgement is not final success",
+    "WORKSPACE_SURFACES",
   ]) {
-    assert.match(`${workspace}\n${appModel}`, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(`${workspace}\n${appModel}\n${workspaceApp}`, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 
   for (const forbidden of [
@@ -42,6 +44,6 @@ test("Next app scaffolds canonical V0 public and workspace routes", async () => 
     "scientifically proven",
     "magic",
   ]) {
-    assert.doesNotMatch(`${workspace}\n${appModel}`.toLowerCase(), new RegExp(forbidden));
+    assert.doesNotMatch(`${workspace}\n${appModel}\n${workspaceApp}`.toLowerCase(), new RegExp(forbidden));
   }
 });

@@ -2054,7 +2054,7 @@ function patchRoute(path, target, methodName, params = [], statusCode = null) {
   );
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const port = Number.parseInt(process.env.PORT || "3001", 10);
   const app = await createApiServer(process.env);
   await app.listen(port, "0.0.0.0");
