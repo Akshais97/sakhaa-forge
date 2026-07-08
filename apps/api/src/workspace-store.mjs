@@ -150,6 +150,8 @@ export function createWorkspaceStore(env = process.env) {
   const brandAssets = new Map();
   const brandCandidates = new Map();
   const brandProfiles = new Map();
+  const userProfiles = new Map();
+  const brandContexts = new Map();
   const brandApprovals = new Map();
   const brandRules = new Map();
   const generationEstimates = new Map();
@@ -499,6 +501,10 @@ export function createWorkspaceStore(env = process.env) {
       status: "QUEUED",
       rightsAcknowledged: true,
       crawlScope: validation.crawlScope,
+      selectedBrandType: validation.selectedBrandType,
+      detectedBrandType: null,
+      extractionSchemaVersion: null,
+      providerCreditTelemetry: null,
       robotsPolicy: { status: "pending" },
       createdAt: now,
       updatedAt: now
@@ -524,6 +530,7 @@ export function createWorkspaceStore(env = process.env) {
       inputHash: hashRequest({
         normalizedUrl: crawlRun.normalizedUrl,
         crawlScope: crawlRun.crawlScope,
+        selectedBrandType: validation.selectedBrandType,
         brandAssetIds: retainedAssets.map((asset) => asset.id)
       }),
       input: {
@@ -532,6 +539,7 @@ export function createWorkspaceStore(env = process.env) {
         brandCrawlRunId: crawlRun.id,
         normalizedUrl: crawlRun.normalizedUrl,
         crawlScope: crawlRun.crawlScope,
+        selectedBrandType: validation.selectedBrandType,
         brandAssetIds: retainedAssets.map((asset) => asset.id)
       },
       maxAttempts: 5,
@@ -681,6 +689,110 @@ export function createWorkspaceStore(env = process.env) {
           .map(publicBrandCandidate)
       }
     };
+  }
+
+  function getBrandCrawlRun(actor, crawlRunId) {
+    const crawlRun = brandCrawlRuns.get(crawlRunId);
+    if (!crawlRun || !getWorkspaceForActor(actor, crawlRun.workspaceId)) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    return {
+      ok: true,
+      response: {
+        crawlRun: publicBrandCrawlRun(crawlRun),
+        brandAssets: [...brandAssets.values()].filter((asset) => asset.crawlRunId === crawlRun.id).map(publicBrandAsset),
+        candidates: [...brandCandidates.values()].filter((candidate) => candidate.crawlRunId === crawlRun.id).map(publicBrandCandidate)
+      }
+    };
+  }
+
+  function getBrandAssetPack(actor, crawlRunId) {
+    const detail = getBrandCrawlRun(actor, crawlRunId);
+    if (!detail.ok) return detail;
+    const candidates = detail.response.candidates;
+    const byGroup = (types) => candidates.filter((candidate) => types.includes(candidate.fieldType));
+    return {
+      ok: true,
+      response: {
+        crawlRun: detail.response.crawlRun,
+        assetPack: {
+          identity: byGroup(["identity", "summary", "color", "font", "logo", "media_asset"]),
+          messaging: byGroup(["copy_messaging", "usp", "cta", "audience", "tone", "positioning"]),
+          offers: byGroup(["offer", "pricing", "product", "service"]),
+          trustProof: byGroup(["social_proof", "testimonial", "rating", "certification", "award", "case_study", "metric"]),
+          vertical: byGroup(["vertical_conflict", "product_service", "claim", "metadata"]),
+          mediaInventory: byGroup(["visual_identity", "color", "font", "logo", "media_asset"]),
+          voice: byGroup(["voice", "tone", "audience"]),
+          publishingSocial: byGroup(["publishing_social"]),
+          complianceRights: byGroup(["prohibited_claim", "regulated_claim", "rights_warning", "disclaimer", "rights_asset"]),
+          missingAssets: byGroup(["missing_asset"]),
+          readiness: {
+            score: candidates.length > 0 ? 60 : 0,
+            status: candidates.length > 0 ? "approval_required" : "missing_assets"
+          }
+        }
+      }
+    };
+  }
+
+  function getUserProfile(actor) {
+    return { ok: true, response: { profile: publicUserProfile(userProfiles.get(actor.userId) ?? defaultUserProfile(actor)) } };
+  }
+
+  function updateUserProfile(actor, input) {
+    const now = new Date().toISOString();
+    const existing = userProfiles.get(actor.userId) ?? defaultUserProfile(actor, now);
+    const profile = {
+      ...existing,
+      name: optionalString(input.name),
+      contactEmail: optionalString(input.contactEmail) ?? actor.email ?? null,
+      websiteUrl: optionalString(input.websiteUrl),
+      industry: optionalString(input.industry),
+      primaryMarket: optionalString(input.primaryMarket),
+      language: optionalString(input.language) ?? "en-IN",
+      onboardingSkipped: Boolean(input.onboardingSkipped),
+      updatedAt: now
+    };
+    userProfiles.set(actor.userId, profile);
+    return { ok: true, response: { profile: publicUserProfile(profile) } };
+  }
+
+  function getOnboardingBrandContext(actor, input) {
+    if (!getWorkspaceForActor(actor, input.workspaceId)) {
+      return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
+    }
+    return { ok: true, response: { brandContext: publicBrandContext(brandContexts.get(`${input.workspaceId}:${actor.userId}`) ?? null) } };
+  }
+
+  function saveOnboardingBrandContext(actor, input) {
+    if (!getWorkspaceForActor(actor, input.workspaceId)) {
+      return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
+    }
+    if (typeof input.brandName !== "string" || input.brandName.trim().length === 0) {
+      return { ok: false, problem: problem("VALIDATION_FAILED", 422, "Validation failed", "Check the highlighted fields.") };
+    }
+    const now = new Date().toISOString();
+    const id = `${input.workspaceId}:${actor.userId}`;
+    const existing = brandContexts.get(id);
+    const brandContext = {
+      id: existing?.id ?? randomUUID(),
+      workspaceId: input.workspaceId,
+      userId: actor.userId,
+      brandName: input.brandName.trim(),
+      websiteUrl: optionalString(input.websiteUrl),
+      industry: optionalString(input.industry),
+      videoGoal: optionalString(input.videoGoal),
+      primaryMarket: optionalString(input.primaryMarket) ?? "India",
+      language: optionalString(input.language) ?? "en-IN",
+      targetPlatforms: Array.isArray(input.targetPlatforms) ? input.targetPlatforms.filter((value) => typeof value === "string") : [],
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    };
+    brandContexts.set(id, brandContext);
+    return { ok: true, response: { brandContext: publicBrandContext(brandContext) } };
   }
 
   function approveBrandProfile(actor, brandId, input) {
@@ -6492,7 +6604,7 @@ export function createWorkspaceStore(env = process.env) {
   }
 
   function completeBrandCrawlJob(job, leased, input) {
-    if (input.workspaceId !== job.workspaceId || input.schemaVersion !== "brand.extraction.output.v1") {
+    if (input.workspaceId !== job.workspaceId || !isValidBrandExtractionOutput(input)) {
       return { ok: false, problem: problem("PROVIDER_OUTPUT_INVALID", 422, "Provider output invalid", "The generated media failed validation and was not accepted.") };
     }
     const crawlRun = brandCrawlRuns.get(job.input.brandCrawlRunId);
@@ -6502,7 +6614,13 @@ export function createWorkspaceStore(env = process.env) {
     const extracted = buildBrandExtractionCandidates({
       crawlRunId: crawlRun.id,
       workspaceId: job.workspaceId,
-      scrape: input.scrape
+      scrape: normalizeBrandExtractionScrape(input),
+      schemaVersion: input.schemaVersion,
+      universal: input.universal,
+      vertical: input.vertical,
+      assets: input.assets,
+      selectedBrandType: crawlRun.selectedBrandType ?? job.input.selectedBrandType ?? null,
+      detectedBrandType: input.vertical?.detectedBrandType ?? null
     });
     if (!extracted.ok) {
       appendJobEvent(jobEvents, job, "brand.extraction.rejected", { reason: extracted.reason, requestId: job.input.requestId, traceId: job.input.traceId });
@@ -6524,6 +6642,16 @@ export function createWorkspaceStore(env = process.env) {
     job.status = "SUCCEEDED";
     job.updatedAt = now;
     crawlRun.status = "SUCCEEDED";
+    crawlRun.selectedBrandType = input.vertical?.selectedBrandType ?? crawlRun.selectedBrandType ?? job.input.selectedBrandType ?? null;
+    crawlRun.detectedBrandType = input.vertical?.detectedBrandType ?? crawlRun.detectedBrandType ?? null;
+    crawlRun.extractionSchemaVersion = input.schemaVersion;
+    crawlRun.providerCreditTelemetry = normalizeProviderCreditTelemetry(input.creditUsage);
+    crawlRun.crawlScope = enrichCrawlScopeWithBrandMetadata(crawlRun.crawlScope, {
+      selectedBrandType: crawlRun.selectedBrandType,
+      detectedBrandType: crawlRun.detectedBrandType,
+      extractionSchemaVersion: crawlRun.extractionSchemaVersion,
+      providerCreditTelemetry: crawlRun.providerCreditTelemetry
+    });
     crawlRun.updatedAt = now;
     if (extracted.promptInputIsolated) {
       appendJobEvent(jobEvents, job, "brand.extraction.prompt_input_isolated", { requestId: job.input.requestId, traceId: job.input.traceId });
@@ -7200,6 +7328,12 @@ export function createWorkspaceStore(env = process.env) {
     completeArtifactUpload,
     createArtifactDownload,
     createBrandCrawlRun,
+    getBrandCrawlRun,
+    getBrandAssetPack,
+    getUserProfile,
+    updateUserProfile,
+    getOnboardingBrandContext,
+    saveOnboardingBrandContext,
     approveBrandProfile,
     createGenerationEstimate,
     confirmGenerationEstimate,
@@ -7653,6 +7787,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
             inputHash: hashRequest({
               normalizedUrl: crawlRun.normalizedUrl,
               crawlScope: crawlRun.crawlScope,
+              selectedBrandType: validation.selectedBrandType,
               brandAssetIds: retainedAssets.map((asset) => asset.id)
             }),
             input: {
@@ -7661,6 +7796,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
               brandCrawlRunId: crawlRun.id,
               normalizedUrl: crawlRun.normalizedUrl,
               crawlScope: crawlRun.crawlScope,
+              selectedBrandType: validation.selectedBrandType,
               brandAssetIds: retainedAssets.map((asset) => asset.id)
             },
             maxAttempts: 5
@@ -11940,7 +12076,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
   }
 
   async function completeBrandCrawlJob(tx, job, attempt, input) {
-    if (input.workspaceId !== job.workspaceId || input.schemaVersion !== "brand.extraction.output.v1") {
+    if (input.workspaceId !== job.workspaceId || !isValidBrandExtractionOutput(input)) {
       return { ok: false, problem: problem("PROVIDER_OUTPUT_INVALID", 422, "Provider output invalid", "The generated media failed validation and was not accepted.") };
     }
     const crawlRun = await tx.brandCrawlRun.findFirst({ where: { id: job.input.brandCrawlRunId, workspaceId: job.workspaceId } });
@@ -11950,7 +12086,13 @@ export function createPrismaWorkspaceStore(env = process.env) {
     const extracted = buildBrandExtractionCandidates({
       crawlRunId: crawlRun.id,
       workspaceId: job.workspaceId,
-      scrape: input.scrape
+      scrape: normalizeBrandExtractionScrape(input),
+      schemaVersion: input.schemaVersion,
+      universal: input.universal,
+      vertical: input.vertical,
+      assets: input.assets,
+      selectedBrandType: brandCrawlRunMetadata(crawlRun).selectedBrandType ?? job.input.selectedBrandType ?? null,
+      detectedBrandType: input.vertical?.detectedBrandType ?? null
     });
     if (!extracted.ok) {
       await tx.jobEvent.create({
@@ -11993,7 +12135,15 @@ export function createPrismaWorkspaceStore(env = process.env) {
     });
     await tx.brandCrawlRun.update({
       where: { id: crawlRun.id },
-      data: { status: "SUCCEEDED" }
+      data: {
+        status: "SUCCEEDED",
+        crawlScope: enrichCrawlScopeWithBrandMetadata(crawlRun.crawlScope, {
+          selectedBrandType: input.vertical?.selectedBrandType ?? brandCrawlRunMetadata(crawlRun).selectedBrandType ?? job.input.selectedBrandType ?? null,
+          detectedBrandType: input.vertical?.detectedBrandType ?? null,
+          extractionSchemaVersion: input.schemaVersion,
+          providerCreditTelemetry: normalizeProviderCreditTelemetry(input.creditUsage)
+        })
+      }
     });
     const events = [
       ...(extracted.promptInputIsolated
@@ -15459,6 +15609,25 @@ const supportedWorkspaceCapabilities = new Set(["media_processing"]);
 const supportedCredentialRotationStatuses = new Set(["ACTIVE", "ROTATION_DUE", "REVOKED"]);
 const supportedSimulatorBoundaries = new Set(["provider", "payment", "publishing", "worker"]);
 const supportedSimulatorModes = new Set(["success", "timeout", "duplicate", "malformed", "bad_signature"]);
+const supportedBrandTypes = new Set([
+  "d2c_ecommerce",
+  "b2b_saas",
+  "real_estate",
+  "healthcare",
+  "education",
+  "financial_services",
+  "restaurant_fb",
+  "fitness_wellness",
+  "automotive",
+  "legal_professional",
+  "travel_hospitality",
+  "home_services"
+]);
+const supportedBrandExtractionSchemas = new Set([
+  "brand.extraction.output.v1",
+  "brand.extraction.output.v2",
+  "brand.extraction.output.v3"
+]);
 const brandRuleTypes = new Set([
   "required_phrase",
   "prohibited_phrase",
@@ -15594,6 +15763,10 @@ async function validateBrandCrawlRunInput(input, findArtifact) {
   if (crawlScope.problem) {
     return crawlScope;
   }
+  const selectedBrandType = normalizeBrandType(input.brandType);
+  if (selectedBrandType.problem) {
+    return selectedBrandType;
+  }
   const assets = Array.isArray(input.assets) ? input.assets : [];
   const validatedAssets = [];
   for (const asset of assets) {
@@ -15622,7 +15795,24 @@ async function validateBrandCrawlRunInput(input, findArtifact) {
     }
     validatedAssets.push(asset);
   }
-  return { normalizedUrl: normalized.normalizedUrl, crawlScope: crawlScope.crawlScope, assets: validatedAssets };
+  return {
+    normalizedUrl: normalized.normalizedUrl,
+    crawlScope: enrichCrawlScopeWithBrandMetadata(crawlScope.crawlScope, {
+      selectedBrandType: selectedBrandType.brandType
+    }),
+    selectedBrandType: selectedBrandType.brandType,
+    assets: validatedAssets
+  };
+}
+
+function normalizeBrandType(value) {
+  if (value === undefined || value === null || value === "") {
+    return { brandType: null };
+  }
+  if (typeof value !== "string" || !supportedBrandTypes.has(value.trim())) {
+    return { problem: problem("VALIDATION_FAILED", 422, "Validation failed", "Check the highlighted fields.") };
+  }
+  return { brandType: value.trim() };
 }
 
 function normalizeCrawlScope(scope) {
@@ -15728,6 +15918,7 @@ function publicArtifact(artifact) {
 }
 
 function publicBrandCrawlRun(crawlRun) {
+  const brandMetadata = brandCrawlRunMetadata(crawlRun);
   return {
     id: crawlRun.id,
     workspaceId: crawlRun.workspaceId,
@@ -15736,11 +15927,94 @@ function publicBrandCrawlRun(crawlRun) {
     status: crawlRun.status,
     rightsAcknowledged: crawlRun.rightsAcknowledged,
     crawlScope: crawlRun.crawlScope,
+    selectedBrandType: brandMetadata.selectedBrandType,
+    detectedBrandType: brandMetadata.detectedBrandType,
+    extractionSchemaVersion: brandMetadata.extractionSchemaVersion,
+    providerCreditTelemetry: brandMetadata.providerCreditTelemetry,
     robotsPolicy: crawlRun.robotsPolicy ?? null,
     jobId: crawlRun.jobId ?? null,
     createdAt: toIso(crawlRun.createdAt),
     updatedAt: toIso(crawlRun.updatedAt)
   };
+}
+
+function brandCrawlRunMetadata(crawlRun) {
+  const scope = crawlRun?.crawlScope && typeof crawlRun.crawlScope === "object" ? crawlRun.crawlScope : {};
+  const metadata = scope.brandExtraction && typeof scope.brandExtraction === "object" ? scope.brandExtraction : {};
+  return {
+    selectedBrandType: crawlRun.selectedBrandType ?? metadata.selectedBrandType ?? null,
+    detectedBrandType: crawlRun.detectedBrandType ?? metadata.detectedBrandType ?? null,
+    extractionSchemaVersion: crawlRun.extractionSchemaVersion ?? metadata.extractionSchemaVersion ?? null,
+    providerCreditTelemetry: crawlRun.providerCreditTelemetry ?? metadata.providerCreditTelemetry ?? null
+  };
+}
+
+function enrichCrawlScopeWithBrandMetadata(crawlScope, metadata) {
+  const current = crawlScope && typeof crawlScope === "object" ? crawlScope : {};
+  const currentMetadata = current.brandExtraction && typeof current.brandExtraction === "object" ? current.brandExtraction : {};
+  const nextMetadata = { ...currentMetadata };
+  for (const [key, value] of Object.entries(metadata)) {
+    if (value !== undefined) {
+      nextMetadata[key] = value;
+    }
+  }
+  return { ...current, brandExtraction: nextMetadata };
+}
+
+function normalizeProviderCreditTelemetry(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const telemetry = {};
+  if (Number.isFinite(value.estimatedCredits)) {
+    telemetry.estimatedCredits = value.estimatedCredits;
+  }
+  if (Number.isFinite(value.observedCredits)) {
+    telemetry.observedCredits = value.observedCredits;
+  }
+  return Object.keys(telemetry).length > 0 ? telemetry : null;
+}
+
+function normalizeBrandExtractionScrape(input) {
+  if (input.scrape) {
+    return input.scrape;
+  }
+  return { pages: Array.isArray(input.pages) ? input.pages : [] };
+}
+
+function isValidBrandExtractionOutput(input) {
+  if (!supportedBrandExtractionSchemas.has(input.schemaVersion)) {
+    return false;
+  }
+  if (input.schemaVersion !== "brand.extraction.output.v3") {
+    return Boolean(input.scrape);
+  }
+  const provider = input.provider ?? "simulator";
+  const universalProfile = input.universal?.profile;
+  const verticalAssets = input.vertical?.assets;
+  return (
+    ["firecrawl", "simulator"].includes(provider) &&
+    input.universal?.sourceGuide === "docs/V0/Features/Firecrawl/brand-crawl-universal.md" &&
+    input.vertical?.sourceGuide === "docs/V0/Features/Firecrawl/brand-crawl-verticals.md" &&
+    universalProfile &&
+    typeof universalProfile === "object" &&
+    universalProfile.visual_identity &&
+    universalProfile.copy_messaging &&
+    universalProfile.social_proof &&
+    universalProfile.brand_personality &&
+    universalProfile.metadata &&
+    universalProfile.raw_pages &&
+    verticalAssets &&
+    typeof verticalAssets === "object" &&
+    typeof verticalAssets.detected_vertical === "string" &&
+    typeof verticalAssets.vertical_label === "string" &&
+    Array.isArray(verticalAssets.products_or_services) &&
+    verticalAssets.visual_assets &&
+    verticalAssets.copy_assets &&
+    verticalAssets.raw_vertical_data &&
+    Array.isArray(input.pages) &&
+    input.pages.length > 0
+  );
 }
 
 function publicBrandAsset(asset) {
@@ -15773,6 +16047,59 @@ function publicBrandCandidate(candidate) {
     createdAt: toIso(candidate.createdAt),
     updatedAt: toIso(candidate.updatedAt)
   };
+}
+
+function optionalString(value) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function defaultUserProfile(actor, now = new Date().toISOString()) {
+  return {
+    id: actor.userId,
+    userId: actor.userId,
+    name: null,
+    contactEmail: actor.email ?? null,
+    websiteUrl: null,
+    industry: null,
+    primaryMarket: "India",
+    language: "en-IN",
+    onboardingSkipped: false,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function publicUserProfile(profile) {
+  return profile ? {
+    id: profile.id,
+    userId: profile.userId,
+    name: profile.name,
+    contactEmail: profile.contactEmail,
+    websiteUrl: profile.websiteUrl,
+    industry: profile.industry,
+    primaryMarket: profile.primaryMarket,
+    language: profile.language,
+    onboardingSkipped: profile.onboardingSkipped,
+    createdAt: toIso(profile.createdAt),
+    updatedAt: toIso(profile.updatedAt)
+  } : null;
+}
+
+function publicBrandContext(context) {
+  return context ? {
+    id: context.id,
+    workspaceId: context.workspaceId,
+    userId: context.userId,
+    brandName: context.brandName,
+    websiteUrl: context.websiteUrl,
+    industry: context.industry,
+    videoGoal: context.videoGoal,
+    primaryMarket: context.primaryMarket,
+    language: context.language,
+    targetPlatforms: context.targetPlatforms,
+    createdAt: toIso(context.createdAt),
+    updatedAt: toIso(context.updatedAt)
+  } : null;
 }
 
 function publicBrandProfile(profile) {

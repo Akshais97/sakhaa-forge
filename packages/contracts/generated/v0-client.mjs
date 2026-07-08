@@ -49,8 +49,34 @@ export class V0Client {
     return this.#post("/brands/crawl-runs", input, options);
   }
 
+  async getBrandCrawlRun(crawlRunId) {
+    return this.#get(`/brands/crawl-runs/${encodeURIComponent(crawlRunId)}`);
+  }
+
+  async getBrandAssetPack(crawlRunId) {
+    return this.#get(`/brands/crawl-runs/${encodeURIComponent(crawlRunId)}/asset-pack`);
+  }
+
   async listBrandCandidates(crawlRunId) {
     return this.#get(`/brands/crawl-runs/${encodeURIComponent(crawlRunId)}/candidates`);
+  }
+
+  async getUserProfile() {
+    return this.#get("/users/me/profile");
+  }
+
+  async updateUserProfile(input) {
+    return this.#patch("/users/me/profile", input);
+  }
+
+  async getOnboardingBrandContext(input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    return this.#get(`/onboarding/brand-context?${params.toString()}`);
+  }
+
+  async saveOnboardingBrandContext(input) {
+    return this.#post("/onboarding/brand-context", input);
   }
 
   async approveBrandProfile(brandId, input) {

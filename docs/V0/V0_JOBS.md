@@ -44,12 +44,24 @@ PostgreSQL owns jobs, attempts, dependencies and leases. BullMQ carries opaque w
 Outbox relay may fail while Redis is unavailable; that failure does not change canonical
 job state. The same pending outbox row must relay later without duplicating completion.
 
-`brand_crawl` receives deterministic Firecrawl-like scrape output at worker completion.
-The worker payload must include page source text and any available branding facts needed
-for later script generation: summary material, USPs, CTAs, target audiences, prohibited
-claim language, colors, fonts and logo candidates. The API stores only evidence-backed
-`BrandCandidate` rows. Empty, refused, prompt-injected-without-isolation, malformed or
-evidence-free output is rejected and cannot become approved brand truth.
+`brand_crawl` receives deterministic Firecrawl-like scrape output at worker completion in
+simulator mode, or Firecrawl provider output normalised by the server-side adapter into
+`brand.extraction.output.v3` in provider mode. The job runs the fixed universal pass from
+`Features/Firecrawl/brand-crawl-universal.md` first, then exactly one vertical pass from
+`Features/Firecrawl/brand-crawl-verticals.md` using either the user-selected brand type or
+the detected `schema_org_type` / `vertical_signals`. The worker payload must include page
+source text and any available branding facts needed for later script generation: summary
+material, USPs, CTAs, target audiences, prohibited claim language, positive claim
+evidence, social proof, voice signals, product/service or project details, colors, fonts,
+logo candidates, selected/detected brand type and retained asset references. The Firecrawl
+adapter uses bounded crawl scope, `allowExternalLinks:false`, `allowSubdomains:false`,
+`ignoreRobotsTxt:false` and the formats specified by the Firecrawl feature guides. The API
+stores only evidence-backed `BrandCandidate` rows and private artifacts. Empty, refused,
+prompt-injected-without-isolation, malformed or evidence-free output is rejected and
+cannot become approved brand truth. A selected/detected brand-type mismatch is retained as
+conflict evidence. Raw provider payloads, Firecrawl API keys, object keys, signed URLs,
+provider crawl IDs that grant access and prompt material never become job events or
+browser responses.
 
 `media_acquire` receives only authorised candidate source references and rights decision
 metadata. It may retain a private analysis copy only when the recorded rights decision

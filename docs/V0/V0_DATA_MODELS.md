@@ -9,6 +9,10 @@ implementation mapping is `V0_PRISMA_SCHEMA.md`. Product V2's separate model rem
 ## Identity and Tenancy
 
 - `User`: Supabase Auth subject and profile.
+- `UserProfile`: optional per-user display and default brand-context fields used by the
+  onboarding/profile screens. It stores name, contact email, website URL, industry,
+  primary market, language and whether onboarding was skipped; it is user-isolated and
+  never contains provider credentials.
 - `Workspace`: client/brand tenant and policy boundary.
 - `Membership`: user role and status within a workspace.
 - `ServiceCredential`: encrypted metadata for provider credentials; secrets stay in a
@@ -21,6 +25,11 @@ implementation mapping is `V0_PRISMA_SCHEMA.md`. Product V2's separate model rem
 - `WorkspaceCapability`: workspace-scoped capability switch for unfinished or temporarily
   disabled V0 behaviours. Owner/Admin updates are audited; disabled capabilities do not
   create new downstream job state.
+- `BrandContext`: optional workspace-scoped branding context captured during onboarding
+  for one user: brand name, website URL, industry, video goal, primary market, language
+  and target platforms. A skipped or absent context means extraction uses universal asset
+  groups only; selected industry context can request an overlay but never approves brand
+  truth.
 
 ## Brand Intelligence
 
@@ -28,10 +37,15 @@ implementation mapping is `V0_PRISMA_SCHEMA.md`. Product V2's separate model rem
   version is allowed per workspace/brand; corrections create a later version and
   supersede the previous active one for new production use.
 - `BrandCrawlRun`: crawl request, normalized public URL, scope, status,
-  rights acknowledgement, robots/policy result and queued crawl job reference.
+  rights acknowledgement, robots/policy result, optional selected brand type, detected
+  brand type, extraction schema version, Firecrawl credit telemetry, queued crawl job
+  reference and nullable private artifact references for crawl plan, universal output,
+  vertical output, page inventory, asset pack, media inventory and readiness report
+  evidence.
 - `BrandCandidate`: extracted logo, color, font, summary, USP, CTA, audience,
-  prohibited-claim or document fact with confidence, extraction state and source
-  evidence. Candidates remain unapproved until B3.
+  product/service/project, social proof, voice, positive claim, prohibited-claim,
+  publishing/social, retained-asset or selected/detected vertical-conflict fact with
+  confidence, extraction state and source evidence. Candidates remain unapproved until B3.
 - `BrandAsset`: uploaded or approved media linked to a clean `Artifact` with retained
   rights basis, permitted use and usage status.
 - `BrandApproval`: append-only actor decision that activates, rejects or requests changes

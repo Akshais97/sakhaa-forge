@@ -1,280 +1,286 @@
 # V0 Firecrawl Brand Asset Acquisition Plan
 
-**Status:** Implementation planning note for V0-B1 and V0-B2  
+**Status:** Implementation planning note for V0-B1, V0-B2 and the backend-only
+Firecrawl revamp sprint  
 **Scope:** Product V0 only  
-**Primary flow:** Company URL -> safe crawl -> Firecrawl-backed extraction -> evidence-backed candidates -> human approval  
-**Do not treat this document as approval to use extracted assets in production.** The canonical approval contract remains `docs/V0/V0_BRAND_PROFILE_CONTRACT.md`.
+**Primary flow:** Company URL -> safe crawl -> fixed universal Firecrawl pass ->
+selected or detected vertical pass -> evidence-backed candidates -> human approval  
+**Do not treat this document as approval to use extracted assets in production.** The
+canonical approval contract remains `docs/V0/V0_BRAND_PROFILE_CONTRACT.md`.
 
-## 1. Source Documents And Code Read
+## 1. Source Documents And Authority
 
+Authoritative V0 and project sources:
+
+- `docs/V0/V0.md`
+- `docs/V0/V0_PRODUCT_SPECIFICATION.md`
 - `docs/V0/V0_VERTICAL_OUTCOME_SLICES.md`
 - `docs/V0/V0_API.md`
 - `docs/V0/V0_DATA_MODELS.md`
+- `docs/V0/V0_PRISMA_SCHEMA.md`
+- `docs/V0/V0_JOBS.md`
+- `docs/V0/V0_STATUS_ENUMS.md`
 - `docs/V0/V0_ERROR_CATALOG.md`
 - `docs/V0/V0_BRAND_PROFILE_CONTRACT.md`
 - `docs/V0/V0_CUSTOMER_BRAND_INTAKE_TEMPLATE.md`
-- `apps/api/src/workspace-store.mjs`
-- `apps/api/src/brand-extraction.mjs`
-- `packages/db/prisma/schema.prisma`
-- Firecrawl v2 scrape, crawl, crawl-status and batch-scrape documentation, checked July 2, 2026.
+- `docs/Project/Guardrails/PROJECT_GUARDRAILS.md`
+- `docs/Project/Guardrails/PROJECT_DEVELOPMENT_WORKFLOW.md`
+- `docs/Project/DESIGN.md`
+- `docs/Project/Design/PROJECT_CONTENT_AND_LANGUAGE_GUIDE.md`
+- `docs/Project/Operations/PROJECT_CONFIGURATION_CATALOG.md`
+- `docs/Project/Governance/karpathy_SKILL.md`
+
+Firecrawl feature sources:
+
+- `docs/V0/Features/Firecrawl/brand-crawl-universal.md`
+- `docs/V0/Features/Firecrawl/brand-crawl-verticals.md`
+
+`brand-crawl-universal.md` is fixed for this feature. V0 implementation consumes it as
+the universal crawl contract and may wrap, validate, normalise and redact its output, but
+must not rewrite it as part of the backend sprint.
 
 ## 2. First-Principles Workflow
 
-The first brand workflow is not a long brand questionnaire. The initial customer-facing input is the company URL.
+The brand workflow starts from a permitted company URL and optional approved files. The
+system's job is to collect evidence-backed brand candidates and retained asset references,
+not to approve brand truth.
 
-The API also requires `rightsAcknowledged: true` before creating the crawl run. That should be presented as a crawl permission and source-use attestation after URL entry and scope preview, not as a brand-data field. The user is not manually filling brand identity, tone, colours, projects or claims at this step.
-
-The system action is:
+The crawl engine runs in this order:
 
 1. Normalize and validate the public website URL.
 2. Block private, local, metadata and unsafe targets.
-3. Record crawl scope, robots/policy result and rights acknowledgement.
-4. Create `BrandCrawlRun`, associated clean `BrandAsset` rows when approved files exist, a `brand_crawl` `Job`, and outbox wake-up evidence.
-5. Let the worker/provider boundary call Firecrawl.
-6. Translate Firecrawl output into `brand.extraction.output.v1`.
-7. Complete the job through the authenticated worker API.
-8. Persist `BrandCandidate` rows with field type, value, confidence, extraction state, source evidence and source fingerprint.
+3. Record crawl scope, robots/policy result, source-use attestation and optional requested
+   brand type.
+4. Create `BrandCrawlRun`, associated clean `BrandAsset` rows when approved files exist,
+   a `brand_crawl` `Job`, and outbox wake-up evidence.
+5. Run the fixed universal Firecrawl pass from `brand-crawl-universal.md`.
+6. Derive `schema_org_type`, `vertical_signals`, universal assets, source evidence and
+   Firecrawl credit telemetry from the universal pass.
+7. Resolve vertical routing:
+   - if the user selected a brand type, run that vertical pass after universal evidence is
+     retained;
+   - if no type was selected, use universal `schema_org_type` and `vertical_signals`;
+   - if selected and detected types disagree, retain both and surface a conflict candidate
+     for review instead of silently overriding either value.
+8. Run only the matching section from `brand-crawl-verticals.md`.
+9. Download, quarantine, validate and promote eligible crawled images and screenshots to
+   retained `Artifact`/`BrandAsset` records when rights and policy permit retention.
+10. Normalise universal plus vertical output into `brand.extraction.output.v3`.
+11. Persist `BrandCandidate` rows with field type, value, confidence, extraction state,
+    source evidence, source fingerprint and any conflict marker.
+12. Keep all extracted values as candidates until V0-B3 human approval creates an immutable
+    approved `BrandProfile` version.
 
-## 3. Firecrawl Capabilities Relevant To V0
+## 3. Brand Type Selection Contract
 
-Firecrawl v2 supports:
+The intake UI may let the user select one brand type before crawl execution. Backend truth
+must still run the universal pass first.
 
-- `POST /v2/crawl` for multi-page crawling from a base URL.
-- Crawl scoping through `includePaths`, `excludePaths`, `maxDiscoveryDepth`, `limit`, `crawlEntireDomain`, `allowExternalLinks`, `allowSubdomains`, `sitemap`, `ignoreQueryParameters`, `delay` and `maxConcurrency`.
-- `GET /v2/crawl/{id}` for status, totals, completed page count, credits used, timestamps, pagination and page data.
-- Scrape formats including `markdown`, `summary`, `html`, `rawHtml`, `links`, `images`, `screenshot`, `json`, `branding`, `product`, `audio`, `video`, `question` and `highlights`.
-- Page options including `onlyMainContent`, `onlyCleanContent`, `includeTags`, `excludeTags`, `waitFor`, `mobile`, `timeout`, `parsers: ["pdf"]`, `location`, `removeBase64Images`, `blockAds`, `proxy`, `storeInCache`, `lockdown`, `redactPII` and `zeroDataRetention`.
-- Branding extraction for logo, colour palette, typography, spacing, component styles and visual personality.
+Allowed V0 brand types map to the vertical groups in
+`brand-crawl-verticals.md`:
 
-Firecrawl provider details must stay behind the adapter. Browser UI should show crawl status, page count, evidence, confidence, warnings and next action, not raw Firecrawl request bodies, API keys, provider payloads or cache internals.
-
-## 4. Recommended Firecrawl Request Shape For V0-B1/B2
-
-Use `POST /v2/crawl` for the crawl run, not one unbounded scrape.
-
-```json
-{
-  "url": "<normalized company URL>",
-  "includePaths": ["^/$", "^/about", "^/projects", "^/properties", "^/contact", "^/brochure", "^/rera", "^/legal"],
-  "excludePaths": ["^/blog/.*", "^/careers/.*", "^/privacy.*", "^/terms.*"],
-  "maxDiscoveryDepth": 1,
-  "sitemap": "include",
-  "ignoreQueryParameters": true,
-  "limit": 5,
-  "crawlEntireDomain": true,
-  "allowExternalLinks": false,
-  "allowSubdomains": false,
-  "ignoreRobotsTxt": false,
-  "delay": 1,
-  "maxConcurrency": 1,
-  "scrapeOptions": {
-    "formats": ["markdown", "links", "images", "screenshot", "branding"],
-    "onlyMainContent": true,
-    "onlyCleanContent": false,
-    "waitFor": 1000,
-    "mobile": false,
-    "timeout": 60000,
-    "parsers": ["pdf"],
-    "location": { "country": "IN", "languages": ["en-IN"] },
-    "removeBase64Images": true,
-    "blockAds": true,
-    "proxy": "auto",
-    "storeInCache": false,
-    "redactPII": true
-  },
-  "zeroDataRetention": false
-}
-```
-
-Implementation notes:
-
-- `limit` must be derived from `BrandCrawlRun.crawlScope.maxPages` and capped by current code at `50`, with V0 UI defaulting to `5`.
-- `includePaths` must be generated from `crawlScope.permittedPathPrefixes`. Do not let Firecrawl natural-language `prompt` decide crawl scope for production.
-- `allowExternalLinks` should remain `false` for B1. External social/publishing links can be retained as outbound references, not crawled as brand truth.
-- `allowSubdomains` should remain `false` until the intake contract explicitly records permitted subdomains.
-- `ignoreRobotsTxt` must remain `false`.
-- `storeInCache: false` and `redactPII: true` fit V0's privacy posture better than Firecrawl defaults. If `zeroDataRetention` is available for the account, prefer it for customer crawls, but do not rely on it as the only privacy control.
-- Use Firecrawl status fields for progress display and internal job events, but map terminal failures to V0 errors such as `CRAWL_TIMEOUT`, `CRAWL_POLICY_BLOCKED`, `DEPENDENCY_UNAVAILABLE` or `PROVIDER_OUTPUT_INVALID` according to cause.
-
-## 5. Brand Assets And Evidence To Acquire
-
-### 5.1 Crawl And Page Evidence
-
-Acquire these as source evidence:
-
-| Asset/evidence | Firecrawl source | V0 use | User-visible? | Retention note |
-|---|---|---|---|---|
-| Canonical page URL | `metadata.sourceURL` / `metadata.url` | Evidence locator and source fingerprint | Yes | Store hash/locator in `sourceEvidence` |
-| Page title | `metadata.title` | Evidence context | Yes | Safe to show |
-| Page description | `metadata.description` | Summary, positioning and SEO clue | Yes | Candidate evidence only |
-| Language | `metadata.language` | Voice/language candidate | Yes | Candidate evidence only |
-| HTTP status | `metadata.statusCode` | Crawl diagnostics | Yes, summarized | Do not expose provider internals |
-| Markdown body | `markdown` | Text extraction source | Excerpts only | Retain private artifact or hashed excerpt |
-| Links | `links` | Discover brochures, contact pages, RERA/legal pages, CTAs | Yes, selected links | Do not crawl external links by default |
-| Screenshot | `screenshot` | Visual evidence for logo/colour/layout candidates | Preview only if retained as safe artifact | Treat as private evidence |
-| Page errors | `metadata.error` | Failure state and retry/recovery | Sanitized | Map to stable V0 error |
-| Credits used and timing | crawl status | Operations/cost telemetry | Summary only | Provider cost is operational, not brand truth |
-
-### 5.2 Visual Identity Assets
-
-Acquire these as candidates, never approved truth:
-
-| Candidate | Firecrawl source | V0 `fieldType` | Approval requirement |
-|---|---|---|---|
-| Primary logo URL or embedded logo | `branding.logo`, `branding.images.logo`, `images` | `logo` | Reviewer approves logo or explicit no-logo decision |
-| Favicon/icon mark | `branding.images.favicon`, page metadata/images | `logo` or future `icon` | Reviewer approves role and usage |
-| Primary/secondary/accent colours | `branding.colors` | `color` | Reviewer approves role and prohibited contexts |
-| Background/text/link colours | `branding.colors` | `color` | Reviewer approves if usable in generated creative |
-| Font families | `branding.typography.fontFamilies` | `font` | Reviewer approves source/licence/fallback |
-| Font sizes/weights | `branding.typography.fontSizes`, `fontWeights` | `font` or future typography rule | Candidate only unless approval schema expands |
-| Spacing and radius | `branding.spacing`, `branding.components` | `visual_rule` future field or source summary | Do not force into current `BrandCandidate` unless field type is accepted |
-| Button/component styles | `branding.components` | Source summary or future rule candidate | Candidate only |
-| Imagery style | screenshots/images | `imagery` future field or source summary | Needs reviewer judgement and rights basis |
-
-Current `apps/api/src/brand-extraction.mjs` supports only `color`, `font` and `logo` visual candidate field types. Spacing, component style and imagery should be retained as source summary evidence or added through an explicit contract update before UI depends on them.
-
-### 5.3 Brand Text And Positioning Assets
-
-Acquire these from page markdown and metadata:
-
-| Candidate | Extraction source | V0 `fieldType` | Notes |
-|---|---|---|---|
-| Brand summary | First useful page sentence / structured JSON if added | `summary` | Existing extractor supports this |
-| Positioning statement | Homepage/about/project pages | `summary` now; future `positioning` preferred | Required for approval, but current extractor does not produce a dedicated type |
-| Differentiators/USPs | Copy containing proof/difference statements | `usp` | Existing extractor supports `USPs:` and selected patterns |
-| Voice/tone attributes | Copy style, summary, examples | future `tone` or `voice` | Required for approval; needs explicit extractor addition |
-| Calls to action | Buttons/link text: site visit, enquiry, brochure, callback | `cta` | Existing extractor supports common real-estate CTAs |
-| Audience terms | Copy naming home buyers, urban professionals, families, investors | `audience` | Existing extractor supports limited patterns and branding target audience |
-| Products/projects | Project/property pages and brochure titles | future `product` | Required for approval; needs explicit extractor addition |
-| Offers | Offer/price/availability copy | future `offer` | Must carry dates/disclaimers where found |
-| Publishing/social accounts | Header/footer/social links | future `publishing` | Credentials/tokens are never collected |
-
-### 5.4 Real-Estate Claim Evidence
-
-Acquire these as high-risk claim candidates with source evidence:
-
-| Claim class | Examples to detect | Approval treatment |
+| Brand type key | Vertical group | Label |
 |---|---|---|
-| Regulatory registration | RERA IDs, registration copy links, legal pages | Cannot be used without evidence and disclaimer review |
-| Completion/possession | Ready-to-move, completion date, possession date | Evidence expiry/date required |
-| Price/payment | Starting price, EMI, discounts, booking amount | Time-bound; needs disclaimer and expiry |
-| Distance/travel time | Metro distance, airport minutes, school/hospital proximity | Needs source and wording lock |
-| Availability/inventory | Units available, limited stock | Time-bound; likely expires quickly |
-| Amenities | Clubhouse, pool, parking, security, green space | Evidence from project page/brochure |
-| Awards/certifications | Best developer, green certification | Evidence required |
-| Return/appreciation | Assured returns, guaranteed appreciation | Prohibited unless contract changes; current extractor flags prohibited phrases |
+| `d2c_ecommerce` | `G6` | D2C / ecommerce |
+| `b2b_saas` | `G7` | B2B SaaS |
+| `real_estate` | `G8` | Real estate |
+| `healthcare` | `G9` | Healthcare |
+| `education` | `G10` | Education |
+| `financial_services` | `G11` | Financial services |
+| `restaurant_fb` | `G12` | Restaurant / F&B |
+| `fitness_wellness` | `G13` | Fitness / wellness |
+| `automotive` | `G14` | Automotive |
+| `legal_professional` | `G15` | Legal / professional services |
+| `travel_hospitality` | `G16` | Travel / hospitality |
+| `home_services` | `G17` | Home services / interior design |
 
-Current extractor supports only `prohibited_claim` for phrases like guaranteed appreciation and assured returns. It does not yet create positive `claim` candidates for RERA, distance, price, completion or amenities. Implementing Firecrawl without extending this would scrape useful evidence but not expose all required approval candidates.
+The selected type changes the vertical pass and candidate grouping, not the approval gate.
+Universal extraction is always present. For V0 acceptance, `real_estate` remains the
+reference path and must retain RERA, possession, price, location, project and amenity
+evidence when present.
 
-### 5.5 Downloadable Public Documents
+## 4. Firecrawl Provider Boundary
 
-Firecrawl can parse PDFs when `parsers: ["pdf"]` is enabled. From a company URL, the worker should discover and classify links to:
+Firecrawl is a provider adapter, not browser logic.
 
-- brochures;
-- fact sheets;
-- RERA/legal documents;
-- floor plan PDFs;
-- price sheets;
-- approved ad PDFs;
-- brand guideline PDFs, if public.
+- Browser code never calls Firecrawl and never receives `FIRECRAWL_API_KEY`.
+- Provider SDK/client code lives behind the crawl adapter used by the NestJS queue
+  processor or a private worker boundary.
+- The API key comes from server-side configuration or credential metadata only.
+- Raw Firecrawl payloads, provider request IDs that grant access, raw HTML, prompt
+  material, object keys and signed URLs never appear in browser responses, analytics,
+  job events or retained public artifacts.
+- Provider output is normalised into versioned V0 contracts before the domain layer
+  persists candidates.
+- Deterministic simulator fixtures remain the default for local, test and CI.
 
-Retention rule:
+## 5. Universal Pass
 
-- Text extracted from public PDFs can become candidate evidence when crawl permission allows downloadable documents.
-- The binary PDF should be retained as a private `Artifact` only if the crawl policy and rights acknowledgement allow it.
-- Parsed PDF evidence must preserve page number or locator where available.
+The universal pass uses `docs/V0/Features/Firecrawl/brand-crawl-universal.md` without
+modification. It produces the canonical universal asset structure:
 
-## 6. Adapter Translation Contract
+- `visual_identity`: logos, favicon, OG image, colour palette, typography, screenshots and
+  downloaded image references.
+- `copy_messaging`: brand name, tagline, meta description, hero copy, CTAs, pain points,
+  audience and guarantee language.
+- `social_proof`: testimonials, ratings, case studies, stats, client names, video
+  testimonials and trust badges.
+- `brand_personality`: mission, origin, values, founders, community language, awards,
+  certifications, vocabulary and tone signals.
+- `metadata`: schema type, vertical signals, locations, language, FAQ and objection data.
+- `raw_pages`: retained markdown evidence for approved pages.
 
-Firecrawl output should be normalized into the existing worker completion input:
+The V0 adapter may adapt location to India-first defaults where legally and technically
+supported, but must preserve the fixed universal extraction fields and prompts as the
+source guide defines them.
+
+## 6. Vertical Pass
+
+After universal extraction, run exactly one matching vertical section from
+`brand-crawl-verticals.md`. The result appends a `vertical_assets` block to the universal
+profile shape and is then normalised into V0 candidate and asset records.
+
+Second-order frontend implication: the brand review screen should group candidates by
+universal sections first, then show the selected/detected vertical group. Users should be
+able to see why the system chose a vertical, whether the user-selected type disagreed with
+detection, which pages were skipped, and which required approval fields remain unresolved.
+
+## 7. Artifact And Asset Retention
+
+Firecrawl-discovered assets are useful later for scripts, composition, thumbnails, review
+and final media, but they remain unapproved until B3.
+
+Retention rules:
+
+- Crawled images and screenshots enter quarantine before becoming `CLEAN`.
+- Retained public assets create private `Artifact` rows with workspace ownership, hash,
+  content type, producer, retention class and source evidence.
+- Eligible brand images create `BrandAsset` candidates linked to the crawl run.
+- Provider URLs are transient locators, not production asset sources.
+- PDF/brochure binaries are retained only when the crawl permission and rights
+  acknowledgement allow downloadable document collection.
+- Every retained asset has a rights basis and permitted use; missing rights keeps the
+  asset as source evidence only.
+
+## 8. Normalised Output Contract
+
+The backend revamp should introduce `brand.extraction.output.v3` for Firecrawl universal
+plus vertical output. V2 remains accepted only for existing deterministic fixtures until
+the migration is complete.
+
+Minimum shape:
 
 ```json
 {
-  "workspaceId": "<workspace id>",
-  "leaseToken": "<worker lease token>",
-  "schemaVersion": "brand.extraction.output.v1",
-  "scrape": {
-    "pages": [
-      {
-        "url": "https://example.com/",
-        "title": "Example",
-        "markdown": "...",
-        "text": "...",
-        "branding": {
-          "colors": {
-            "primary": "#173B57"
-          },
-          "typography": {
-            "fontFamilies": {
-              "heading": "Manrope"
-            }
-          },
-          "images": {
-            "logo": "https://example.com/logo.svg",
-            "logoAlt": "Example"
-          },
-          "personality": {
-            "targetAudience": "urban professionals and families"
-          }
-        }
-      }
-    ]
+  "schemaVersion": "brand.extraction.output.v3",
+  "provider": "firecrawl|simulator",
+  "crawlRunId": "uuid",
+  "universal": {
+    "sourceGuide": "docs/V0/Features/Firecrawl/brand-crawl-universal.md",
+    "profile": {}
+  },
+  "vertical": {
+    "sourceGuide": "docs/V0/Features/Firecrawl/brand-crawl-verticals.md",
+    "selectedBrandType": "real_estate",
+    "detectedBrandType": "real_estate",
+    "conflict": false,
+    "assets": {}
+  },
+  "pages": [],
+  "assets": [],
+  "creditUsage": {
+    "estimatedCredits": 64,
+    "observedCredits": null
   }
 }
 ```
 
 The adapter must:
 
-- map Firecrawl `metadata.sourceURL` or `metadata.url` to `page.url`;
-- map `metadata.title` to `page.title`;
-- map `markdown` to `page.markdown` and optionally `page.text`;
-- map Firecrawl branding fields into the shape already expected by `extractVisualCandidates`;
-- preserve per-page observed time;
-- hash excerpts and locators through the existing candidate builder;
-- reject empty, refused, malformed or evidence-free output with `PROVIDER_OUTPUT_INVALID`;
-- avoid returning raw HTML, raw provider payloads, API keys, object keys, signed URLs or Firecrawl request IDs to the browser.
+- map universal and vertical fields into existing or newly documented `BrandCandidate`
+  field types;
+- retain source locators, observed timestamps and excerpt hashes;
+- reject empty, refused, malformed, schema-invalid or evidence-free output with
+  `PROVIDER_OUTPUT_INVALID`;
+- map provider timeout to `CRAWL_TIMEOUT` or `DEPENDENCY_UNAVAILABLE` according to cause;
+- record skipped pages and 404 fallbacks as crawl evidence, not extraction success;
+- store Firecrawl credit usage as operational telemetry and cost evidence, not approved
+  brand truth.
 
-## 7. UI Implications For The First Step
+## 9. Candidate Field Expansion
 
-The first implemented screen should show:
+The current V0 candidate contract covers the core fields but must be extended for the
+new crawl detail. Required backend candidate groups:
 
-- Company URL input.
-- URL validation and normalized URL preview.
-- Crawl scope preview: allowed root, page cap, included paths, excluded paths, subdomain/external-link policy.
-- Source-use attestation required before starting crawl.
-- Optional attached files only if uploaded through the existing artifact upload flow and carrying rights basis/permitted use.
-- Start crawl CTA.
-- After start: durable crawl run ID, status, queued job, page count progress, completed pages, failed/skipped pages, policy warnings, retry/recovery action.
+| Candidate group | Examples |
+|---|---|
+| `identity` | brand name, legal name, schema.org type, market |
+| `visual_identity` | logo, favicon, OG image, colours, typography, screenshots |
+| `copy_messaging` | tagline, hero copy, CTAs, pain points, guarantee language |
+| `social_proof` | testimonials, ratings, trust badges, awards, certifications |
+| `voice` | tone signals, vocabulary, writing style tags, approved examples |
+| `product_service` | product, service, project, listing, course, menu or programme data |
+| `claim` | RERA, price, possession, amenities, ROI, accreditation and other evidenced claims |
+| `prohibited_claim` | guaranteed returns, unsupported performance claims or unsafe rewrites |
+| `audience` | explicit who-it-is-for language and objection themes |
+| `publishing_social` | public social links and external profile references |
+| `rights_asset` | retained image/PDF/screenshot candidates with permitted use |
+| `vertical_conflict` | selected/detected type disagreement requiring human review |
 
-It must not show:
+Approval still uses `V0_BRAND_PROFILE_CONTRACT.md`. New field types must be documented in
+OpenAPI and tested through generated clients before UI consumption.
 
-- A questionnaire for brand name, tone, audience, product, offers or claims before crawl.
-- Firecrawl API key, provider payload, cache key, raw HTML or internal worker lease.
-- Extracted brand values as approved truth.
+## 10. Backend-First Sprint Plan
 
-## 8. Implementation Gaps To Close Before Real Firecrawl Use
+The backend revamp is split from frontend execution so provider wiring, schema and evidence
+contracts are correct before new UI screens depend on them. The sprint lives in
+`docs/V0/Sprints/V0-B2A_FIRECRAWL_BRAND_CRAWL_BACKEND_REVAMP_SPRINT.md`.
 
-The current local implementation is deterministic and Firecrawl-like, but not a real Firecrawl adapter. Required gaps:
+Backend implementation order:
 
-1. Add provider credential metadata for Firecrawl without exposing the API key.
-2. Add a server/worker-side Firecrawl adapter behind the provider boundary.
-3. Decide whether the provider call happens in NestJS processor code or a private worker; browser code must never call Firecrawl directly.
-4. Extend `brand.extraction.output.v1` fixtures to include Firecrawl status, metadata, branding and PDF-derived evidence.
-5. Extend candidate extraction for required approval fields that current code does not produce: product/project, positioning, tone/voice, positive claims, legal disclaimers, markets and offers.
-6. Add contract tests for malformed Firecrawl payloads, empty pages, refused output, prompt injection, low-confidence visual extraction and partial result UI.
-7. Add UI states for Firecrawl-backed progress without exposing provider names unless the operations/admin view requires it.
-8. Update configuration catalog for `FIRECRAWL_API_KEY` or secret-manager reference if the implementation introduces a new env/credential requirement.
+1. Contract tests for `POST /brands/crawl-runs` accepting optional `brandType`.
+2. Contract tests for rejection of unsupported brand types and protected targets.
+3. Schema/data update for selected and detected brand type, universal artifact,
+   vertical artifact, asset inventory, crawl cost and extraction schema version.
+4. Firecrawl adapter interface with deterministic simulator parity.
+5. Universal pass normalisation using the fixed guide.
+6. Vertical pass routing and conflict retention.
+7. Asset download, quarantine and validation for crawled image/PDF/screenshot assets.
+8. Candidate extraction expansion and source evidence preservation.
+9. Job progress and error mapping for multi-pass crawl.
+10. OpenAPI/client regeneration and contract diff inspection.
+11. Nearby integration, RLS, redaction and restore checks.
 
-## 9. Acceptance Criteria For The First Firecrawl-Backed Brand Step
+## 11. Known Gaps Before Implementation
 
-- User enters only a company URL as the initial brand input.
-- System displays normalized URL and crawl scope before execution.
-- User must acknowledge source rights before the crawl run is created.
-- Private, localhost, link-local, metadata, invalid and unsafe redirect targets are blocked.
-- Firecrawl API key is server-side only and never appears in browser code, logs, analytics or retained artifacts.
-- Crawl progress is visible through V0 job status, page counts and sanitized warnings.
-- Extracted logo, colours, fonts, summary, USP, CTA, audience and prohibited-claim candidates show source, evidence, confidence and extraction state.
-- Required approval fields not supported by extraction are shown as unresolved, not fabricated.
-- Empty, malformed, refused or evidence-free provider output fails with `PROVIDER_OUTPUT_INVALID` and cannot become approved truth.
-- Approved production use remains blocked until V0-B3 creates an immutable approved `BrandProfile` version.
+These are not blockers to writing the sprint, but they must be closed before claiming the
+Firecrawl revamp works:
 
+1. The exact executable `BrandCrawlRun` schema must confirm whether selected/detected
+   brand type fields become columns or live inside `crawlScope`.
+2. `brand.extraction.output.v3` JSON Schema and fixtures do not exist yet.
+3. Candidate field types for vertical assets and positive claim evidence need OpenAPI and
+   approval-screen support.
+4. Firecrawl observed credit usage must be captured without turning provider cost into
+   user billing unless a later price-version contract authorises it.
+5. Asset retention needs a clear policy for public images whose page permits viewing but
+   not production reuse.
+6. UI work is intentionally deferred; backend responses must still carry enough grouped
+   evidence for a future brand-type selector and vertical review panel.
+
+## 12. Acceptance Criteria For The Backend Revamp
+
+- The universal Firecrawl guide remains unchanged.
+- User-selected brand type is accepted, validated and retained.
+- Universal extraction always runs before any vertical extraction.
+- Exactly one vertical pass runs for the selected or detected type.
+- Selected/detected disagreement creates visible conflict evidence.
+- Firecrawl API key is server-side only and is absent from browser code, logs, analytics,
+  job events and retained artifacts.
+- Crawled images/screenshots/documents are retained only through quarantine, validation,
+  hash and rights evidence.
+- Extracted values remain candidates and cannot become production truth before B3 approval.
+- Empty, malformed, refused, prompt-injected or evidence-free output fails with stable
+  errors and cannot create approved brand truth.
+- Contract tests prove same-workspace access, cross-workspace hiding, idempotency,
+  malformed provider output and deterministic simulator parity.

@@ -47,10 +47,10 @@ The executable schema must implement these models with UUID/ULID-style string ID
 
 ```text
 Identity:
-  User, Workspace, Membership, ServiceCredential, WorkspaceCapability
+  User, UserProfile, Workspace, Membership, ServiceCredential, WorkspaceCapability
 
 Brand:
-  BrandProfile, BrandCrawlRun, BrandCandidate, BrandAsset, BrandApproval, BrandRule
+  BrandContext, BrandProfile, BrandCrawlRun, BrandCandidate, BrandAsset, BrandApproval, BrandRule
 
 Discovery/Blueprint:
   ViralCandidate, MetricSnapshot, MediaAcquisition, ThumbnailBlueprint,
@@ -134,14 +134,55 @@ model BrandCrawlRun {
   status             JobStatus @default(QUEUED)
   rightsAcknowledged Boolean
   crawlScope         Json
+  selectedBrandType  String?   @db.VarChar(80)
+  detectedBrandType  String?   @db.VarChar(80)
+  extractionSchemaVersion String @default("brand.extraction.output.v3") @db.VarChar(80)
+  providerCreditTelemetry Json?
   robotsPolicy       Json?
   jobId              String?   @db.Uuid
+  crawlPlanArtifactId String?  @db.Uuid
+  universalOutputArtifactId String? @db.Uuid
+  verticalOutputArtifactId String? @db.Uuid
+  pageInventoryArtifactId String? @db.Uuid
+  assetPackArtifactId String?  @db.Uuid
+  mediaInventoryArtifactId String? @db.Uuid
+  readinessReportArtifactId String? @db.Uuid
   createdAt          DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt          DateTime  @updatedAt @db.Timestamptz(6)
   workspace          Workspace @relation(fields: [workspaceId], references: [id])
   brandAssets        BrandAsset[]
+  brandCandidates    BrandCandidate[]
   @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, selectedBrandType, detectedBrandType])
   @@map("brand_crawl_runs")
+}
+
+model UserProfile {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @unique @db.Uuid
+  name              String?  @db.VarChar(160)
+  contactEmail      String?  @db.VarChar(320)
+  websiteUrl        String?  @db.VarChar(500)
+  industry          String?  @db.VarChar(120)
+  primaryMarket     String?  @db.VarChar(160)
+  language          String?  @db.VarChar(40)
+  onboardingSkipped Boolean  @default(false)
+  @@map("user_profiles")
+}
+
+model BrandContext {
+  id              String @id @default(uuid()) @db.Uuid
+  workspaceId     String @db.Uuid
+  userId          String @db.Uuid
+  brandName       String? @db.VarChar(200)
+  websiteUrl      String? @db.VarChar(500)
+  industry        String? @db.VarChar(120)
+  videoGoal       String? @db.VarChar(500)
+  primaryMarket   String? @db.VarChar(160)
+  language        String? @db.VarChar(40)
+  targetPlatforms Json @default("[]")
+  @@unique([workspaceId, userId])
+  @@map("brand_contexts")
 }
 
 model BrandAsset {

@@ -12,4 +12,3 @@ Use Chain of thoughts to actually dig deep into the "API provider's" documentati
 Use another Chain of thoughts to actually dig deep into our app's feature and USP features to see what is the output required. 
 EVERY SINGLE INTEGRATION DOCUMENTATION IS A SEPERATE TASK ALTOGETHER, DO NOT COMBINE IT INTO ONE TASK. 
 Break every integration into sub problems and further down so we get every little detail out. 
-

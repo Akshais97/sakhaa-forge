@@ -29,9 +29,15 @@ POST   /workspaces/{workspace_id}/backlog-simulation   Owner/Admin two-hour load
 POST   /workspaces/{workspace_id}/incident-rehearsal   Owner/Admin incident/runbook rehearsal record (V0-A2)
 GET    /workspaces/{workspace_id}/operations/alerts    Owner/Admin operational alert states (V0-A2)
 POST   /brands/crawl-runs       Idempotency-Key required; B1 safe brand intake
+GET    /brands/crawl-runs/{crawl_run_id}
+GET    /brands/crawl-runs/{crawl_run_id}/asset-pack
 GET    /brands/crawl-runs/{crawl_run_id}/candidates
 POST   /brands/assets/uploads      Idempotency-Key required
 POST   /brands/assets/uploads/{artifact_id}/complete
+GET    /users/me/profile
+PATCH  /users/me/profile
+GET    /onboarding/brand-context
+POST   /onboarding/brand-context
 POST   /artifacts/{artifact_id}/downloads
 POST   /jobs/simulated-media-processing  Idempotency-Key required; local deterministic F4 round trip
 POST   /jobs/dead-letter          Owner/Admin-visible failed job recovery list
@@ -84,17 +90,45 @@ POST   /jobs/{id}/recover
 `POST /brands/crawl-runs` creates the V0-B1 durable intake record. The API normalizes a
 public `http` or `https` website URL, rejects private, link-local, localhost and metadata
 targets with `CRAWL_SSRF_BLOCKED`, requires source rights acknowledgement with
-`SOURCE_RIGHTS_REQUIRED`, associates clean uploaded artifacts with retained rights basis
-and permitted use, then creates `BrandCrawlRun`, `BrandAsset`, `Job` (`brand_crawl`) and
-`OutboxEvent` records in one authenticated tenant-scoped operation.
+`SOURCE_RIGHTS_REQUIRED`, accepts an optional `brandType` from the documented V0 brand
+type set, associates clean uploaded artifacts with retained rights basis and permitted
+use, then creates `BrandCrawlRun`, `BrandAsset`, `Job` (`brand_crawl`) and `OutboxEvent`
+records in one authenticated tenant-scoped operation. Unsupported brand types return
+`VALIDATION_FAILED`; the selected type changes the vertical Firecrawl pass only and does
+not approve brand truth.
+
+`GET /brands/crawl-runs/{crawl_run_id}` is the refresh-safe detail read used by
+`/app/branding?crawlRunId=<uuid>` and workspace crawl-run detail pages. It returns the
+canonical crawl run, job status, redacted crawl progress, sanitized policy warnings and
+artifact reference IDs only when the actor is authorised for the workspace. It never
+returns Firecrawl raw payloads, provider credentials, signed URLs, object keys, prompts
+or worker lease tokens.
+
+`GET /brands/crawl-runs/{crawl_run_id}/asset-pack` returns grouped candidate summaries for
+the branding UI: brand identity, universal visual identity, messaging, offers,
+trust/proof, media inventory, voice, selected/detected brand type, vertical assets,
+compliance/rights, missing assets and readiness. The response is a review surface only;
+it does not approve brand truth and does not expose raw provider payloads.
+
+`GET /users/me/profile`, `PATCH /users/me/profile`, `GET /onboarding/brand-context` and
+`POST /onboarding/brand-context` are V0 branding-context helpers for optional onboarding
+and profile state. Skipped or absent onboarding means brand extraction applies universal
+asset groups only. Selected industry context may request the relevant overlay, but the
+server still treats extracted values as candidates until approval.
 
 `GET /brands/crawl-runs/{crawl_run_id}/candidates` returns V0-B2 extracted candidates
 for one crawl run. Candidates are not approved brand truth. Each candidate keeps
 `fieldType`, `value`, `confidence`, `decision: candidate`, `extractionState` and
 `sourceEvidence`. Worker completion for `brand_crawl` accepts deterministic Firecrawl-like
-scrape output containing page text plus branding facts such as colors, typography, logo
-candidates, page title, target audience, CTA and USP text. Refused, empty, schema-invalid
-or evidence-free extraction output is rejected with `PROVIDER_OUTPUT_INVALID`.
+scrape output, or Firecrawl adapter output normalised to `brand.extraction.output.v3`.
+The v3 output contains the fixed universal pass from
+`Features/Firecrawl/brand-crawl-universal.md`, one vertical pass from
+`Features/Firecrawl/brand-crawl-verticals.md`, selected and detected brand type evidence,
+retained asset references, page text and branding facts such as colors, typography, logo
+candidates, page title, target audience, CTA, USP, social proof, voice, product/service
+details and claim evidence. Refused, empty, schema-invalid or evidence-free extraction
+output is rejected with `PROVIDER_OUTPUT_INVALID`. A selected/detected brand-type
+disagreement creates a conflict candidate and does not silently override either value.
 
 `POST /brands/{brand_id}/approvals` creates V0-B3 approved brand truth. The request must
 name the workspace, crawl run, optimistic profile version, complete required brand

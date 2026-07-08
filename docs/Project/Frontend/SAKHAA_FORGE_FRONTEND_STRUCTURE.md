@@ -36,7 +36,7 @@ script selection, paid generation, exact-version review, publication and audienc
 | `/access-denied` | Existence-hiding access-denied surface. |
 | `/service-status` | Public-safe status surface. |
 | `/w/{workspaceSlug}` | Workspace foundation step. |
-| `/w/{workspaceSlug}/brands` | B1-B3 brand truth step. |
+| `/w/{workspaceSlug}/brands` | B1-B2A-B3 brand truth step, including Firecrawl universal/vertical candidate review. |
 | `/w/{workspaceSlug}/blueprints` | P1-P5 blueprint and candidate step. |
 | `/w/{workspaceSlug}/scripts` | S1-S2 script tournament step. |
 | `/w/{workspaceSlug}/generate/new` | G1-G5 paid generation step. |

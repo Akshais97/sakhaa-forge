@@ -25,7 +25,7 @@ configuration catalog.
 | Web workspace app | `apps/web/app/w/[workspaceSlug]/[[...segments]]/page.tsx` renders a backend-shaped command centre from `workspace-screen-model.ts`. | Final app wiring must replace local route model reads with the generated `/api/v0` client per screen, keeping workspace context explicit. |
 | API routes | `apps/api/src/server.mjs` exposes `/api/v0` workspaces, brand crawl, brand approval, blueprints, script tournaments, generation estimates/jobs, composition, review, calendar publish/verify, callbacks, lineage, performance, credentials and operations routes. | The frontend should call generated contracts, pass auth, workspace id and idempotency keys where required. |
 | Auth verification | `apps/api/src/auth.mjs` currently verifies HS256 JWTs using `SUPABASE_JWT_SECRET`. | Production hardening must reconcile this with canonical `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE` and `SUPABASE_JWKS_URL`. Keys alone are not sufficient until the auth verifier is updated. |
-| Brand extraction | `apps/api/src/brand-extraction.mjs` deterministically extracts candidates from supplied scrape/page data. | A live crawler/LLM route still needs an approved adapter boundary if external extraction is required. No canonical Firecrawl key exists. |
+| Brand extraction | `apps/api/src/brand-extraction.mjs` deterministically extracts candidates from supplied scrape/page data; `apps/api/src/firecrawl-provider.mjs` owns the Firecrawl request/status normalisation boundary. | Firecrawl is approved for the V0 brand crawl provider path when `BRAND_CRAWL_MODE=firecrawl`; simulator remains the local/test default. Browser code never calls Firecrawl or receives Firecrawl credentials/raw payloads. |
 | Viral discovery | `apps/api/src/viral-discovery.mjs` uses deterministic Xpoz simulator fixtures or manual fallback. | `XPOZ_API_BASE_URL` and `XPOZ_API_KEY` are not enough for live operation until the provider request/response contract and adapter are implemented. |
 | HeyGen | `apps/api/src/heygen-provider.mjs` refuses non-simulator `HEYGEN_MODE`. | Live HeyGen needs adapter implementation plus callback verification tests before `HEYGEN_MODE=api` can be enabled. |
 | Meta publishing | `apps/api/src/meta-provider.mjs` refuses non-simulator `META_MODE`. | Meta app keys and workspace OAuth token references are necessary but not sufficient; live provider calls must be implemented and tested. |
@@ -328,18 +328,34 @@ Expected V0 output constraints:
 - Malformed, empty, refused, low-confidence or schema-invalid output must be blocked or failed according to the V0 contract.
 - No provider-specific model vendor is selected in canonical docs; therefore no OpenAI, Anthropic, Google or other vendor key is listed as required here.
 
-### Crawl integration
+### Firecrawl brand crawl integration
 
-**V0 status:** Crawler configuration exists; no third-party crawl API key is canonical.
+**V0 status:** Approved V0 brand crawl provider behind the server/worker boundary. Simulator remains the local/test default.
 
 | Variable or credential | Expected parameter |
 |---|---|
+| `BRAND_CRAWL_MODE` | `simulator` or `firecrawl`; production must opt in explicitly. |
+| `FIRECRAWL_API_BASE_URL` | Firecrawl v2 API base URL, default `https://api.firecrawl.dev/v2`. |
+| `FIRECRAWL_API_KEY` | Firecrawl API key, injected as a server/queue secret. |
+| `FIRECRAWL_TIMEOUT_MS` | Provider request timeout. |
+| `BRAND_CRAWL_DEFAULT_MAX_PAGES` | Default page cap for a brand crawl, local default 5. |
+| `BRAND_CRAWL_MAX_PAGES` | Absolute page cap for a brand crawl, V0 cap 50. |
 | `CRAWL_USER_AGENT` | Contact-bearing crawler user agent. |
 | `CRAWL_MAX_PAGES` | Maximum pages per crawl. |
 | `CRAWL_MAX_REDIRECTS` | Maximum redirects. |
 | `CRAWL_TIMEOUT_MS` | Crawl timeout. |
 
-No canonical `FIRECRAWL_API_KEY` or equivalent external crawler credential was found. Historical source notes are not authoritative under `AGENTS.md`, so this inventory does not add a Firecrawl key.
+Expected request/response parameters:
+
+| Direction | Parameters |
+|---|---|
+| V0 to provider | Firecrawl v2 scrape/crawl calls through the adapter only: fixed universal pass from `docs/V0/Features/Firecrawl/brand-crawl-universal.md` first, then one selected or detected vertical pass from `docs/V0/Features/Firecrawl/brand-crawl-verticals.md`, with normalised public URL, bounded scope, `allowExternalLinks:false`, `allowSubdomains:false` and `ignoreRobotsTxt:false`. |
+| Provider to V0 | Provider crawl status, page markdown, metadata, links, images, screenshots, branding facts, selected/detected brand type, vertical assets and credit telemetry normalised into `brand.extraction.output.v3` before candidate extraction. |
+| V0 status check | `GET /v2/crawl/{id}` through the adapter only; raw provider payloads stay private and are not public API contracts. |
+
+Firecrawl keys are deployment-level secrets, not workspace service credentials. Do not use
+`OPEN_API_KEY` or `OPENAI_API_KEY` as aliases for this path; LLM extraction uses the generic
+`LLM_PROVIDER`, `LLM_API_KEY` and `LLM_MODEL_ID` variables.
 
 ### Observability and analytics
 
@@ -403,7 +419,7 @@ These values are useful for local/staging verification but are not external prov
 | Email provider | Generic adapter slot exists; no vendor is canonically selected. |
 | Product analytics sink | Generic adapter slot exists; no vendor is canonically selected. |
 | Live HeyGen, Meta and YouTube adapters | Config/docs describe live credential requirements, but current adapter code is simulator-first and refuses live routes where noted. |
-| Firecrawl or third-party crawler key | Not canonical. Do not add unless `docs/V0` or the configuration catalog promotes it. |
+| Firecrawl provider rollout | Canonical for V0 brand crawl when `BRAND_CRAWL_MODE=firecrawl`; production enablement still requires environment secret provisioning, provider-mode verification evidence and simulator fallback. |
 
 ## External references used
 

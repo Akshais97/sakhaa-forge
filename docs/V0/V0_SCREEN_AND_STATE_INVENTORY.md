@@ -45,12 +45,27 @@ surface.
 | Screen | Route | Roles | Entry / exit | Primary actions | State requirements |
 |---|---|---|---|---|---|
 | Brand list | `/brands` | Owner/Admin/Client Manager | Workspace | Create/open brand | empty with Create brand; loading; archived filter |
-| Brand intake | `/brands/new` | Owner/Admin/Client Manager | Workspace capability | Submit permitted URL/files | URL invalid, rights missing, upload scanning, partial uploads, success run |
-| Crawl run | `/brands/{id}/runs/{runId}` | Owner/Admin/Client Manager | Intake run | Observe, cancel before external side effect, retry safe stage | queued, crawling, partial, blocked, failed, candidates ready |
-| Brand review | `/brands/{id}/profiles/{profileId}/review` | Owner/Admin/Client Manager | Candidates ready | Edit candidate, approve/reject | low confidence, source conflict, missing required field, stale version |
+| Brand intake | `/brands/new` | Owner/Admin/Client Manager | Workspace capability | Submit permitted URL/files and optional brand type | URL invalid, unsupported brand type, rights missing, upload scanning, partial uploads, success run |
+| Crawl run | `/brands/{id}/runs/{runId}` | Owner/Admin/Client Manager | Intake run | Observe, cancel before external side effect, retry safe stage | queued, crawling universal, crawling vertical, selected/detected conflict, partial, blocked, failed, candidates ready |
+| Brand review | `/brands/{id}/profiles/{profileId}/review` | Owner/Admin/Client Manager | Candidates ready | Edit universal/vertical candidate, approve/reject | low confidence, source conflict, selected/detected conflict, missing required field, stale version |
 | Brand detail | `/brands/{id}` | Relevant production roles | Brand exists | Open active profile/assets/rules | no approved profile, approved, superseded |
 | Brand assets | `/brands/{id}/assets` | Brand roles | Brand exists | Upload/approve/revoke | quarantine, validating, clean, rejected, revoked |
 | Brand rules | `/brands/{id}/rules` | Owner/Admin/Client Manager | Brand exists | Add required/prohibited rule | empty, duplicate, conflicting rule |
+
+The active standalone branding app route is `/app/branding`, with refresh-safe detail state
+at `/app/branding?crawlRunId=<uuid>`. `/brand-extract` is the direct brand-extraction
+frontend entry for the same screen contract; it must resolve the same tenant-scoped crawl-run
+truth and must not create a separate workflow. It is available to authenticated Owner, Admin
+and Client Manager actors and resolves the same tenant-scoped crawl-run truth as the workspace
+brand routes. Required states are blank, onboarding missing, ready to scan, upload pending,
+queued, running, partial, failed, candidates ready, approval required and approved. Primary
+actions are Scan URL, Upload brand assets, Review candidates, Request missing assets and
+Approve this profile. The screen never shows Firecrawl credentials, raw provider payloads,
+object keys, signed URLs, prompt material or extracted values as approved truth before the
+approval endpoint creates an immutable brand profile version.
+The intake state may include a brand type selector. The crawl detail and review states must
+show universal candidate groups first, then the selected or detected vertical group, plus
+any selected/detected conflict and retained-asset rights state.
 
 ## 4. Blueprint Screens
 

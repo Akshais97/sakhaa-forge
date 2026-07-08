@@ -786,7 +786,7 @@
         },
         "responses": {
           "202": {
-            "description": "Brand crawl run, retained brand asset rights and queued crawl job were created."
+            "description": "Brand crawl run, optional selected brandType, retained brand asset rights and queued crawl job were created."
           },
           "400": {
             "description": "Idempotency key is required."
@@ -801,7 +801,71 @@
             "description": "Source rights acknowledgement or per-asset rights basis is missing."
           },
           "422": {
-            "description": "URL, crawl scope or attached asset validation failed."
+            "description": "URL, crawl scope, brandType or attached asset validation failed."
+          }
+        }
+      }
+    },
+    "/brands/crawl-runs/{crawl_run_id}": {
+      "get": {
+        "operationId": "getBrandCrawlRun",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "crawl_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redacted crawl-run detail, selected/detected brand type metadata, sanitized provider credit telemetry, attached asset references and evidence-backed candidates."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "404": {
+            "description": "Crawl run is missing or hidden by tenant isolation."
+          }
+        }
+      }
+    },
+    "/brands/crawl-runs/{crawl_run_id}/asset-pack": {
+      "get": {
+        "operationId": "getBrandAssetPack",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "crawl_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Grouped brand asset pack with vertical candidates, compliance/rights evidence, safe source locators and readiness state."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "404": {
+            "description": "Crawl run is missing or hidden by tenant isolation."
           }
         }
       }
@@ -834,6 +898,103 @@
           },
           "404": {
             "description": "Crawl run is missing or hidden by tenant isolation."
+          }
+        }
+      }
+    },
+    "/users/me/profile": {
+      "get": {
+        "operationId": "getUserProfile",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authenticated user's profile defaults and saved profile fields."
+          },
+          "401": {
+            "description": "Authentication is required."
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateUserProfile",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Profile saved for the authenticated user."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "422": {
+            "description": "Profile input validation failed."
+          }
+        }
+      }
+    },
+    "/onboarding/brand-context": {
+      "get": {
+        "operationId": "getOnboardingBrandContext",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workspace-scoped onboarding brand context for the authenticated user."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "404": {
+            "description": "Workspace is missing or hidden by tenant isolation."
+          }
+        }
+      },
+      "post": {
+        "operationId": "saveOnboardingBrandContext",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Workspace-scoped onboarding brand context saved."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "404": {
+            "description": "Workspace is missing or hidden by tenant isolation."
+          },
+          "422": {
+            "description": "Onboarding input validation failed."
           }
         }
       }

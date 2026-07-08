@@ -127,6 +127,12 @@ Workers receive no PostgreSQL or Redis configuration.
 | `LLM_API_KEY` | queue | provider secret | Provider mode | Secret | Capability disabled |
 | `LLM_MODEL_ID` | queue | approved model identifier | Provider mode | Internal | Fail |
 | `LLM_REQUEST_TIMEOUT_MS` | queue | integer | No | Internal | `60000` |
+| `BRAND_CRAWL_MODE` | queue | enum `simulator,firecrawl` | Yes for B1/B2 | Internal | local/test `simulator`; prod explicit |
+| `FIRECRAWL_API_BASE_URL` | queue | HTTPS URL | Firecrawl mode | Internal | `https://api.firecrawl.dev/v2` |
+| `FIRECRAWL_API_KEY` | queue | provider secret | Firecrawl mode | Secret | Brand crawl provider disabled |
+| `FIRECRAWL_TIMEOUT_MS` | queue | integer 1000-120000 | No | Internal | `60000` |
+| `BRAND_CRAWL_DEFAULT_MAX_PAGES` | queue | integer 1-50 | No | Internal | `5` |
+| `BRAND_CRAWL_MAX_PAGES` | queue | integer 1-50 | No | Internal | `50` |
 | `CRAWL_USER_AGENT` | queue | non-empty contact-bearing identifier | Yes | Public | Fail |
 | `CRAWL_MAX_PAGES` | queue | integer 1-100 | No | Internal | `25` |
 | `CRAWL_MAX_REDIRECTS` | queue | integer 0-10 | No | Internal | `5` |
@@ -242,6 +248,13 @@ payloads.
   status, created/rotated/expires timestamps and actor, never the secret.
 - Rotation tests confirm old credentials stop working after the overlap window.
 - Production startup records a redacted configuration fingerprint and schema version.
+
+`BRAND_CRAWL_MODE=simulator` is the deterministic local/test path. `firecrawl` may be enabled
+only server-side for the V0 brand crawl worker boundary; browser code must never receive
+`FIRECRAWL_API_KEY`, raw Firecrawl payloads, provider crawl IDs that grant access, object keys,
+signed URLs or prompt material. Generic LLM configuration remains `LLM_PROVIDER`,
+`LLM_API_KEY` and `LLM_MODEL_ID`; vendor-specific aliases such as `OPEN_API_KEY` or
+`OPENAI_API_KEY` are not canonical V0 configuration names.
 
 ## 17. Catalog Change Rule
 

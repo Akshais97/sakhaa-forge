@@ -145,7 +145,7 @@ V0 generates a presigned URL (TTL `SIGNED_UPLOAD_TTL_SECONDS`, default 900 s) an
 the bytes:
 
 ```
-PUT https://<bucket>.s3.<region>.backblazeb2.com/<objectKey>?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=<keyId>/<date>/<region>/s3/aws4_request&X-Amz-Date=<timestamp>&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=<sig>
+PUT <short-lived-b2-upload-url-redacted>
 Content-Type: video/mp4
 Content-Length: <bytes>
 x-amz-content-sha256: <sha256>     (optional; enables server-side integrity check)
@@ -170,7 +170,7 @@ adapter boundary is descriptor-only; see `HeyGen_integration.md` §7).
 
 ### 4.3 Presigned GET (download) — `GetObject` presigned URL
 ```
-GET https://<bucket>.s3.<region>.backblazeb2.com/<objectKey>?X-Amz-Algorithm=…&X-Amz-Expires=300&X-Amz-Signature=…
+GET <short-lived-b2-download-url-redacted>
 ```
 Response: `200 OK`, `Content-Type: video/mp4`, `Content-Length`, `ETag`, body bytes. TTL
 `SIGNED_DOWNLOAD_TTL_SECONDS` (default 300 s).

@@ -189,6 +189,8 @@ model User {
   updatedWorkspaceCapabilities WorkspaceCapability[]
   serviceCredentialsUpdated ServiceCredential[]
   selectedScriptsAsApprover SelectedScript[] @relation("SelectedScriptApprover")
+  userProfile UserProfile?
+  brandContexts BrandContext[]
 
   @@map("users")
 }
@@ -237,6 +239,7 @@ model Workspace {
   outboxEvents OutboxEvent[]
   capabilities WorkspaceCapability[]
   serviceCredentials ServiceCredential[]
+  brandContexts BrandContext[]
   generationJobs GenerationJob[]
   creditReservations CreditReservation[]
   providerOperations ProviderOperation[]
@@ -278,6 +281,45 @@ model ServiceCredential {
 
   @@index([workspaceId, provider, environment])
   @@map("service_credentials")
+}
+
+model UserProfile {
+  id                 String       @id @default(uuid()) @db.Uuid
+  userId             String       @unique @map("user_id") @db.Uuid
+  name               String?      @db.VarChar(160)
+  contactEmail       String?      @map("contact_email") @db.VarChar(320)
+  websiteUrl         String?      @map("website_url") @db.VarChar(500)
+  industry           String?      @db.VarChar(120)
+  primaryMarket      String?      @map("primary_market") @db.VarChar(160)
+  language           String?      @db.VarChar(40)
+  onboardingSkipped  Boolean      @default(false) @map("onboarding_skipped")
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user               User         @relation(fields: [userId], references: [id])
+
+  @@index([industry, primaryMarket])
+  @@map("user_profiles")
+}
+
+model BrandContext {
+  id              String    @id @default(uuid()) @db.Uuid
+  workspaceId     String    @map("workspace_id") @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  brandName       String?   @map("brand_name") @db.VarChar(200)
+  websiteUrl      String?   @map("website_url") @db.VarChar(500)
+  industry        String?   @db.VarChar(120)
+  videoGoal       String?   @map("video_goal") @db.VarChar(500)
+  primaryMarket   String?   @map("primary_market") @db.VarChar(160)
+  language        String?   @db.VarChar(40)
+  targetPlatforms Json      @default("[]") @map("target_platforms")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace       Workspace @relation(fields: [workspaceId], references: [id])
+  user            User      @relation(fields: [userId], references: [id])
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId, industry, primaryMarket])
+  @@map("brand_contexts")
 }
 
 model WorkspaceCapability {
@@ -377,6 +419,11 @@ model Artifact {
   finalVideosAsCaptions FinalVideo[] @relation("FinalVideoCaptionsArtifact")
   calendarPostExports CalendarPost[] @relation("CalendarPostExportArtifact")
   postVerificationEvidence PostVerification[] @relation("PostVerificationEvidenceArtifact")
+  brandCrawlRunCrawlPlans BrandCrawlRun[] @relation("BrandCrawlRunCrawlPlanArtifact")
+  brandCrawlRunPageInventories BrandCrawlRun[] @relation("BrandCrawlRunPageInventoryArtifact")
+  brandCrawlRunAssetPacks BrandCrawlRun[] @relation("BrandCrawlRunAssetPackArtifact")
+  brandCrawlRunMediaInventories BrandCrawlRun[] @relation("BrandCrawlRunMediaInventoryArtifact")
+  brandCrawlRunReadinessReports BrandCrawlRun[] @relation("BrandCrawlRunReadinessReportArtifact")
 
   @@index([workspaceId, status, createdAt])
   @@index([workspaceId, updatedAt, id])
@@ -393,9 +440,19 @@ model BrandCrawlRun {
   crawlScope         Json         @map("crawl_scope")
   robotsPolicy       Json?        @map("robots_policy")
   jobId              String?      @map("job_id") @db.Uuid
+  crawlPlanArtifactId String?     @map("crawl_plan_artifact_id") @db.Uuid
+  pageInventoryArtifactId String? @map("page_inventory_artifact_id") @db.Uuid
+  assetPackArtifactId String?     @map("asset_pack_artifact_id") @db.Uuid
+  mediaInventoryArtifactId String? @map("media_inventory_artifact_id") @db.Uuid
+  readinessReportArtifactId String? @map("readiness_report_artifact_id") @db.Uuid
   createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
   workspace          Workspace    @relation(fields: [workspaceId], references: [id])
+  crawlPlanArtifact  Artifact?    @relation("BrandCrawlRunCrawlPlanArtifact", fields: [crawlPlanArtifactId], references: [id])
+  pageInventoryArtifact Artifact? @relation("BrandCrawlRunPageInventoryArtifact", fields: [pageInventoryArtifactId], references: [id])
+  assetPackArtifact  Artifact?    @relation("BrandCrawlRunAssetPackArtifact", fields: [assetPackArtifactId], references: [id])
+  mediaInventoryArtifact Artifact? @relation("BrandCrawlRunMediaInventoryArtifact", fields: [mediaInventoryArtifactId], references: [id])
+  readinessReportArtifact Artifact? @relation("BrandCrawlRunReadinessReportArtifact", fields: [readinessReportArtifactId], references: [id])
   brandAssets        BrandAsset[]
   brandCandidates    BrandCandidate[]
   brandProfiles      BrandProfile[]

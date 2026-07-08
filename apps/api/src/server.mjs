@@ -15,6 +15,9 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 const openApiPath = resolve(currentDir, "../../../packages/contracts/generated/openapi.v0.json");
 
 export async function createApiServer(env = process.env) {
+  if (env === process.env) {
+    await loadApiLocalEnv(env);
+  }
   const { AppModule, store } = createAppModule(env);
   const app = await NestFactory.create(
     AppModule,
@@ -37,6 +40,29 @@ export async function createApiServer(env = process.env) {
     testStores.set(app, store);
   }
   return app;
+}
+
+async function loadApiLocalEnv(env) {
+  const envPath = resolve(currentDir, "../.env");
+  let text;
+  try {
+    text = await readFile(envPath, "utf8");
+  } catch {
+    return;
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) {
+      continue;
+    }
+    const index = trimmed.indexOf("=");
+    const key = trimmed.slice(0, index).trim();
+    const rawValue = trimmed.slice(index + 1).trim();
+    if (!key || Object.hasOwn(env, key)) {
+      continue;
+    }
+    env[key] = rawValue.replace(/^['"]|['"]$/g, "");
+  }
 }
 
 // Side channel for the in-process test harness to reach the store's test-only fault-injection
@@ -309,6 +335,78 @@ function createF0Controller(env, store, prefix) {
         throw new HttpException(auth.problem, auth.problem.status);
       }
       const result = await store.listBrandCandidates(auth.actor, crawlRunId);
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    async getBrandCrawlRun(request, crawlRunId) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const result = await store.getBrandCrawlRun(auth.actor, crawlRunId);
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    async getBrandAssetPack(request, crawlRunId) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const result = await store.getBrandAssetPack(auth.actor, crawlRunId);
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    async getUserProfile(request) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const result = await store.getUserProfile(auth.actor);
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    async updateUserProfile(request) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const result = await store.updateUserProfile(auth.actor, request.body ?? {});
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    async getOnboardingBrandContext(request) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const result = await store.getOnboardingBrandContext(auth.actor, request.query ?? {});
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    async saveOnboardingBrandContext(request) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const result = await store.saveOnboardingBrandContext(auth.actor, request.body ?? {});
       if (!result.ok) {
         throw new HttpException(result.problem, result.problem.status);
       }
@@ -1836,7 +1934,13 @@ function createF0Controller(env, store, prefix) {
   postRoute("brands/assets/uploads/:artifactId/complete", F0Controller, "completeBrandAssetUpload", [Req(), Param("artifactId")], 200);
   postRoute("artifacts/:artifactId/downloads", F0Controller, "createArtifactDownload", [Req(), Param("artifactId")], 200);
   postRoute("brands/crawl-runs", F0Controller, "createBrandCrawlRun", [Req()], 202);
+  route("brands/crawl-runs/:crawlRunId", F0Controller, "getBrandCrawlRun", [Req(), Param("crawlRunId")], 200);
+  route("brands/crawl-runs/:crawlRunId/asset-pack", F0Controller, "getBrandAssetPack", [Req(), Param("crawlRunId")], 200);
   route("brands/crawl-runs/:crawlRunId/candidates", F0Controller, "listBrandCandidates", [Req(), Param("crawlRunId")], 200);
+  route("users/me/profile", F0Controller, "getUserProfile", [Req()], 200);
+  patchRoute("users/me/profile", F0Controller, "updateUserProfile", [Req()], 200);
+  route("onboarding/brand-context", F0Controller, "getOnboardingBrandContext", [Req(), Query()], 200);
+  postRoute("onboarding/brand-context", F0Controller, "saveOnboardingBrandContext", [Req()], 201);
   postRoute("brands/:brandId/approvals", F0Controller, "approveBrandProfile", [Req(), Param("brandId")], 201);
   postRoute("generation-estimates", F0Controller, "createGenerationEstimate", [Req()], 202);
   postRoute("generation-estimates/:estimateId/confirm", F0Controller, "confirmGenerationEstimate", [Req(), Param("estimateId")], 202);

@@ -43,6 +43,12 @@ invented independently during implementation.
 | `/auth/callback` | Auth callback processing | Provider callback |
 | `/access-denied` | Authenticated but no permitted workspace | Authenticated |
 | `/service-status` | Sanitised dependency status | Public-safe |
+| `/app/signup` | Email, username and password sign-up entry | Signed-out |
+| `/app/onboarding` | Optional brand context collection before extraction | Authenticated |
+| `/app/profile` | User profile and brand context defaults | Authenticated |
+| `/app/branding` | Active standalone branding entry; detail state uses `?crawlRunId=<uuid>` | Authenticated |
+| `/brand-extract` | Direct brand-extraction frontend entry for the active branding surface; resolves the same V0 brand intake and candidate review workflow as `/app/branding` | Authenticated |
+| `/branding` | Redirects to `/app/branding` | Public-safe redirect |
 
 ### Workspace Shell
 
@@ -59,7 +65,7 @@ invented independently during implementation.
 | `/w/{workspaceSlug}/brands` | Brand list |
 | `/w/{workspaceSlug}/brands/new` | URL/upload intake |
 | `/w/{workspaceSlug}/brands/{brandId}` | Brand overview and active profile |
-| `/w/{workspaceSlug}/brands/{brandId}/runs/{crawlRunId}` | Crawl progress and evidence |
+| `/w/{workspaceSlug}/brands/{brandId}/runs/{crawlRunId}` | Crawl progress, selected/detected brand type and evidence |
 | `/w/{workspaceSlug}/brands/{brandId}/profiles/{profileId}` | Exact profile version |
 | `/w/{workspaceSlug}/brands/{brandId}/profiles/{profileId}/review` | Candidate review and approval |
 | `/w/{workspaceSlug}/brands/{brandId}/assets` | Approved and quarantined assets |
@@ -180,8 +186,8 @@ Navigation visibility is convenience, not authorization. NestJS rechecks every a
 ```text
 Workspace home
 -> Create brand
--> Crawl/upload intake
--> Review candidates
+-> Crawl/upload intake with optional brand type
+-> Review universal and vertical candidates
 -> Approve exact brand profile
 -> Choose existing blueprint or discover
 -> Select candidate and inspect rights
@@ -206,6 +212,17 @@ Workspace home
 Every step links forward only when its blocking predecessor exists. A user may navigate
 back to evidence at any time, but editing immutable records creates a new version or
 revision.
+
+`/app/branding?crawlRunId=<uuid>` is the current primary branding surface for the V0
+branding app plan. `/brand-extract` is the direct brand-extraction entry for that same
+surface and must not introduce a second workflow or alternate contract. Both routes must
+resolve the same canonical crawl-run state as
+`/w/{workspaceSlug}/brands/{brandId}/runs/{crawlRunId}` when workspace routing is present.
+The query parameter is refresh-safe state only; signed URLs, provider IDs that grant
+access, raw Firecrawl payloads and worker lease tokens are never placed in the URL.
+Branding routes show universal candidate groups before vertical candidate groups, preserve
+selected/detected brand-type conflicts as review state and never present crawled assets as
+approved production assets before V0-B3 approval.
 
 ## 9. Object Detail URLs and Breadcrumbs
 

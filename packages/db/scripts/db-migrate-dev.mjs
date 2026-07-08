@@ -143,6 +143,11 @@ const migrations = [
     path: "packages/db/prisma/migrations/0032_v0_u4_audience_facing_verification_and_one_completion_notification/migration.sql",
     sentinel:
       "SELECT to_regclass('public.post_verifications') IS NOT NULL AND to_regclass('public.performance_snapshots') IS NOT NULL AND to_regtype('public.verification_status') IS NOT NULL AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'notifications' AND column_name = 'calendar_post_id')"
+  },
+  {
+    path: "packages/db/prisma/migrations/0033_v0_branding_profile_context_and_artifact_refs/migration.sql",
+    sentinel:
+      "SELECT to_regclass('public.user_profiles') IS NOT NULL AND to_regclass('public.brand_contexts') IS NOT NULL AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'brand_crawl_runs' AND column_name = 'asset_pack_artifact_id')"
   }
 ];
 

@@ -11,6 +11,7 @@ Engine's own `PROJECT_BRAND_GUIDELINES.md`.
 - Legal organisation name:
 - Public brand name:
 - Primary website:
+- Brand type for crawl depth, if known:
 - Primary contact name and role:
 - Approval contact:
 - Country and timezone:
@@ -30,7 +31,8 @@ Engine's own `PROJECT_BRAND_GUIDELINES.md`.
 - I confirm I am authorised to request this crawl: Name / role / date
 
 The system will still enforce SSRF, robots/policy, redirect, size and content-safety
-controls.
+controls. The selected brand type only chooses the vertical crawl detail; extracted
+values remain candidates until approval.
 
 ## 3. Brand Files
 

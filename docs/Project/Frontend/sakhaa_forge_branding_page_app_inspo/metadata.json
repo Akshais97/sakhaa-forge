@@ -1,0 +1,8 @@
+{
+  "name": "Sakhaa Forge: Brand Extraction Studio",
+  "description": "Interactive multi-step website crawling, live scan, and brand guidelines extraction studio powered by Firecrawl.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

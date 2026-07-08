@@ -129,6 +129,10 @@ const u4Migration = await readFile(
   "packages/db/prisma/migrations/0032_v0_u4_audience_facing_verification_and_one_completion_notification/migration.sql",
   "utf8"
 );
+const brandingProfileMigration = await readFile(
+  "packages/db/prisma/migrations/0033_v0_branding_profile_context_and_artifact_refs/migration.sql",
+  "utf8"
+);
 
 if (!schema.includes("provider = \"postgresql\"")) {
   throw new Error("Prisma datasource must use PostgreSQL.");
@@ -151,6 +155,8 @@ for (const required of [
   "model OutboxEvent",
   "model WorkspaceCapability",
   "model ServiceCredential",
+  "model UserProfile",
+  "model BrandContext",
   "model BrandCrawlRun",
   "model BrandAsset",
   "model BrandCandidate",
@@ -354,7 +360,36 @@ for (const required of [
   }
 }
 
-if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}`)) {
+for (const required of [
+  "model UserProfile",
+  "model BrandContext",
+  "onboardingSkipped",
+  "targetPlatforms",
+  "crawlPlanArtifactId",
+  "readinessReportArtifactId"
+]) {
+  if (!schema.includes(required)) {
+    throw new Error(`Missing required branding profile/context schema contract: ${required}`);
+  }
+}
+
+for (const required of [
+  "CREATE TABLE user_profiles",
+  "CREATE TABLE brand_contexts",
+  "ALTER TABLE brand_crawl_runs ADD COLUMN crawl_plan_artifact_id UUID",
+  "ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;",
+  "ALTER TABLE brand_contexts ENABLE ROW LEVEL SECURITY;",
+  "CREATE POLICY user_profiles_user_isolation",
+  "CREATE POLICY brand_contexts_workspace_isolation",
+  "brand_contexts_workspace_user_unique",
+  "brand_crawl_runs_crawl_plan_artifact_fk"
+]) {
+  if (!brandingProfileMigration.includes(required)) {
+    throw new Error(`Missing required branding profile/context migration statement: ${required}`);
+  }
+}
+
+if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${brandingProfileMigration}`)) {
   throw new Error("Runtime roles must not receive BYPASSRLS.");
 }
 
@@ -958,8 +993,8 @@ for (const required of [
 // provider payload is retained or returned. The integration tests assert no URL, secret or
 // provider payload leaks.
 
-if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}\n${s1Migration}\n${s2Migration}\n${s2ApproverFkMigration}\n${g1Migration}\n${g2Migration}\n${g3Migration}\n${g4Migration}\n${g5Migration}\n${c1Migration}\n${c2Migration}\n${c2FixMigration}\n${r1Migration}\n${r2Migration}\n${u1Migration}\n${u2Migration}\n${r2FixMigration}\n${u4Migration}`)) {
+if (/BYPASSRLS/i.test(`${f1Migration}\n${f2Migration}\n${f3Migration}\n${f4Migration}\n${f6Migration}\n${f7Migration}\n${b1Migration}\n${b2Migration}\n${b3Migration}\n${p1Migration}\n${p2Migration}\n${p3Migration}\n${p4Migration}\n${p5Migration}\n${s1Migration}\n${s2Migration}\n${s2ApproverFkMigration}\n${g1Migration}\n${g2Migration}\n${g3Migration}\n${g4Migration}\n${g5Migration}\n${c1Migration}\n${c2Migration}\n${c2FixMigration}\n${r1Migration}\n${r2Migration}\n${u1Migration}\n${u2Migration}\n${r2FixMigration}\n${u4Migration}\n${brandingProfileMigration}`)) {
   throw new Error("Runtime roles must not receive BYPASSRLS.");
 }
 
-console.log("Database contract valid for V0-F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1/G2/G3/G4/G5/C1/C2/R1/R2/U1/U2/U3 identity, idempotency, artifacts, jobs, outbox, capability controls, service credentials, brand intake, brand candidates, brand memory, blueprint path selection, viral candidate metrics, media acquisition, thumbnail blueprints, scene blueprints, formula derivations, director prompts, script tournaments, selected scripts, selected-script approver lineage FK, consent-safe avatar profiles and consents, creator wallets, verified credit purchases, append-only credit ledger, versioned generation estimates with input hash and expiry, atomic credit reservations with one-active-per-job guard, provider price versions, exactly-once provider operations with one-per-job guard, retained generated segments/assets and creative lineage with reconciled provider total and settled credits, validated composition instructions and AE plans with deterministic capability registry validation and CLEAN plan artifacts, reproducible final branded render attempts and versioned final videos with immutable revision lineage and deterministic golden render hash, render-level creative lineage binding composition instruction, AE plan, render attempt and final video with input-bound render idempotency, exact-version review items bound to one final-video version with append-only timestamped comments and one-logical-notification dedupe, auditable approval decisions bound to one exact final-video version with one-decision-per-review-item guard and a deterministic approval token minted only on approve (nullable, NULL on reject/request_changes, unique over non-null tokens) for scheduling, approved calendar posts bound to one approved exact final-video version with scheduled or manual-export fallback and a retained manual-export artifact, idempotent Meta and YouTube Shorts publication with one publish operation per calendar post, a pre-network durable row, a server-side request hash, a public post URL stored only once live, signature-verified windowed deduplicated callbacks and unknown-after-timeout reconciliation, audience-facing verification with one PostVerification per calendar post, a deterministic verifier simulator, account/media/caption/visibility/publish-time checks, bounded attempts, an immutable audience evidence artifact, a manual live URL journey, one deduplicated completion notification bound to the calendar post, an initial immutable PerformanceSnapshot anchoring the observation window, and RLS.");
+console.log("Database contract valid for V0-F5/B1/B2/B3/P1/P2/P3/P4/P5/S1/S2/G1/G2/G3/G4/G5/C1/C2/R1/R2/U1/U2/U3 identity, idempotency, artifacts, jobs, outbox, capability controls, service credentials, branding profile/context records, brand intake, brand candidates, brand crawl artifact references, brand memory, blueprint path selection, viral candidate metrics, media acquisition, thumbnail blueprints, scene blueprints, formula derivations, director prompts, script tournaments, selected scripts, selected-script approver lineage FK, consent-safe avatar profiles and consents, creator wallets, verified credit purchases, append-only credit ledger, versioned generation estimates with input hash and expiry, atomic credit reservations with one-active-per-job guard, provider price versions, exactly-once provider operations with one-per-job guard, retained generated segments/assets and creative lineage with reconciled provider total and settled credits, validated composition instructions and AE plans with deterministic capability registry validation and CLEAN plan artifacts, reproducible final branded render attempts and versioned final videos with immutable revision lineage and deterministic golden render hash, render-level creative lineage binding composition instruction, AE plan, render attempt and final video with input-bound render idempotency, exact-version review items bound to one final-video version with append-only timestamped comments and one-logical-notification dedupe, auditable approval decisions bound to one exact final-video version with one-decision-per-review-item guard and a deterministic approval token minted only on approve (nullable, NULL on reject/request_changes, unique over non-null tokens) for scheduling, approved calendar posts bound to one approved exact final-video version with scheduled or manual-export fallback and a retained manual-export artifact, idempotent Meta and YouTube Shorts publication with one publish operation per calendar post, a pre-network durable row, a server-side request hash, a public post URL stored only once live, signature-verified windowed deduplicated callbacks and unknown-after-timeout reconciliation, audience-facing verification with one PostVerification per calendar post, a deterministic verifier simulator, account/media/caption/visibility/publish-time checks, bounded attempts, an immutable audience evidence artifact, a manual live URL journey, one deduplicated completion notification bound to the calendar post, an initial immutable PerformanceSnapshot anchoring the observation window, and RLS.");

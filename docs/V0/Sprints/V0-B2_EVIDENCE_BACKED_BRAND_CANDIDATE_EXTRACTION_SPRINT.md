@@ -8,6 +8,7 @@ partial and invalid extraction states explicit.
 ## Source Contracts
 
 - `../V0_BRAND_PROFILE_CONTRACT.md`
+- `../V0_FIRECRAWL_BRAND_ASSET_ACQUISITION_PLAN.md`
 - `../V0_DATA_MODELS.md`
 - `../V0_JOBS.md`
 - `../V0_ERROR_CATALOG.md`
@@ -17,12 +18,15 @@ partial and invalid extraction states explicit.
 ## Sprint Backlog
 
 - Parse crawl outputs, CSS, fonts, colors, copy and uploaded assets.
+- Parse fixed Firecrawl universal output as the base candidate set.
 - Extract logo, colors, fonts, tone, offers, USPs, CTAs, audiences and prohibited claims.
 - Preserve source evidence and confidence for every candidate.
 - Isolate prompt input from instructions in crawled content.
 - Classify partial, low-confidence, empty, refused and malformed extraction outputs.
 - Expose candidate provenance in the review UI.
 - Record stage events and extraction artifacts.
+- Leave selected/detected vertical routing and expanded Firecrawl v3 backend wiring to
+  `V0-B2A_FIRECRAWL_BRAND_CRAWL_BACKEND_REVAMP_SPRINT.md`.
 
 ## TDD And Verification Plan
 

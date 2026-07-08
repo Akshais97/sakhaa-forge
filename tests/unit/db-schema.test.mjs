@@ -162,6 +162,31 @@ test("B2 Prisma schema and migration define evidence-backed brand candidates wit
   assert.doesNotMatch(migration, /BYPASSRLS/i);
 });
 
+test("branding plan migration defines user profile, brand context and crawl-run artifact references with RLS", async () => {
+  const schema = await readFile("packages/db/prisma/schema.prisma", "utf8");
+  const migration = await readFile(
+    "packages/db/prisma/migrations/0033_v0_branding_profile_context_and_artifact_refs/migration.sql",
+    "utf8"
+  );
+
+  assert.match(schema, /model UserProfile \{/);
+  assert.match(schema, /model BrandContext \{/);
+  assert.match(schema, /onboardingSkipped\s+Boolean\s+@default\(false\) @map\("onboarding_skipped"\)/);
+  assert.match(schema, /targetPlatforms\s+Json\s+@default\("\[\]"\) @map\("target_platforms"\)/);
+  assert.match(schema, /crawlPlanArtifactId\s+String\?\s+@map\("crawl_plan_artifact_id"\) @db\.Uuid/);
+  assert.match(schema, /readinessReportArtifactId\s+String\?\s+@map\("readiness_report_artifact_id"\) @db\.Uuid/);
+  assert.match(migration, /CREATE TABLE user_profiles/);
+  assert.match(migration, /CREATE TABLE brand_contexts/);
+  assert.match(migration, /ALTER TABLE brand_crawl_runs ADD COLUMN crawl_plan_artifact_id UUID/);
+  assert.match(migration, /ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;/);
+  assert.match(migration, /ALTER TABLE brand_contexts ENABLE ROW LEVEL SECURITY;/);
+  assert.match(migration, /CREATE POLICY user_profiles_user_isolation/);
+  assert.match(migration, /CREATE POLICY brand_contexts_workspace_isolation/);
+  assert.match(migration, /brand_crawl_runs_crawl_plan_artifact_fk/);
+  assert.match(migration, /brand_contexts_workspace_user_unique/);
+  assert.doesNotMatch(migration, /BYPASSRLS/i);
+});
+
 test("B3 Prisma schema and migration define versioned brand memory with active profile constraint", async () => {
   const schema = await readFile("packages/db/prisma/schema.prisma", "utf8");
   const migration = await readFile(

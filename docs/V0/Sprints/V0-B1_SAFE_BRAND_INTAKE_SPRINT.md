@@ -17,11 +17,14 @@ and receive a durable intake run without unsafe network access or unacknowledged
 ## Sprint Backlog
 
 - Normalize URLs and display crawl scope before execution.
+- Accept an optional V0 brand type selection for later Firecrawl vertical routing without
+  treating it as approved brand truth.
 - Record robots, policy and permitted crawl decisions.
 - Block SSRF, private IP ranges, unsafe redirects and oversized downloads.
 - Associate uploaded assets with rights declarations.
 - Reuse F3 artifact validation for brand assets.
-- Create durable `BrandCrawlRun`, `BrandAsset`, `Artifact` and `Job` records.
+- Create durable `BrandCrawlRun`, `BrandAsset`, `Artifact` and `Job` records with crawl
+  scope, rights acknowledgement and selected brand type when supplied.
 - Build intake status UI with blocked, queued, running, failed and ready states.
 
 ## TDD And Verification Plan

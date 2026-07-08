@@ -383,4 +383,3 @@ Proposed Plan
 &#x20; - V0 only: no V1/V2 routes, claims, feature flags or runtime dependencies.
 
 &#x20; - Backend contracts remain the source of truth; missing backend capability appears as blocked or unavailable, never as fake success.
-
