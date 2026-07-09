@@ -41,18 +41,19 @@ body {
   background-color: #050507;
   color: #f3f4f6;
   font-family: var(--font-sans);
-  overflow: hidden;
 }
 
-html,
-body {
+html {
   height: 100%;
 }
 
-#sakhaa-forge-app {
-  height: 100dvh;
-  max-height: 100dvh;
-  min-height: 0;
+body {
+  min-height: 100%;
+}
+
+#sakhaa-forge-app,
+#brand-extract-app {
+  min-height: 100dvh;
 }
 
 .text-balance {

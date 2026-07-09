@@ -2,5 +2,9 @@
   "name": "@sakhaa-forge/tests",
   "version": "0.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "selenium-webdriver": "^4.45.0"
+  }
 }

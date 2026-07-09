@@ -1,3 +1,5 @@
+"use client";
+
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -7,6 +9,12 @@ import {
   ExternalLink, Layers, CheckCircle, Database, Eye, ChevronDown, ChevronUp
 } from 'lucide-react';
 import { BrandData } from '../types';
+import {
+  adaptBrandCrawlRunResponse,
+  buildApprovalDraftFromCandidates,
+  type UiCandidate
+} from '../candidate-adapter';
+import { createGeneratedWorkflowClient, makeIdempotencyKey } from '../../../../src/workflow/v0-actions';
 
 interface BrandExtractionStudioProps {
   activeBrand: BrandData;
@@ -83,6 +91,72 @@ const CRAWL_VERTICALS = [
   'Home Services'
 ];
 
+const INDUSTRY_OPTIONS = CRAWL_VERTICALS;
+
+const BACKEND_BRAND_TYPE_BY_LABEL: Record<string, string> = {
+  'D2C / Ecommerce': 'd2c_ecommerce',
+  'B2B SaaS': 'b2b_saas',
+  'Real Estate': 'real_estate',
+  'Healthcare': 'healthcare',
+  'Education': 'education',
+  'Fintech / Financial Services': 'financial_services',
+  'Restaurant / F&B': 'restaurant_fb',
+  'Fitness / Wellness': 'fitness_wellness',
+  'Automotive': 'automotive',
+  'Legal': 'legal_professional',
+  'Hospitality': 'travel_hospitality',
+  'Home Services': 'home_services'
+};
+
+type UploadedBrandAsset = {
+  id: string;
+  artifactId: string;
+  name: string;
+  category: string;
+  rightsBasis: string;
+  permittedUse: string;
+  status: 'uploading' | 'clean' | 'failed';
+  error?: string;
+};
+
+function normalizeUrlInput(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
+function validatePublicUrl(value: string): string | null {
+  try {
+    const parsed = new URL(normalizeUrlInput(value));
+    if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname.includes('.')) {
+      return 'Enter a valid public website URL.';
+    }
+    return null;
+  } catch {
+    return 'Enter a valid public website URL.';
+  }
+}
+
+function normalizePathPrefix(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.toLowerCase() === '/all') return '/';
+  if (!trimmed.startsWith('/')) return null;
+  return trimmed.replace(/\/{2,}/g, '/');
+}
+
+function toBackendBrandType(label: string): string | null {
+  return BACKEND_BRAND_TYPE_BY_LABEL[label] ?? null;
+}
+
+async function sha256File(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(digest))
+    .map(byte => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, onProceedWorkflow }: BrandExtractionStudioProps) {
   // Navigation Steps
   const steps = [
@@ -95,15 +169,19 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
   ];
 
   const [currentStep, setCurrentStep] = useState(1);
-  const [serverConnected, setServerConnected] = useState(true);
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [apiContext, setApiContext] = useState({
+    workspaceId: '',
+    authToken: '',
+    source: 'pending'
+  });
 
   // STEP 1 State: Brand Context Onboarding Form
   const [onboardingForm, setOnboardingForm] = useState({
-    brandName: activeBrand.name,
-    websiteUrl: activeBrand.url,
-    industry: activeBrand.niche,
+    brandName: '',
+    websiteUrl: '',
+    industry: 'Real Estate',
     videoGoal: 'Drive high-conversion visual leads through kinetic social video storytelling.',
     primaryMarket: 'India',
     language: 'en-IN',
@@ -118,19 +196,12 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     brandType: 'Real Estate',
     maxPages: 5,
     pathPrefixes: ['/'],
-    assets: [] as Array<{
-      id: string;
-      name: string;
-      category: string;
-      rightsBasis: string;
-      permittedUse: string;
-      status: 'scanning' | 'clean' | 'failed';
-    }>
+    assets: [] as UploadedBrandAsset[]
   });
-  // Local states for adding a path prefix and simulated asset uploads
+  // Local states for adding a path prefix and real asset uploads
   const [newPrefix, setNewPrefix] = useState('');
+  const [selectedAssetFile, setSelectedAssetFile] = useState<File | null>(null);
   const [assetUploadInput, setAssetUploadInput] = useState({
-    name: '',
     category: 'Logo',
     rightsBasis: 'Owner Upload',
     permittedUse: 'All Media'
@@ -145,10 +216,10 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
   const [conflictResolvedSelection, setConflictResolvedSelection] = useState<string>('Real Estate');
 
   // STEP 4 State: Candidate Dossier
-  const [candidates, setCandidates] = useState<any[]>([]);
+  const [candidates, setCandidates] = useState<UiCandidate[]>([]);
   const [readinessScore, setReadinessScore] = useState<number>(78);
   const [basisBreakdown, setBasisBreakdown] = useState<any>({ identity: 80, visuals: 70, copy: 80, proof: 80 });
-  const [dossierFilter, setDossierFilter] = useState<'all' | 'approved' | 'rejected' | 'conflicts' | 'low-confidence'>('all');
+  const [dossierFilter, setDossierFilter] = useState<'all' | 'approved' | 'rejected' | 'conflict' | 'low-confidence'>('all');
   const [activeCandidateSection, setActiveCandidateSection] = useState<string>('identity');
   const [selectedCandidateForEvidence, setSelectedCandidateForEvidence] = useState<any | null>(null);
   const [expandedEvidenceIds, setExpandedEvidenceIds] = useState<Record<string, boolean>>({});
@@ -216,12 +287,31 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     version: string | null;
   }>({ submitted: false, timestamp: null, hash: null, version: null });
 
+  const ensureDemoSession = async () => {
+    if (apiContext.workspaceId.trim() && apiContext.authToken.trim()) {
+      return apiContext;
+    }
+    const response = await fetch('/api/brand-extract/demo-session', { method: 'POST' });
+    const body = await response.json();
+    if (!response.ok || !body?.workspaceId || !body?.authToken) {
+      setApiContext(prev => ({ ...prev, source: 'manual' }));
+      throw new Error(body?.detail || 'Could not create a local demo API session.');
+    }
+    const nextContext = {
+      workspaceId: body.workspaceId,
+      authToken: body.authToken,
+      source: 'local-demo'
+    };
+    setApiContext(nextContext);
+    return nextContext;
+  };
+
   // Load Brand Onboarding Context on start / change
   useEffect(() => {
     setOnboardingForm({
-      brandName: activeBrand.name,
-      websiteUrl: activeBrand.url,
-      industry: activeBrand.niche,
+      brandName: activeBrand.name || '',
+      websiteUrl: activeBrand.url || '',
+      industry: activeBrand.niche || 'Real Estate',
       videoGoal: 'Drive high-conversion visual leads through kinetic social video storytelling.',
       primaryMarket: 'India',
       language: 'en-IN',
@@ -229,7 +319,8 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     });
     setSetupForm(prev => ({
       ...prev,
-      websiteUrl: activeBrand.url.startsWith('http') ? activeBrand.url : `https://${activeBrand.url}`
+      websiteUrl: activeBrand.url ? normalizeUrlInput(activeBrand.url) : '',
+      brandType: activeBrand.niche || 'Real Estate'
     }));
     setOnboardingSaved(false);
     setCurrentStep(1);
@@ -240,67 +331,76 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     setApprovalStatus({ submitted: false, timestamp: null, hash: null, version: null });
   }, [activeBrand]);
 
-  // Load context from real API if available
   useEffect(() => {
-    async function fetchOnboarding() {
+    let cancelled = false;
+    async function bootstrapDemoSession() {
       try {
-        const res = await fetch(`/api/onboarding/brand-context/${activeBrand.id}`);
-        const json = await res.json();
-        if (json.success && json.data?.brandName) {
-          setOnboardingForm(json.data);
-          setOnboardingSaved(true);
+        const nextContext = await ensureDemoSession();
+        if (cancelled) return;
+        setApiContext(nextContext);
+      } catch {
+        if (!cancelled) {
+          setApiContext(prev => ({ ...prev, source: 'manual' }));
         }
-      } catch (err) {
-        setServerConnected(false);
       }
     }
-    fetchOnboarding();
-  }, [activeBrand.id]);
+    if (!apiContext.workspaceId && !apiContext.authToken && apiContext.source === 'pending') {
+      bootstrapDemoSession();
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [apiContext.authToken, apiContext.source, apiContext.workspaceId]);
 
   // Handle Save Onboarding Brand Context
   const handleSaveOnboarding = async () => {
-    setLoading(true);
     setApiError(null);
-    try {
-      const res = await fetch(`/api/onboarding/brand-context/${activeBrand.id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(onboardingForm)
-      });
-      const json = await res.json();
-      if (json.success) {
-        setOnboardingSaved(true);
-        // Pre-fill setup form website
-        setSetupForm(prev => ({
-          ...prev,
-          websiteUrl: onboardingForm.websiteUrl.startsWith('http') ? onboardingForm.websiteUrl : `https://${onboardingForm.websiteUrl}`
-        }));
-        setCurrentStep(2); // advance to Crawl Setup
-      } else {
-        setApiError(json.error || 'Failed to save onboarding context.');
-      }
-    } catch (err) {
-      // Offline fallback
-      setOnboardingSaved(true);
-      setSetupForm(prev => ({
-        ...prev,
-        websiteUrl: onboardingForm.websiteUrl.startsWith('http') ? onboardingForm.websiteUrl : `https://${onboardingForm.websiteUrl}`
-      }));
-      setCurrentStep(2);
-    } finally {
-      setLoading(false);
+    const brandName = onboardingForm.brandName.trim();
+    const urlError = validatePublicUrl(onboardingForm.websiteUrl);
+    if (!brandName) {
+      setApiError('Brand name is required.');
+      return;
     }
+    if (!INDUSTRY_OPTIONS.includes(onboardingForm.industry)) {
+      setApiError('Select a supported industry or niche.');
+      return;
+    }
+    if (urlError) {
+      setApiError(urlError);
+      return;
+    }
+    setLoading(true);
+    try {
+      await ensureDemoSession();
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Could not create a local demo API session.');
+      setLoading(false);
+      return;
+    }
+    setOnboardingSaved(true);
+    setSetupForm(prev => ({
+      ...prev,
+      websiteUrl: normalizeUrlInput(onboardingForm.websiteUrl),
+      brandType: onboardingForm.industry
+    }));
+    setSelectedVertical(onboardingForm.industry);
+    setCurrentStep(2);
+    setLoading(false);
   };
 
   // Crawl Setup path list controls
   const handleAddPrefix = () => {
-    if (newPrefix && newPrefix.startsWith('/') && !setupForm.pathPrefixes.includes(newPrefix)) {
-      setSetupForm(prev => ({
-        ...prev,
-        pathPrefixes: [...prev.pathPrefixes, newPrefix]
-      }));
-      setNewPrefix('');
+    setApiError(null);
+    const normalized = normalizePathPrefix(newPrefix);
+    if (!normalized) {
+      setApiError('Path prefixes must start with /. Enter /all to allow all pages.');
+      return;
     }
+    setSetupForm(prev => ({
+      ...prev,
+      pathPrefixes: normalized === '/' ? ['/'] : [...prev.pathPrefixes.filter(p => p !== '/'), normalized]
+    }));
+    setNewPrefix('');
   };
 
   const handleRemovePrefix = (prefix: string) => {
@@ -310,38 +410,93 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     }));
   };
 
-  // Add upload asset with rights metadata
-  const handleAddAsset = () => {
-    if (!assetUploadInput.name) return;
-    const newAsset = {
-      id: 'art_' + Math.random().toString(36).substring(2, 9),
-      name: assetUploadInput.name,
-      category: assetUploadInput.category,
-      rightsBasis: assetUploadInput.rightsBasis,
-      permittedUse: assetUploadInput.permittedUse,
-      status: 'scanning' as const
-    };
-    
+  // Upload asset with rights metadata through the backend artifact contract.
+  const handleAddAsset = async () => {
+    setApiError(null);
+    if (!selectedAssetFile) {
+      setApiError('Choose an asset file to upload.');
+      return;
+    }
+    const file = selectedAssetFile;
+    if (!apiContext.workspaceId.trim() || !apiContext.authToken.trim()) {
+      setApiError('Workspace ID and API bearer token are required before uploading assets.');
+      return;
+    }
+    if (!assetUploadInput.rightsBasis.trim() || !assetUploadInput.permittedUse.trim()) {
+      setApiError('Each asset needs a rights basis and permitted use.');
+      return;
+    }
+
+    const client = await createGeneratedWorkflowClient({
+      baseUrl: '/api/v0',
+      authToken: apiContext.authToken.trim()
+    });
+    const sha256 = await sha256File(file);
+    const localId = `upload-${file.name}-${file.size}`;
+
     setSetupForm(prev => ({
       ...prev,
-      assets: [...prev.assets, newAsset]
+      assets: [
+        ...prev.assets,
+        {
+          id: localId,
+          artifactId: '',
+          name: file.name,
+          category: assetUploadInput.category,
+          rightsBasis: assetUploadInput.rightsBasis.trim(),
+          permittedUse: assetUploadInput.permittedUse.trim(),
+          status: 'uploading'
+        }
+      ]
     }));
 
-    // Reset upload inputs
-    setAssetUploadInput({
-      name: '',
-      category: 'Logo',
-      rightsBasis: 'Owner Upload',
-      permittedUse: 'All Media'
-    });
-
-    // Simulate scanning/clean lifecycle for high fidelity feedback
-    setTimeout(() => {
+    try {
+      const initiated = await client.initiateBrandAssetUpload(
+        {
+          workspaceId: apiContext.workspaceId.trim(),
+          fileName: file.name,
+          contentType: file.type || 'application/octet-stream',
+          byteSize: file.size,
+          sha256
+        },
+        { idempotencyKey: makeIdempotencyKey('brand-asset-upload') }
+      );
+      const initiatedBody = initiated.body as any;
+      if (initiated.status >= 400 || !initiatedBody?.artifact?.id) {
+        throw new Error(initiatedBody?.detail || initiatedBody?.title || 'Asset upload initiation failed.');
+      }
+      const artifactId = initiatedBody.artifact.id;
+      const completed = await client.completeBrandAssetUpload(artifactId, {
+        workspaceId: apiContext.workspaceId.trim(),
+        byteSize: file.size,
+        sha256
+      });
+      const completedBody = completed.body as any;
+      if (completed.status >= 400 || completedBody?.artifact?.status !== 'CLEAN') {
+        throw new Error(completedBody?.detail || completedBody?.title || 'Asset upload completion failed.');
+      }
       setSetupForm(prev => ({
         ...prev,
-        assets: prev.assets.map(a => a.id === newAsset.id ? { ...a, status: 'clean' } : a)
+        assets: prev.assets.map(asset =>
+          asset.id === localId ? { ...asset, artifactId, status: 'clean' } : asset
+        )
       }));
-    }, 2000);
+      setSelectedAssetFile(null);
+      setAssetUploadInput({
+        category: 'Logo',
+        rightsBasis: 'Owner Upload',
+        permittedUse: 'All Media'
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Asset upload failed.';
+      setSetupForm(prev => ({
+        ...prev,
+        assets: prev.assets.map(asset =>
+          asset.id === localId ? { ...asset, status: 'failed', error: message } : asset
+        )
+      }));
+      setApiError(message);
+    }
   };
 
   const handleRemoveAsset = (id: string) => {
@@ -353,46 +508,86 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
   // Submit brand crawl run
   const handleStartCrawl = async () => {
-    setLoading(true);
     setApiError(null);
+    const urlError = validatePublicUrl(setupForm.websiteUrl);
+    if (!apiContext.workspaceId.trim() || !apiContext.authToken.trim()) {
+      setApiError('Workspace ID and API bearer token are required to start a backend crawl.');
+      return;
+    }
+    if (urlError) {
+      setApiError(urlError);
+      return;
+    }
+    if (!setupForm.rightsAcknowledged) {
+      setApiError('Acknowledge crawl and lineage rights before starting.');
+      return;
+    }
+    if (setupForm.pathPrefixes.length === 0) {
+      setApiError('At least one path prefix is required. Enter /all to allow all pages.');
+      return;
+    }
+    const failedAsset = setupForm.assets.find(asset => asset.status !== 'clean');
+    if (failedAsset) {
+      setApiError('Only clean uploaded assets can be attached to a crawl run.');
+      return;
+    }
+    setLoading(true);
     setSelectedVertical(setupForm.brandType);
 
     const payload = {
+      workspaceId: apiContext.workspaceId.trim(),
       websiteUrl: setupForm.websiteUrl,
       rightsAcknowledged: setupForm.rightsAcknowledged,
-      brandType: setupForm.brandType,
+      brandType: toBackendBrandType(setupForm.brandType),
       crawlScope: {
         maxPages: setupForm.maxPages,
         permittedPathPrefixes: setupForm.pathPrefixes
       },
       assets: setupForm.assets.filter(a => a.status === 'clean').map(a => ({
-        artifactId: a.id,
+        artifactId: a.artifactId,
         rightsBasis: a.rightsBasis,
         permittedUse: a.permittedUse
-      })),
-      brandId: activeBrand.id
+      }))
     };
 
     try {
-      const res = await fetch('/api/brand-crawl-run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+      const client = await createGeneratedWorkflowClient({
+        baseUrl: '/api/v0',
+        authToken: apiContext.authToken.trim()
       });
-      const json = await res.json();
-      if (json.success) {
-        setCrawlRunId(json.runId);
-        setCurrentStep(3); // Advance to Live Scan Console
-        startPollingCrawl(json.runId);
+      const response = await client.createBrandCrawlRun(payload, {
+        idempotencyKey: makeIdempotencyKey('brand-crawl-run')
+      });
+      const body = response.body as any;
+      const createdRunId = body?.crawlRun?.id;
+      if (createdRunId) {
+        if (apiContext.source === 'local-demo' && body?.job?.id) {
+          const demoCompletion = await fetch('/api/brand-extract/demo-complete-crawl', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              workspaceId: apiContext.workspaceId.trim(),
+              jobId: body.job.id,
+              websiteUrl: setupForm.websiteUrl,
+              brandName: onboardingForm.brandName,
+              industry: setupForm.brandType
+            })
+          });
+          if (!demoCompletion.ok) {
+            const demoBody = await demoCompletion.json().catch(() => ({}));
+            throw new Error(demoBody?.detail || 'Local demo crawl completion failed.');
+          }
+        }
+        const adapted = adaptBrandCrawlRunResponse(body);
+        setCrawlRun(adapted);
+        setCrawlRunId(createdRunId);
+        setCurrentStep(3);
+        startPollingCrawl(createdRunId);
       } else {
-        setApiError(json.error || 'Failed to trigger crawl run.');
+        setApiError(body?.detail || body?.title || 'Failed to trigger crawl run.');
       }
-    } catch (err) {
-      // Sandbox mock fallback
-      const mockRunId = 'crawl_local_99';
-      setCrawlRunId(mockRunId);
-      setCurrentStep(3);
-      startPollingCrawl(mockRunId);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Failed to trigger crawl run.');
     } finally {
       setLoading(false);
     }
@@ -402,106 +597,44 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
   const startPollingCrawl = (runId: string) => {
     let interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/brand-crawl-run/${runId}`);
-        const json = await res.json();
-        if (json.success) {
-          const run = json.data;
-          setCrawlRun(run);
-          if (run.status === 'ready') {
-            clearInterval(interval);
-            setDetectedVertical(run.detectedBrandType || setupForm.brandType);
-            setCandidates(run.candidates || []);
-            setAssetPack(run.assetPack || []);
-            setReadinessScore(run.readinessScore || 85);
-            setBasisBreakdown(run.basisBreakdown || { identity: 90, visuals: 80, copy: 90, proof: 85 });
-            
-            // Auto resolve conflict choice if matching
-            if ((run.detectedBrandType || setupForm.brandType) === setupForm.brandType) {
-              setVerticalConflictResolved(true);
-              setConflictResolvedSelection(setupForm.brandType);
-            } else {
-              setVerticalConflictResolved(false);
-              setConflictResolvedSelection(setupForm.brandType);
-            }
-          } else if (run.status === 'failed') {
-            clearInterval(interval);
-            setApiError('Crawl process returned a failure status.');
-          }
+        const client = await createGeneratedWorkflowClient({
+          baseUrl: '/api/v0',
+          authToken: apiContext.authToken.trim()
+        });
+        const response = await client.getBrandCrawlRun(runId);
+        const body = response.body as any;
+        if (response.status >= 400) {
+          clearInterval(interval);
+          setApiError(body?.detail || body?.title || 'Failed to read crawl run status.');
+          return;
         }
-      } catch (err) {
-        // Fallback simulated interval if backend is not polling
+        const adapted = adaptBrandCrawlRunResponse(body);
+        setCrawlRun(adapted);
+        if (adapted.status === 'ready') {
+          clearInterval(interval);
+          setDetectedVertical(adapted.detectedBrandType || setupForm.brandType);
+          setCandidates(adapted.candidates);
+          setAssetPack(adapted.assetPack);
+          setReadinessScore(adapted.readinessScore);
+          setBasisBreakdown(adapted.basisBreakdown);
+          
+          // Auto resolve conflict choice if matching
+          if ((adapted.detectedBrandType || setupForm.brandType) === setupForm.brandType) {
+            setVerticalConflictResolved(true);
+            setConflictResolvedSelection(setupForm.brandType);
+          } else {
+            setVerticalConflictResolved(false);
+            setConflictResolvedSelection(setupForm.brandType);
+          }
+        } else if (adapted.status === 'failed') {
+          clearInterval(interval);
+          setApiError('Crawl process returned a failure status.');
+        }
+      } catch (error) {
         clearInterval(interval);
-        simulateLocalCrawl();
+        setApiError(error instanceof Error ? error.message : 'Failed to poll crawl run.');
       }
     }, 1000);
-  };
-
-  // Local simulated fallback
-  const simulateLocalCrawl = () => {
-    let progress = 0;
-    const historyLogs = [
-      'Homepage scan starting...',
-      'Pass 1: Priority page discovery (/about, /pricing)...',
-      'Pass 2A: Identity & brand naming extraction...',
-      'Pass 2B: Product and service harvesting...',
-      'Pass 3: Image asset discovery & metadata validation...',
-      'Pass 4: Schema formatting and vertical verification...',
-      'Universal and Vertical passes completed.'
-    ];
-
-    let logIdx = 0;
-    const mockInterval = setInterval(() => {
-      progress += 15;
-      if (progress >= 100) {
-        progress = 100;
-        clearInterval(mockInterval);
-        
-        // Populate standard mock data
-        const localCandidates = [
-          { id: 'c-1', field: 'brandName', value: activeBrand.name, section: 'identity', confidence: 98, status: 'approved', evidence: { type: 'web', locator: setupForm.websiteUrl, excerpt: `Brand name: ${activeBrand.name}`, hash: 'sha256:fb01' } },
-          { id: 'c-2', field: 'tagline', value: activeBrand.guidelines[0] || 'A legacy of absolute trust.', section: 'identity', confidence: 95, status: 'approved', evidence: { type: 'web', locator: setupForm.websiteUrl, excerpt: activeBrand.guidelines[0], hash: 'sha256:fb02' } },
-          { id: 'c-3', field: 'colorSwatches', value: JSON.stringify({ primary: activeBrand.primaryColor, secondary: '#1A1813', accent: '#F7F5F0' }), section: 'visual', confidence: 100, status: 'approved', evidence: { type: 'crawler', locator: 'theme-scaper', excerpt: `Detected primary color: ${activeBrand.primaryColor}`, hash: 'sha256:fb03' } }
-        ];
-        const localAssetPack = [
-          { id: 'as-1', category: 'Logos', locator: activeBrand.reviewItem?.thumbnailUrl || 'https://images.unsplash.com/photo-1541701494587-cb58502866ab?w=150&q=80', rightsBasis: 'Trademark Registry', permittedUse: 'Verified Publishing', name: `${activeBrand.name} Brand Mark` }
-        ];
-
-        setCrawlRun({
-          id: 'crawl_local_99',
-          websiteUrl: setupForm.websiteUrl,
-          rightsAcknowledged: true,
-          brandType: setupForm.brandType,
-          status: 'ready',
-          progress: 100,
-          detectedBrandType: activeBrand.id === 'soma' ? 'B2B SaaS' : activeBrand.id === 'vedic' ? 'Heritage Estates' : 'Real Estate',
-          history: historyLogs.map((m, i) => ({ timestamp: new Date().toISOString(), message: m, progress: (i + 1) * 14 }))
-        });
-        setDetectedVertical(activeBrand.id === 'soma' ? 'B2B SaaS' : activeBrand.id === 'vedic' ? 'Heritage Estates' : 'Real Estate');
-        setCandidates(localCandidates);
-        setAssetPack(localAssetPack);
-        setReadinessScore(95);
-        setBasisBreakdown({ identity: 98, visuals: 92, copy: 95, proof: 95 });
-        
-        if (setupForm.brandType === (activeBrand.id === 'soma' ? 'B2B SaaS' : activeBrand.id === 'vedic' ? 'Heritage Estates' : 'Real Estate')) {
-          setVerticalConflictResolved(true);
-        } else {
-          setVerticalConflictResolved(false);
-        }
-      } else {
-        setCrawlRun({
-          id: 'crawl_local_99',
-          websiteUrl: setupForm.websiteUrl,
-          rightsAcknowledged: true,
-          brandType: setupForm.brandType,
-          status: progress > 80 ? 'extracting' : 'crawling',
-          progress,
-          history: historyLogs.slice(0, logIdx + 1).map((m, i) => ({ timestamp: new Date().toISOString(), message: m, progress: (i + 1) * 14 }))
-        });
-        if (progress % 30 === 0) {
-          logIdx++;
-        }
-      }
-    }, 1200);
   };
 
   // Approve/Reject candidates
@@ -525,67 +658,16 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
   // When progressing to step 6, pre-populate the full editable approved brand profile from approved candidates
   useEffect(() => {
     if (currentStep === 6) {
-      const approvedCandidates = candidates.filter(c => c.status === 'approved');
-      
-      const draft = { ...approvalDraft };
-      
-      // Map candidates to complex Brand Profile Structure
-      approvedCandidates.forEach(c => {
-        if (c.field === 'brandName') {
-          draft.name.public = c.value;
-          draft.name.legal = c.value + ' Pvt. Ltd.';
-        }
-        if (c.field === 'tagline') draft.positioning.statement = c.value;
-        if (c.field === 'usp') draft.positioning.proof_points = [c.value];
-        if (c.field === 'colorSwatches') {
-          try {
-            const colors = JSON.parse(c.value);
-            draft.visual_identity.colors = [
-              { role: 'Primary Brand Color', value: colors.primary || '#D4AF37', usage: 'Use on primary buttons and visual highlights.', prohibited: 'Do not overlay on high-frequency patterns.' },
-              { role: 'Secondary Contrast Color', value: colors.secondary || '#1A1813', usage: 'Primary text backgrounds.', prohibited: 'Do not use as text color on dark cards.' },
-              { role: 'Accent Highlights', value: colors.accent || '#F7F5F0', usage: 'Card borders and borders.', prohibited: 'Avoid massive blocks of fill.' }
-            ];
-            draft.visual_identity.logos = [colors.primary, colors.secondary];
-          } catch (e) {
-            draft.visual_identity.logos = [c.value];
-          }
-        }
-        if (c.field === 'typography') {
-          try {
-            const fonts = JSON.parse(c.value);
-            draft.visual_identity.fonts = fonts;
-          } catch (e) {}
-        }
-        if (c.field === 'ctaButton') draft.calls_to_action = [c.value];
-        if (c.field === 'toneSignals') draft.voice.attributes = c.value.split(',').map((s: string) => s.trim());
-        if (c.field === 'testimonials') draft.positioning.proof_points.push(c.value);
-        if (c.field === 'products_or_services') {
-          draft.products = [{ title: c.value, description: 'Harvested directly from brand landing nodes.', pricing: 'Premium Quotation Only' }];
-        }
-        if (c.field === 'pricingSummary') draft.offers = [c.value];
-        if (c.field === 'reraNumbers') {
-          draft.claims.push({
-            statement: `Registered with RERA regulatory authority under ID: ${c.value}`,
-            status: 'approved',
-            evidence_artifact: 'RERA Registration footer block',
-            required_disclaimer: 'Subject to Maharashtra state regulation laws.',
-            allowed_channels: ['Digital Video', 'Print Media']
-          });
-        }
-        if (c.field === 'audienceCandidates') {
-          draft.audiences = [{ name: c.value, needs: 'High fidelity status, uncompromised lineage and luxury.', objections: 'Budget constraints, timeline delivery.' }];
-        }
+      const draft = buildApprovalDraftFromCandidates(candidates, approvalDraft, {
+        selectedBrandType: selectedVertical,
+        detectedBrandType: detectedVertical,
+        extractionSchemaVersion: crawlRun?.extractionSchemaVersion ?? 'unknown',
+        crawlRunId
       });
 
       // Populate rules
       draft.rules.required_phrases = [activeBrand.guidelines[3] || 'Legacy of quiet luxury.'];
       draft.rules.prohibited_phrases = ['Cheap EMI', 'Flash Sale', 'Broker-free discount'];
-
-      // Populate source summary
-      draft.source_summary.selected_brand_type = selectedVertical;
-      draft.source_summary.detected_brand_type = detectedVertical || '';
-      draft.source_summary.conflict_flag = selectedVertical !== detectedVertical;
-      draft.source_summary.crawl_run_ref = crawlRunId || 'simulated';
 
       setApprovalDraft(draft);
     }
@@ -604,7 +686,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     const payload = {
       ...approvalDraft,
       version: approvalDraft.version,
-      approvedBy: 'Client Manager (' + (onboardingForm.brandName || activeBrand.name) + ' Host)',
+      approvedBy: 'Client Manager (' + onboardingForm.brandName.trim() + ' Host)',
       timestamp: new Date().toISOString()
     };
 
@@ -645,33 +727,8 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
       } else {
         setApiError(json.error || 'Failed to submit final profile approval.');
       }
-    } catch (err) {
-      // Sandbox simulated success
-      const simulatedHash = 'sha256:' + Math.random().toString(36).substring(2, 10) + 'dec';
-      setApprovalStatus({
-        submitted: true,
-        timestamp: new Date().toISOString(),
-        hash: simulatedHash,
-        version: '1.0.0'
-      });
-      
-      onUpdateBrandData({
-        ...activeBrand,
-        name: approvalDraft.name.public,
-        guidelines: [
-          ...approvalDraft.rules.required_phrases,
-          ...approvalDraft.rules.prohibited_phrases.map((p: string) => `PROHIBITED: Do not use "${p}"`)
-        ],
-        reviewItem: {
-          version: 'v1.0.0 (Approved)',
-          thumbnailUrl: activeBrand.reviewItem.thumbnailUrl,
-          comments: [
-            { user: 'Forge System (Sandbox)', text: 'Brand profile approved. Synchronized with Sandbox ledger.', time: 'Just now' }
-          ],
-          status: 'Approved',
-          hash: simulatedHash
-        }
-      });
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Failed to submit final profile approval.');
     } finally {
       setLoading(false);
     }
@@ -698,7 +755,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
             </span>
           </div>
           <h2 className="text-2xl font-display font-medium text-white tracking-tight">
-            Configure Brand Truth: <span style={{ color: activeBrand.primaryColor }}>{onboardingForm.brandName || activeBrand.name}</span>
+            Configure Brand Truth: <span style={{ color: activeBrand.primaryColor }}>{onboardingForm.brandName.trim() || 'Unspecified brand'}</span>
           </h2>
         </div>
 
@@ -789,6 +846,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                   <div>
                     <label className="block text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">Brand Name</label>
                     <input
+                      data-testid="brand-name-input"
                       type="text"
                       required
                       placeholder="e.g., Aura Luxury Estates"
@@ -801,6 +859,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                   <div>
                     <label className="block text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">Website Root URL</label>
                     <input
+                      data-testid="website-url-input"
                       type="text"
                       placeholder="e.g., auraestates.in"
                       value={onboardingForm.websiteUrl}
@@ -811,13 +870,16 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
                   <div>
                     <label className="block text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">Industry / Niche</label>
-                    <input
-                      type="text"
-                      placeholder="e.g., Ultra-Luxury Seaside Villas"
+                    <select
+                      data-testid="industry-select"
                       value={onboardingForm.industry}
                       onChange={(e) => setOnboardingForm(prev => ({ ...prev, industry: e.target.value }))}
                       className="w-full rounded-lg border border-white/10 bg-zinc-900/60 px-4 py-2.5 text-white placeholder-zinc-500 outline-none focus:border-white/20 transition-all font-sans"
-                    />
+                    >
+                      {INDUSTRY_OPTIONS.map(industry => (
+                        <option key={industry} value={industry}>{industry}</option>
+                      ))}
+                    </select>
                   </div>
 
                   <div>
@@ -839,12 +901,42 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                       className="w-full rounded-lg border border-white/10 bg-zinc-900/60 px-4 py-2.5 text-white placeholder-zinc-500 outline-none focus:border-white/20 transition-all font-sans resize-none"
                     />
                   </div>
+
+                  <div>
+                    <label className="block text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">Workspace ID</label>
+                    <input
+                      data-testid="workspace-id-input"
+                      type="text"
+                      placeholder="Backend workspace UUID"
+                      value={apiContext.workspaceId}
+                      onChange={(e) => setApiContext(prev => ({ ...prev, workspaceId: e.target.value, source: 'manual' }))}
+                      className="w-full rounded-lg border border-white/10 bg-zinc-900/60 px-4 py-2.5 text-white placeholder-zinc-500 outline-none focus:border-white/20 transition-all font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">API Bearer Token</label>
+                    <input
+                      data-testid="api-token-input"
+                      type="password"
+                      placeholder="Supabase/V0 bearer token"
+                      value={apiContext.authToken}
+                      onChange={(e) => setApiContext(prev => ({ ...prev, authToken: e.target.value, source: 'manual' }))}
+                      className="w-full rounded-lg border border-white/10 bg-zinc-900/60 px-4 py-2.5 text-white placeholder-zinc-500 outline-none focus:border-white/20 transition-all font-mono"
+                    />
+                  </div>
+                  {apiContext.source === 'local-demo' && (
+                    <div className="md:col-span-2 rounded-lg border border-emerald-500/15 bg-emerald-500/5 px-4 py-2 text-[10px] font-mono text-emerald-300">
+                      Local demo API context is ready. This workspace and token are generated for this browser session.
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex justify-end pt-4">
                   <button
+                    data-testid="save-brand-context-button"
                     onClick={handleSaveOnboarding}
-                    disabled={loading || !onboardingForm.brandName}
+                    disabled={loading}
                     className="px-5 py-2.5 rounded-lg text-xs font-mono tracking-wider uppercase font-semibold text-black transition-all hover:opacity-90 active:scale-95 flex items-center gap-1.5"
                     style={{ backgroundColor: activeBrand.primaryColor }}
                   >
@@ -877,6 +969,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                     <div>
                       <label className="block text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">Website Crawl URL (Required)</label>
                       <input
+                        data-testid="crawl-website-url-input"
                         type="url"
                         required
                         placeholder="https://auraestates.in"
@@ -921,13 +1014,15 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                       <label className="block text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1.5">Permitted Path Prefixes</label>
                       <div className="flex gap-2">
                         <input
+                          data-testid="path-prefix-input"
                           type="text"
-                          placeholder="e.g., /about"
+                          placeholder="e.g., /about or /all"
                           value={newPrefix}
                           onChange={(e) => setNewPrefix(e.target.value)}
                           className="flex-1 rounded-lg border border-white/10 bg-zinc-900/60 px-3 py-2 text-white outline-none"
                         />
                         <button
+                          data-testid="add-path-prefix-button"
                           onClick={handleAddPrefix}
                           className="px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white font-mono flex items-center justify-center border border-white/5"
                         >
@@ -954,11 +1049,9 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                       <div className="bg-zinc-950/60 border border-dashed border-white/10 rounded-xl p-4 text-center space-y-3">
                         <div className="grid grid-cols-2 gap-2 text-left">
                           <input
-                            type="text"
-                            placeholder="File name (e.g., logo-crest)"
-                            value={assetUploadInput.name}
-                            onChange={(e) => setAssetUploadInput(prev => ({ ...prev, name: e.target.value }))}
-                            className="w-full rounded border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-[10px] outline-none"
+                            type="file"
+                            onChange={(e) => setSelectedAssetFile(e.target.files?.[0] ?? null)}
+                            className="col-span-2 w-full rounded border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-[10px] text-zinc-300 file:mr-3 file:rounded file:border-0 file:bg-white/10 file:px-2 file:py-1 file:text-[10px] file:text-white"
                           />
                           <select
                             value={assetUploadInput.category}
@@ -993,10 +1086,10 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
                         <button
                           onClick={handleAddAsset}
-                          disabled={!assetUploadInput.name}
-                          className="w-full py-1.5 rounded bg-white/10 hover:bg-white/15 text-[10px] font-mono uppercase tracking-wider text-white border border-white/5 flex items-center justify-center gap-1.5"
+                          disabled={loading || !selectedAssetFile}
+                          className="w-full py-1.5 rounded bg-white/10 hover:bg-white/15 text-[10px] font-mono uppercase tracking-wider text-white border border-white/5 flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
-                          <Plus className="h-3 w-3" /> Incorporate Asset guidelines
+                          <UploadCloud className="h-3 w-3" /> Upload approved asset
                         </button>
                       </div>
                     </div>
@@ -1013,10 +1106,15 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                               <div>
                                 <p className="text-white font-medium">{a.name} <span className="text-[8px] text-zinc-500">[{a.category}]</span></p>
                                 <p className="text-[8px] text-zinc-400 mt-0.5">{a.rightsBasis} // {a.permittedUse}</p>
+                                {a.error && <p className="text-[8px] text-red-400 mt-0.5">{a.error}</p>}
                               </div>
                               <div className="flex items-center gap-2">
                                 <span className={`text-[8px] px-1.5 py-0.5 rounded border uppercase ${
-                                  a.status === 'clean' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-amber-500/10 border-amber-500/20 text-amber-400 animate-pulse'
+                                  a.status === 'clean'
+                                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                                    : a.status === 'failed'
+                                    ? 'bg-red-500/10 border-red-500/20 text-red-400'
+                                    : 'bg-amber-500/10 border-amber-500/20 text-amber-400 animate-pulse'
                                 }`}>
                                   {a.status}
                                 </span>
@@ -1035,6 +1133,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                 {/* Rights checkbox */}
                 <div className="p-4 rounded-xl border border-white/5 bg-zinc-950/60 flex items-start gap-3">
                   <input
+                    data-testid="rights-acknowledgement"
                     type="checkbox"
                     id="rights-acknowledgement"
                     checked={setupForm.rightsAcknowledged}
@@ -1060,6 +1159,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                     Back
                   </button>
                   <button
+                    data-testid="start-brand-crawl-button"
                     onClick={handleStartCrawl}
                     disabled={loading || !setupForm.websiteUrl || !setupForm.rightsAcknowledged}
                     className="px-6 py-2.5 rounded-lg text-xs font-mono tracking-wider uppercase font-semibold text-black transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1.5 shadow"
@@ -1099,7 +1199,11 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
                       <div className="flex justify-between items-center text-[10px] text-zinc-400">
                         <span>CRAWLING NODES: <span className="text-white">{crawlRun.websiteUrl}</span></span>
-                        <span className="uppercase text-amber-400" style={{ color: crawlRun.status === 'ready' ? '#34d399' : activeBrand.primaryColor }}>
+                        <span
+                          data-testid="crawl-run-status"
+                          className="uppercase text-amber-400"
+                          style={{ color: crawlRun.status === 'ready' ? '#34d399' : activeBrand.primaryColor }}
+                        >
                           {crawlRun.status}...
                         </span>
                       </div>
@@ -1201,6 +1305,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                     Back
                   </button>
                   <button
+                    data-testid="review-dossier-button"
                     onClick={() => setCurrentStep(4)}
                     disabled={!crawlRun || crawlRun.status !== 'ready' || !verticalConflictResolved}
                     className="px-6 py-2.5 rounded-lg text-xs font-mono tracking-wider uppercase font-semibold text-black transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1.5"
@@ -1264,6 +1369,8 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                       { id: 'offers', name: 'Offers & Pricing', count: candidates.filter(c => c.section === 'offers').length },
                       { id: 'compliance', name: 'Compliance', count: candidates.filter(c => c.section === 'compliance').length },
                       { id: 'audiences', name: 'Audiences', count: candidates.filter(c => c.section === 'audiences').length },
+                      { id: 'social', name: 'Publishing Social', count: candidates.filter(c => c.section === 'social').length },
+                      { id: 'metadata', name: 'Metadata & Conflict', count: candidates.filter(c => c.section === 'metadata').length },
                       { id: 'missing', name: 'Missing Assets', count: candidates.filter(c => c.section === 'missing').length }
                     ].map(sec => (
                       <button
@@ -1291,7 +1398,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                       
                       {/* Filter tabs */}
                       <div className="flex gap-1 bg-black/40 p-1 rounded font-mono text-[9px]">
-                        {(['all', 'approved', 'rejected'] as const).map(tab => (
+                        {(['all', 'approved', 'rejected', 'conflict', 'low-confidence'] as const).map(tab => (
                           <button
                             key={tab}
                             onClick={() => setDossierFilter(tab)}
@@ -1320,6 +1427,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                           .map((cand) => {
                             const isApproved = cand.status === 'approved';
                             const isRejected = cand.status === 'rejected';
+                            const isConflict = cand.status === 'conflict';
                             const isExpanded = expandedEvidenceIds[cand.id];
 
                             return (
@@ -1330,6 +1438,8 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                                     ? 'border-emerald-500/20 bg-emerald-500/2'
                                     : isRejected
                                     ? 'border-red-500/10 bg-red-500/1 opacity-55'
+                                    : isConflict
+                                    ? 'border-amber-500/20 bg-amber-500/5'
                                     : 'border-white/5 bg-white/2'
                                 }`}
                               >
@@ -1340,6 +1450,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                                     </span>
                                     <span className="text-[9px] font-mono text-zinc-500 pl-2">
                                       Confidence: <span className={cand.confidence > 90 ? 'text-emerald-400' : 'text-amber-400'}>{cand.confidence}%</span>
+                                      {cand.conflict && <span className="pl-2 text-amber-400">Conflict retained</span>}
                                     </span>
                                   </div>
 
@@ -1364,28 +1475,30 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                                 </div>
 
                                 <div className="text-left font-sans">
-                                  {cand.field === 'colorSwatches' ? (
+                                  {cand.fieldType === 'visual_identity' && typeof cand.value === 'object' && cand.value !== null && (cand.value as any).colors ? (
                                     <div className="flex gap-2">
-                                      {Object.entries(JSON.parse(cand.value)).map(([role, hex]: any) => (
+                                      {Object.entries((cand.value as any).colors).filter(([, hex]) => Boolean(hex)).map(([role, hex]: any) => (
                                         <div key={role} className="flex items-center gap-1.5 bg-zinc-900/60 p-1 px-2 border border-white/5 rounded">
                                           <div className="h-3 w-3 rounded-sm border border-white/20" style={{ backgroundColor: hex }} />
                                           <span className="text-[10px] font-mono text-zinc-300 uppercase">{role}: {hex}</span>
                                         </div>
                                       ))}
                                     </div>
-                                  ) : cand.field === 'mediaAssets' ? (
+                                  ) : cand.fieldType === 'rights_asset' && typeof cand.value === 'object' && cand.value !== null ? (
                                     <div className="grid grid-cols-3 gap-2">
-                                      {JSON.parse(cand.value).map((img: any, i: number) => (
-                                        <div key={i} className="relative rounded overflow-hidden border border-white/10 group">
-                                          <img src={img.locator} alt={img.category} className="h-14 w-full object-cover" referrerPolicy="no-referrer" />
+                                      {[cand.value as any].map((img: any, i: number) => (
+                                        <div key={i} className="relative rounded overflow-hidden border border-white/10 group bg-zinc-950">
+                                          <img src={img.locator} alt={img.type ?? 'Brand asset'} className="h-14 w-full object-cover" referrerPolicy="no-referrer" />
                                           <div className="absolute inset-0 bg-black/40 flex items-end p-1">
-                                            <span className="text-[8px] font-mono text-white truncate">{img.category}</span>
+                                            <span className="text-[8px] font-mono text-white truncate">{img.type ?? 'Asset'}</span>
                                           </div>
                                         </div>
                                       ))}
                                     </div>
+                                  ) : typeof cand.value === 'object' && cand.value !== null ? (
+                                    <pre className="text-[10px] text-white leading-relaxed whitespace-pre-wrap select-all bg-black/30 border border-white/5 rounded-lg p-2 max-h-40 overflow-auto">{cand.displayValue}</pre>
                                   ) : (
-                                    <p className="text-xs text-white leading-relaxed select-all">"{cand.value}"</p>
+                                    <p className="text-xs text-white leading-relaxed select-all">"{cand.displayValue}"</p>
                                   )}
                                 </div>
 
@@ -1405,9 +1518,11 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                                       animate={{ opacity: 1, height: 'auto' }}
                                       className="bg-black/50 p-2.5 rounded border border-white/5 space-y-1 text-[9px] leading-relaxed text-zinc-400"
                                     >
-                                      <p>• <span className="text-zinc-500 uppercase">Locator Node:</span> <span className="text-zinc-300 select-all">{cand.evidence.locator}</span></p>
-                                      <p>• <span className="text-zinc-500 uppercase">Excerpt Block:</span> <span className="text-zinc-300 italic">"{cand.evidence.excerpt}"</span></p>
-                                      <p>• <span className="text-zinc-500 uppercase">Cryptographic Hash:</span> <span className="text-zinc-500 select-all">{cand.evidence.hash}</span></p>
+                                      <p>• <span className="text-zinc-500 uppercase">Source type:</span> <span className="text-zinc-300">{cand.evidence.type}</span></p>
+                                      <p>• <span className="text-zinc-500 uppercase">Locator node:</span> <span className="text-zinc-300 select-all">{cand.evidence.locator}</span></p>
+                                      <p>• <span className="text-zinc-500 uppercase">Excerpt block:</span> <span className="text-zinc-300 italic">"{cand.evidence.excerpt}"</span></p>
+                                      <p>• <span className="text-zinc-500 uppercase">Evidence hash:</span> <span className="text-zinc-500 select-all">{cand.evidence.hash}</span></p>
+                                      {cand.evidence.observedAt && <p>• <span className="text-zinc-500 uppercase">Observed at:</span> <span className="text-zinc-300">{cand.evidence.observedAt}</span></p>}
                                     </motion.div>
                                   )}
                                 </div>
@@ -1928,6 +2043,9 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                       <p>• progress_weight: <span className="text-white">{crawlRun.progress}%</span></p>
                       <p>• detected_schema: <span className="text-white">{detectedVertical || 'Awaiting pass...'}</span></p>
                       <p>• vertical_conflict: <span className="text-white">{selectedVertical !== detectedVertical ? 'TRUE_WARN' : 'FALSE_OK'}</span></p>
+                      <p>• provider_credit_estimate: <span className="text-white">{crawlRun.providerCreditTelemetry?.estimatedCredits ?? 'unknown'}</span></p>
+                      <p>• provider_credit_observed: <span className="text-white">{crawlRun.providerCreditTelemetry?.observedCredits ?? 'pending'}</span></p>
+                      <p>• extraction_schema: <span className="text-white">{crawlRun.extractionSchemaVersion ?? 'unknown'}</span></p>
                     </div>
                   </div>
                 )}

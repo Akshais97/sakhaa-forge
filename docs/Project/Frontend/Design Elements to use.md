@@ -1,0 +1,1 @@
+https://motion.dev/examples/react-curtains-blinds to use when the page shows results in Brands section and other section, a proper curtain effect., 

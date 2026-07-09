@@ -1,12 +1,14 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+const LOCAL_DEV_JWT_SECRET = "local-dev-supabase-jwt-secret";
+
 export function authenticateRequest(headers, env) {
   const authorization = headers.authorization ?? headers.Authorization;
   if (!authorization?.startsWith("Bearer ")) {
     return { ok: false, problem: authProblem("AUTH_REQUIRED", 401, "Auth required", "Sign in to continue.") };
   }
 
-  const secret = env.SUPABASE_JWT_SECRET;
+  const secret = env.SUPABASE_JWT_SECRET || localDevJwtSecret(env);
   if (!secret) {
     return { ok: false, problem: authProblem("AUTH_TOKEN_INVALID", 401, "Auth token invalid", "Your session is not valid. Sign in again.") };
   }
@@ -24,6 +26,11 @@ export function authenticateRequest(headers, env) {
       email: payload.email ?? null
     }
   };
+}
+
+function localDevJwtSecret(env) {
+  const appEnv = env.APP_ENV ?? "local";
+  return ["local", "dev", "development"].includes(appEnv) ? LOCAL_DEV_JWT_SECRET : null;
 }
 
 function verifyHs256Jwt(token, secret) {

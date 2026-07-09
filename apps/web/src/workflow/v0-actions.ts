@@ -38,7 +38,8 @@ export async function createGeneratedWorkflowClient(options: {
 } = {}): Promise<WorkflowClient> {
   // @ts-ignore generated ESM client has no TypeScript declaration in this repo yet.
   const { V0Client } = await import("../../../../packages/contracts/generated/v0-client.mjs");
-  return new V0Client(options) as WorkflowClient;
+  const boundFetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  return new V0Client({ ...options, fetchImpl: boundFetchImpl }) as WorkflowClient;
 }
 
 export function redactWorkflowResponse(value: unknown): unknown {

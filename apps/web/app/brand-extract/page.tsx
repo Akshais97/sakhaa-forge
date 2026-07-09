@@ -21,7 +21,7 @@ const routeContract = [
 
 export default function BrandExtractPage() {
   return (
-    <div className="h-dvh overflow-y-auto bg-[#050507]">
+    <div className="min-h-dvh bg-[#050507]">
       <p className="sr-only">{routeContract}</p>
       <BrandExtractApp />
     </div>
