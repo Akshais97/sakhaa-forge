@@ -30,6 +30,17 @@ This file is the second pass in the TRIBEv2 brand extraction pipeline. It runs o
 
 > Only override these when specifically noted in a vertical section.
 
+Every vertical JSON extraction prompt also includes these shared visual-evidence fields:
+
+- `IMAGE_ASSET_LABELS`: alt text, captions or labels that identify images returned by the
+  `images` format.
+- `VISUAL_ASSET_CONTEXTS`: nearby section, card or gallery context that helps categorise
+  the returned images as product, project, listing, facility, team, badge, lifestyle or
+  other review assets.
+
+Return empty arrays when no labels or context are explicitly present. Do not infer rights
+or fabricate asset URLs; the URL list comes from the Firecrawl `images` format.
+
 ---
 
 ---

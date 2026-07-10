@@ -506,6 +506,7 @@ export function createWorkspaceStore(env = process.env) {
       extractionSchemaVersion: null,
       providerCreditTelemetry: null,
       robotsPolicy: { status: "pending" },
+      crawlProvider: resolveCrawlProviderStatus(env),
       createdAt: now,
       updatedAt: now
     };
@@ -569,7 +570,7 @@ export function createWorkspaceStore(env = process.env) {
       ok: true,
       response: {
         crawlRun: publicBrandCrawlRun(crawlRun),
-        brandAssets: retainedAssets.map(publicBrandAsset),
+        brandAssets: retainedAssets.map((asset) => publicBrandAsset(asset, artifacts.get(asset.artifactId))),
         job: publicJob(job),
         outboxEvent: publicOutboxEvent(outbox)
       }
@@ -703,7 +704,9 @@ export function createWorkspaceStore(env = process.env) {
       ok: true,
       response: {
         crawlRun: publicBrandCrawlRun(crawlRun),
-        brandAssets: [...brandAssets.values()].filter((asset) => asset.crawlRunId === crawlRun.id).map(publicBrandAsset),
+        brandAssets: [...brandAssets.values()]
+          .filter((asset) => asset.crawlRunId === crawlRun.id)
+          .map((asset) => publicBrandAsset(asset, artifacts.get(asset.artifactId))),
         candidates: [...brandCandidates.values()].filter((candidate) => candidate.crawlRunId === crawlRun.id).map(publicBrandCandidate)
       }
     };
@@ -15932,10 +15935,16 @@ function publicBrandCrawlRun(crawlRun) {
     extractionSchemaVersion: brandMetadata.extractionSchemaVersion,
     providerCreditTelemetry: brandMetadata.providerCreditTelemetry,
     robotsPolicy: crawlRun.robotsPolicy ?? null,
+    crawlProvider: crawlRun.crawlProvider ?? null,
     jobId: crawlRun.jobId ?? null,
     createdAt: toIso(crawlRun.createdAt),
     updatedAt: toIso(crawlRun.updatedAt)
   };
+}
+
+function resolveCrawlProviderStatus(env) {
+  const mode = env?.BRAND_CRAWL_MODE || (env?.FIRECRAWL_API_KEY ? "firecrawl" : "simulator");
+  return { mode, configured: mode === "firecrawl" };
 }
 
 function brandCrawlRunMetadata(crawlRun) {
@@ -16017,18 +16026,30 @@ function isValidBrandExtractionOutput(input) {
   );
 }
 
-function publicBrandAsset(asset) {
+function publicBrandAsset(asset, artifact = null) {
   return {
     id: asset.id,
     workspaceId: asset.workspaceId,
     crawlRunId: asset.crawlRunId,
     artifactId: asset.artifactId,
+    locator: `artifact:${asset.artifactId}`,
+    name: artifact?.fileName ?? "Uploaded brand asset",
+    category: artifact ? brandAssetCategoryFromContentType(artifact.contentType) : "Uploaded brand asset",
     rightsBasis: asset.rightsBasis,
     permittedUse: asset.permittedUse,
     status: asset.status,
     createdAt: toIso(asset.createdAt),
     updatedAt: toIso(asset.updatedAt)
   };
+}
+
+function brandAssetCategoryFromContentType(contentType) {
+  if (typeof contentType !== "string") return "Uploaded brand asset";
+  if (contentType.startsWith("image/svg")) return "Uploaded logo or vector";
+  if (contentType.startsWith("image/")) return "Uploaded image";
+  if (contentType === "application/pdf") return "Uploaded document";
+  if (contentType.startsWith("video/")) return "Uploaded video";
+  return "Uploaded brand asset";
 }
 
 function publicBrandCandidate(candidate) {

@@ -86,6 +86,30 @@ test("brand-extract frontend maps visible industry labels to backend brandType e
   assert.match(studio, /brandType:\s*toBackendBrandType\(setupForm\.brandType\)/);
 });
 
+test("brand-extract adapter renders harvested logos, keeps approved USPs and reads the grouped asset pack (F1a/F2a/F1c)", async () => {
+  const adapter = await readFile("apps/web/app/brand-extract/_components/candidate-adapter.ts", "utf8");
+  const studio = await readFile("apps/web/app/brand-extract/_components/components/BrandExtractionStudio.tsx", "utf8");
+
+  // F1a: assetsFromCandidate handles a `logo` candidate (the only asset the demo crawl produces).
+  assert.match(adapter, /candidate\.fieldType === ["']logo["']/, "adapter must have a logo branch in assetsFromCandidate");
+  // F2a: buildApprovalDraftFromCandidates has a usp branch that writes differentiators.
+  assert.match(adapter, /candidate\.fieldType === ["']usp["']/, "adapter must keep approved USPs");
+  assert.match(adapter, /positioning\.differentiators/, "approved USPs must populate differentiators");
+  // F1c: the studio calls the dedicated grouped asset-pack endpoint, not only getBrandCrawlRun.
+  assert.match(studio, /getBrandAssetPack/, "studio must fetch the grouped asset pack on crawl completion");
+});
+
+test("brand-extract studio is honest about an unconfigured crawl provider instead of implying a depth lever (F3a/F3b)", async () => {
+  const studio = await readFile("apps/web/app/brand-extract/_components/components/BrandExtractionStudio.tsx", "utf8");
+
+  // F3b: the misleading "run depth crawls" lever copy is removed from the empty asset-pack state.
+  assert.doesNotMatch(studio, /run depth crawls/, "do not imply crawl depth is the lever for an empty asset pack");
+  // F3b: the empty state honestly points to the crawl provider or direct uploads.
+  assert.match(studio, /crawl provider|direct upload/i, "empty asset-pack state must state the real cause");
+  // F3a: the studio reads the backend crawlProvider status to warn when no provider is configured.
+  assert.match(studio, /crawlProvider/i, "studio must surface the crawl provider configuration status");
+});
+
 test("brand-extract generated client binds browser fetch before passing it to V0Client", async () => {
   const actions = await readFile("apps/web/src/workflow/v0-actions.ts", "utf8");
 

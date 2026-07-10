@@ -614,7 +614,21 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
           clearInterval(interval);
           setDetectedVertical(adapted.detectedBrandType || setupForm.brandType);
           setCandidates(adapted.candidates);
-          setAssetPack(adapted.assetPack);
+          // Merge the dedicated grouped asset pack (getBrandAssetPack) with candidate-derived
+          // assets so harvested logos and visual identity render in the Asset Pack Viewer.
+          let mergedAssetPack = adapted.assetPack;
+          try {
+            const assetPackResponse = await client.getBrandAssetPack(runId);
+            if (assetPackResponse.status < 400 && assetPackResponse.body) {
+              mergedAssetPack = adaptBrandCrawlRunResponse({
+                ...body,
+                assetPack: (assetPackResponse.body as any).assetPack
+              }).assetPack;
+            }
+          } catch {
+            // Best-effort: candidate-derived assets still render if the grouped pack is unavailable.
+          }
+          setAssetPack(mergedAssetPack);
           setReadinessScore(adapted.readinessScore);
           setBasisBreakdown(adapted.basisBreakdown);
           
@@ -1568,7 +1582,11 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                     <UploadCloud className="h-10 w-10 text-zinc-600 mx-auto" />
                     <div className="space-y-1">
                       <p className="font-mono text-sm text-zinc-400">No assets were extracted yet</p>
-                      <p className="text-xs text-zinc-500">Provide direct uploads or run depth crawls to harvest high-resolution visual anchors.</p>
+                      <p className="text-xs text-zinc-500">
+                        {crawlRun?.crawlProvider && !crawlRun.crawlProvider.configured
+                          ? 'No crawl provider is configured. Attach direct uploads or configure a crawl provider to harvest brand visuals from the source site.'
+                          : 'Attach direct uploads or run a crawl to harvest brand visuals from the source site.'}
+                      </p>
                     </div>
                     <button
                       onClick={() => setCurrentStep(2)}

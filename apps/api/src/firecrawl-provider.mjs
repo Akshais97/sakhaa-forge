@@ -3,6 +3,7 @@ const defaultExcludePrefixes = ["/blog", "/careers", "/privacy", "/terms"];
 const defaultFormats = ["markdown", "links", "images", "screenshot", "branding", "json"];
 const universalSourceGuide = "docs/V0/Features/Firecrawl/brand-crawl-universal.md";
 const verticalSourceGuide = "docs/V0/Features/Firecrawl/brand-crawl-verticals.md";
+const sharedVerticalAssetFields = ["image_asset_labels", "visual_asset_contexts"];
 
 const brandTypeConfig = {
   d2c_ecommerce: { group: "G6", label: "D2C", paths: ["/products"], passKey: "d2c_catalog", productFields: ["product_names", "collection_names"], claimFields: ["price_range", "sale_indicators", "shipping_hook", "label_tags"] },
@@ -65,10 +66,27 @@ const homepageSchema = objectSchema({
   pain_points: stringArraySchema(),
   who_its_for: nullableStringSchema(),
   social_links: { type: "array", items: { type: "object", properties: { platform: stringSchema(), url: stringSchema() } } },
+  logo_url: nullableStringSchema(),
+  favicon_url: nullableStringSchema(),
+  og_image_url: nullableStringSchema(),
+  hero_image_urls: stringArraySchema(),
+  homepage_image_assets: {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        url: stringSchema(),
+        alt: nullableStringSchema(),
+        context: nullableStringSchema(),
+        category: nullableStringSchema()
+      }
+    }
+  },
   schema_type: nullableStringSchema(),
   meta_description: nullableStringSchema(),
   vertical_signals: stringArraySchema(),
   trust_signals: stringArraySchema(),
+  unique_selling_points: stringArraySchema(),
   guarantee_language: nullableStringSchema()
 });
 
@@ -86,7 +104,7 @@ const universalPasses = [
       { type: "screenshot", fullPage: true, quality: 80 },
       {
         type: "json",
-        prompt: "You are extracting brand identity and marketing copy from a company homepage. Extract BRAND NAME, TAGLINE, HERO_H1, HERO_SUBHEADLINE, FEATURE_HEADLINES, CTA_BUTTONS, PAIN_POINTS, WHO_ITS_FOR, SOCIAL_LINKS, SCHEMA_TYPE, META_DESCRIPTION, VERTICAL_SIGNALS, TRUST_SIGNALS, GUARANTEE_LANGUAGE. Return only explicitly present values.",
+        prompt: "You are extracting brand identity, marketing copy, and homepage visual asset locators from a company homepage. Extract BRAND NAME, TAGLINE, HERO_H1, HERO_SUBHEADLINE, FEATURE_HEADLINES, CTA_BUTTONS, PAIN_POINTS, WHO_ITS_FOR, SOCIAL_LINKS, LOGO_URL, FAVICON_URL, OG_IMAGE_URL, HERO_IMAGE_URLS, HOMEPAGE_IMAGE_ASSETS, SCHEMA_TYPE, META_DESCRIPTION, VERTICAL_SIGNALS, TRUST_SIGNALS, UNIQUE_SELLING_POINTS, GUARANTEE_LANGUAGE. For HOMEPAGE_IMAGE_ASSETS return visible image URLs with alt/context/category when explicitly present. Return only explicitly present values.",
         schema: homepageSchema
       }
     ],
@@ -378,14 +396,15 @@ function jsonFormat(prompt, fields) {
 }
 
 function verticalFormats(config) {
+  const fields = [...config.productFields, ...config.claimFields, ...sharedVerticalAssetFields];
   return [
     { type: config.passKey === "restaurant_menu" ? "menu" : "markdown" },
     { type: "images" },
     { type: "links" },
     {
       type: "json",
-      prompt: `Extract ${[...config.productFields, ...config.claimFields].join(", ")} explicitly present for ${config.label}. Return null or empty arrays for absent fields.`,
-      schema: objectSchema(Object.fromEntries([...config.productFields, ...config.claimFields].map((field) => [field, genericSchemaFor(field)])))
+      prompt: `Extract ${fields.join(", ")} explicitly present for ${config.label}. For IMAGE_ASSET_LABELS and VISUAL_ASSET_CONTEXTS, describe visible image alt text, captions, or page context that helps categorise images returned by the images format. Return null or empty arrays for absent fields.`,
+      schema: objectSchema(Object.fromEntries(fields.map((field) => [field, genericSchemaFor(field)])))
     }
   ];
 }
@@ -410,7 +429,7 @@ function genericSchemaFor(field) {
   if (/^(has_|is_|disclaimer_present$)/.test(field)) {
     return { type: ["boolean", "string", "null"] };
   }
-  if (/_urls?$|_names$|_signals$|_headlines$|_items$|_themes$|_badges$|_stats$|_claims$|_options$|_types$|_labels$|_methods$|_patterns$|_categories$|_descriptions$|_areas$|_features$|_images$|_pairs$|_steps$/.test(field)) {
+  if (/_urls?$|_names$|_signals$|_headlines$|_items$|_themes$|_badges$|_stats$|_claims$|_options$|_types$|_labels$|_methods$|_patterns$|_categories$|_descriptions$|_areas$|_features$|_images$|_pairs$|_steps$|_contexts$/.test(field)) {
     return { type: "array", items: { type: ["string", "object"] } };
   }
   if (/^(testimonials|doctors|professionals|plan_prices|feature_descriptions|process_steps|menu_items)$/.test(field)) {
@@ -466,15 +485,15 @@ function buildUniversalProfile({ crawlRun, baseUrl, responses }) {
     crawl_date: new Date().toISOString(),
     detected_vertical: detectBrandType({ metadata: { schema_org_type: schemaType, vertical_signals: homepageJson.vertical_signals ?? [] } }),
     visual_identity: {
-      logo_url: branding.images?.logo ?? branding.logo ?? null,
-      favicon_url: branding.images?.favicon ?? branding.favicon ?? null,
-      og_image_url: branding.images?.ogImage ?? branding.ogImage ?? null,
+      logo_url: branding.images?.logo ?? branding.logo ?? homepageJson.logo_url ?? null,
+      favicon_url: branding.images?.favicon ?? branding.favicon ?? homepageJson.favicon_url ?? null,
+      og_image_url: branding.images?.ogImage ?? branding.ogImage ?? homepageJson.og_image_url ?? null,
       colors: normalizeUniversalColors(branding.colors ?? branding.palette ?? {}),
       typography: normalizeUniversalTypography(branding.typography ?? {}),
       color_scheme: branding.colorScheme ?? null,
       hero_screenshot_url: screenshotAt(homepage, 0),
       full_page_screenshot_url: screenshotAt(homepage, 1),
-      downloaded_images: collectDownloadedImages(responses)
+      downloaded_images: collectDownloadedImages(responses, homepageJson)
     },
     copy_messaging: {
       brand_name: homepageJson.brand_name ?? null,
@@ -637,8 +656,13 @@ function normalizeUniversalTypography(typography) {
   };
 }
 
-function collectDownloadedImages(responses) {
-  return uniqueValues(responses.flatMap(({ response }) => normaliseScrapePayload(response).images)).map((url) => ({
+function collectDownloadedImages(responses, homepageJson = {}) {
+  const imageUrls = [
+    ...responses.flatMap(({ response }) => normaliseScrapePayload(response).images),
+    ...asArray(homepageJson.hero_image_urls),
+    ...asArray(homepageJson.homepage_image_assets).map((asset) => asset?.url ?? asset)
+  ];
+  return uniqueValues(imageUrls).map((url) => ({
     url,
     category: categorizeImage(url)
   }));

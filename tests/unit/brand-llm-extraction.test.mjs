@@ -46,6 +46,25 @@ test("LLM extraction accepts schema-valid evidence and rejects refusal or invent
   assert.equal(parseBrandLlmExtraction({ refused: false, units: [{ fieldType: "metric", value: "No source" }] }).ok, false);
 });
 
+test("LLM extraction accepts USP evidence units (F2b)", () => {
+  const result = parseBrandLlmExtraction({
+    refused: false,
+    units: [
+      {
+        fieldType: "usp",
+        value: "Handmade in small batches",
+        confidence: 0.8,
+        sourceUrl: "https://craft.example.com",
+        evidenceSnippet: "handmade in small batches",
+        inference: false
+      }
+    ],
+    readiness: { score: 60, missingAssets: [] }
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.output.units[0].fieldType, "usp");
+});
+
 test("LLM extraction runner uses simulator default and provider mode requires a key", async () => {
   const simulator = await runBrandLlmExtraction({ pages: [], brandContext: {} }, { env: { LLM_PROVIDER: "simulator" } });
   assert.equal(simulator.ok, true);

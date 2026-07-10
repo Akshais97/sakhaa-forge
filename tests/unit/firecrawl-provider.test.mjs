@@ -135,19 +135,28 @@ test("Firecrawl adapter builds documented universal scrape passes with typed jso
   assert.equal(homepage.request.formats.filter((format) => format.type === "screenshot").length, 2);
   const jsonFormat = homepage.request.formats.find((format) => format.type === "json");
   assert.match(jsonFormat.prompt, /BRAND NAME/);
+  assert.match(jsonFormat.prompt, /UNIQUE_SELLING_POINTS/);
+  assert.match(jsonFormat.prompt, /LOGO_URL/);
+  assert.match(jsonFormat.prompt, /HOMEPAGE_IMAGE_ASSETS/);
   assert.deepEqual(Object.keys(jsonFormat.schema.properties).sort(), [
     "brand_name",
     "cta_buttons",
     "feature_headlines",
     "guarantee_language",
+    "hero_image_urls",
     "hero_h1",
     "hero_subheadline",
+    "homepage_image_assets",
+    "favicon_url",
     "meta_description",
     "pain_points",
+    "logo_url",
+    "og_image_url",
     "schema_type",
     "social_links",
     "tagline",
     "trust_signals",
+    "unique_selling_points",
     "vertical_signals",
     "who_its_for"
   ].sort());
@@ -172,6 +181,9 @@ test("Firecrawl adapter builds the documented real-estate vertical pass and pres
   assert.equal(plan.passes[0].request.url, "https://aster.example.com/listings");
   assert.equal(plan.passes[0].request.formats.some((format) => format.type === "links"), true);
   assert.equal(plan.passes[0].request.formats.some((format) => format.type === "json" && format.schema.properties.rera_numbers), true);
+  const jsonFormat = plan.passes[0].request.formats.find((format) => format.type === "json");
+  assert.match(jsonFormat.prompt, /VISUAL_ASSET_CONTEXTS/);
+  assert.equal(Boolean(jsonFormat.schema.properties.visual_asset_contexts), true);
 });
 
 test("Firecrawl adapter runs universal before vertical with the server-side API key and returns v3 output", async () => {

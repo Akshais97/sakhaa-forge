@@ -83,6 +83,17 @@ test("B2 extraction helpers isolate prompt injection text from generated candida
   assert.deepEqual(extractCallsToAction(page).map((item) => item.value), ["Book a site visit"]);
 });
 
+test("B2 USP fallback extracts value propositions for non-real-estate pages without a literal USPs: label (F2c)", () => {
+  const page = {
+    url: "https://craft.example.com",
+    title: "Craft Co",
+    text: "What sets us apart: handmade in small batches, lifetime warranty, and carbon-neutral shipping."
+  };
+  const usps = extractBrandUsps(page);
+  assert.equal(usps.length > 0, true, "value propositions should be extracted without a literal USPs: label or real-estate cues");
+  assert.equal(usps.every((item) => item.fieldType === "usp"), true);
+});
+
 test("B2 extraction maps Firecrawl v3 universal and vertical contract fields into review candidates", () => {
   const result = buildBrandExtractionCandidates({
     crawlRunId: "crawl-v3",

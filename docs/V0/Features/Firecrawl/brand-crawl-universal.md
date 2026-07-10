@@ -78,7 +78,7 @@ POST https://api.firecrawl.dev/v2/scrape
 ### Prompt P1-HOMEPAGE
 
 ```
-You are extracting brand identity and marketing copy from a company homepage.
+You are extracting brand identity, marketing copy and homepage visual asset locators from a company homepage.
 
 Extract the following with zero inference — only extract what is explicitly present on this page:
 
@@ -91,11 +91,17 @@ Extract the following with zero inference — only extract what is explicitly pr
 7. PAIN_POINTS: Any explicit problem or pain statements the brand uses (e.g. "Tired of X?", "Stop wasting time on Y")
 8. WHO_ITS_FOR: Any explicit audience targeting language (e.g. "For teams of 10+", "Built for founders")
 9. SOCIAL_LINKS: All social media profile URLs found (array of {platform, url})
-10. SCHEMA_TYPE: The Schema.org @type value from any JSON-LD script tags (e.g. "Organization", "LocalBusiness", "Product")
-11. META_DESCRIPTION: The content of <meta name="description">
-12. VERTICAL_SIGNALS: Any words, phrases, or section names that indicate the business category (e.g. "listings", "book a session", "shop now", "request a quote")
-13. TRUST_SIGNALS: Any numbers, stats, or credentials displayed prominently (e.g. "10,000 customers", "Since 1998", "ISO certified")
-14. GUARANTEE_LANGUAGE: Any guarantee, refund, or risk-reversal statements
+10. LOGO_URL: Logo or wordmark URL visible in the page, logo alt text, branding output or raw HTML if explicitly present
+11. FAVICON_URL: Favicon or icon URL visible in raw HTML or branding output if explicitly present
+12. OG_IMAGE_URL: Open Graph image URL from raw HTML or branding output if explicitly present
+13. HERO_IMAGE_URLS: Image URLs that appear in the hero or above-fold visual area (array)
+14. HOMEPAGE_IMAGE_ASSETS: Visible homepage image URLs with alt text, nearby section/caption context and category when explicitly present (array of {url, alt, context, category})
+15. SCHEMA_TYPE: The Schema.org @type value from any JSON-LD script tags (e.g. "Organization", "LocalBusiness", "Product")
+16. META_DESCRIPTION: The content of <meta name="description">
+17. VERTICAL_SIGNALS: Any words, phrases, or section names that indicate the business category (e.g. "listings", "book a session", "shop now", "request a quote")
+18. TRUST_SIGNALS: Any numbers, stats, or credentials displayed prominently (e.g. "10,000 customers", "Since 1998", "ISO certified")
+19. UNIQUE_SELLING_POINTS: Explicit differentiators, "why choose us" statements, unique benefits or value propositions stated on the page (array)
+20. GUARANTEE_LANGUAGE: Any guarantee, refund, or risk-reversal statements
 
 Return ONLY fields that are explicitly present. Use null for absent fields. Do not infer or hallucinate.
 ```
@@ -124,10 +130,27 @@ Return ONLY fields that are explicitly present. Use null for absent fields. Do n
         }
       }
     },
+    "logo_url": { "type": ["string", "null"] },
+    "favicon_url": { "type": ["string", "null"] },
+    "og_image_url": { "type": ["string", "null"] },
+    "hero_image_urls": { "type": "array", "items": { "type": "string" } },
+    "homepage_image_assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string" },
+          "alt": { "type": ["string", "null"] },
+          "context": { "type": ["string", "null"] },
+          "category": { "type": ["string", "null"] }
+        }
+      }
+    },
     "schema_type": { "type": ["string", "null"] },
     "meta_description": { "type": ["string", "null"] },
     "vertical_signals": { "type": "array", "items": { "type": "string" } },
     "trust_signals": { "type": "array", "items": { "type": "string" } },
+    "unique_selling_points": { "type": "array", "items": { "type": "string" } },
     "guarantee_language": { "type": ["string", "null"] }
   }
 }

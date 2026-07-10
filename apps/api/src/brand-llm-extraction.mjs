@@ -1,5 +1,6 @@
 const allowedFieldTypes = new Set([
   "positioning",
+  "usp",
   "tone",
   "product",
   "service",

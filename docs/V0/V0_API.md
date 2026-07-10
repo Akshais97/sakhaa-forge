@@ -95,14 +95,18 @@ type set, associates clean uploaded artifacts with retained rights basis and per
 use, then creates `BrandCrawlRun`, `BrandAsset`, `Job` (`brand_crawl`) and `OutboxEvent`
 records in one authenticated tenant-scoped operation. Unsupported brand types return
 `VALIDATION_FAILED`; the selected type changes the vertical Firecrawl pass only and does
-not approve brand truth.
+not approve brand truth. Returned `BrandAsset` rows include the retained artifact ID plus
+review-safe display metadata (`name`, `category`, `locator` as `artifact:{artifact_id}`),
+rights basis and permitted use; they do not include object keys or signed URLs.
 
 `GET /brands/crawl-runs/{crawl_run_id}` is the refresh-safe detail read used by
 `/app/branding?crawlRunId=<uuid>` and workspace crawl-run detail pages. It returns the
 canonical crawl run, job status, redacted crawl progress, sanitized policy warnings and
 artifact reference IDs only when the actor is authorised for the workspace. It never
 returns Firecrawl raw payloads, provider credentials, signed URLs, object keys, prompts
-or worker lease tokens.
+or worker lease tokens. It also returns associated `brandAssets` with the same review-safe
+display metadata used by the intake response so direct uploads can appear in the asset
+review surface before or after extraction.
 
 `GET /brands/crawl-runs/{crawl_run_id}/asset-pack` returns grouped candidate summaries for
 the branding UI: brand identity, universal visual identity, messaging, offers,

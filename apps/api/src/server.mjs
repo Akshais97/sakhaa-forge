@@ -10,6 +10,7 @@ import { getBuildInfo } from "./build-info.mjs";
 import { canPerform } from "./permissions.mjs";
 import { getHealth, getReadiness } from "./readiness.mjs";
 import { createStore, resolvePublishCallbackAdapter } from "./workspace-store.mjs";
+import { isSwaggerEnabled, setupSwagger } from "./swagger.mjs";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const openApiPath = resolve(currentDir, "../../../packages/contracts/generated/openapi.v0.json");
@@ -24,6 +25,8 @@ export async function createApiServer(env = process.env) {
     new FastifyAdapter({ logger: false }),
     { logger: false }
   );
+
+  await setupSwagger(app, env);
 
   await app.init();
   const close = app.close.bind(app);
@@ -106,6 +109,20 @@ function createF0Controller(env, store, prefix) {
     }
 
     async openapi() {
+      if (!isSwaggerEnabled(env)) {
+        throw new HttpException(
+          {
+            type: "https://errors.sakhaa-forge.invalid/v0/NOT_FOUND",
+            title: "Not Found",
+            status: 404,
+            code: "NOT_FOUND",
+            detail: "We could not find that item.",
+            trace_id: "v0-local-trace",
+            retryable: false
+          },
+          404
+        );
+      }
       return JSON.parse(await readFile(openApiPath, "utf8"));
     }
 

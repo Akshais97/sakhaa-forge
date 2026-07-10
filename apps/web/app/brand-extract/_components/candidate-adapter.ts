@@ -26,6 +26,7 @@ type BackendCrawlRun = {
     estimatedCredits?: number;
     observedCredits?: number;
   } | null;
+  crawlProvider?: { mode?: string; configured?: boolean } | null;
 };
 
 type CandidateSection =
@@ -83,6 +84,7 @@ export type AdaptedBrandCrawlRun = {
   assetPack: UiAsset[];
   readinessScore: number;
   basisBreakdown: Record<string, number>;
+  crawlProvider: BackendCrawlRun["crawlProvider"];
 };
 
 const fieldTypeToSection: Record<string, CandidateSection> = {
@@ -172,10 +174,12 @@ export function adaptBrandCrawlRunResponse(response: {
   crawlRun?: BackendCrawlRun;
   data?: { crawlRun?: BackendCrawlRun; candidates?: BackendCandidate[]; brandAssets?: unknown[] };
   candidates?: BackendCandidate[];
+  brandAssets?: unknown[];
   assetPack?: unknown;
 }): AdaptedBrandCrawlRun {
   const crawlRun = response.crawlRun ?? response.data?.crawlRun ?? {};
   const candidates = (response.candidates ?? response.data?.candidates ?? []).map(adaptCandidate);
+  const brandAssets = (response.brandAssets ?? response.data?.brandAssets ?? []).flatMap(adaptBrandAsset);
   const status = crawlRun.status ?? "unknown";
   return {
     id: crawlRun.id ?? "",
@@ -186,9 +190,10 @@ export function adaptBrandCrawlRunResponse(response: {
     extractionSchemaVersion: crawlRun.extractionSchemaVersion ?? "unknown",
     providerCreditTelemetry: crawlRun.providerCreditTelemetry ?? null,
     candidates,
-    assetPack: extractAssetPack(candidates, response.assetPack),
+    assetPack: uniqueAssets([...brandAssets, ...extractAssetPack(candidates, response.assetPack)]),
     readinessScore: readinessScore(candidates),
-    basisBreakdown: basisBreakdown(candidates)
+    basisBreakdown: basisBreakdown(candidates),
+    crawlProvider: crawlRun.crawlProvider ?? null
   };
 }
 
@@ -236,6 +241,12 @@ export function buildApprovalDraftFromCandidates(candidates: UiCandidate[], base
       draft.positioning.differentiators = [...asArray(value.featureHeadlines), ...asArray(value.painPoints)];
       draft.calls_to_action = asArray(value.ctaButtons);
       if (value.guaranteeLanguage) draft.claims.push(claimFrom(value.guaranteeLanguage, candidate));
+    }
+    if (candidate.fieldType === "usp") {
+      const uspValues = Array.isArray(value)
+        ? value.map((item: any) => String(item ?? "")).filter((item) => item.trim().length > 0)
+        : [String(candidate.displayValue || (typeof value === "string" ? value : "") || "")].filter((item) => item.trim().length > 0);
+      draft.positioning.differentiators = unique([...draft.positioning.differentiators, ...uspValues]);
     }
     if (candidate.fieldType === "visual_identity") {
       draft.visual_identity.logos = [value.logoUrl, value.faviconUrl, value.ogImageUrl].filter(Boolean);
@@ -298,6 +309,19 @@ function extractAssetPack(candidates: UiCandidate[], rawAssetPack: unknown): UiA
 
 function assetsFromCandidate(candidate: UiCandidate): UiAsset[] {
   const value = candidate.value as any;
+  if (candidate.fieldType === "logo") {
+    const src = value?.src;
+    if (typeof src !== "string" || src.trim().length === 0) return [];
+    return [{
+      id: `${candidate.id}-logo`,
+      category: "Logo",
+      locator: src,
+      rightsBasis: "Public website crawl evidence",
+      permittedUse: "Candidate review",
+      name: (typeof value.alt === "string" && value.alt.trim().length > 0) ? value.alt.trim() : "Logo",
+      status: "candidate"
+    }];
+  }
   if (candidate.fieldType === "visual_identity") {
     return [value.logoUrl, value.faviconUrl, value.ogImageUrl, ...(value.screenshots ?? [])].filter(Boolean).map((locator, index) => ({
       id: `${candidate.id}-visual-${index}`,
@@ -321,6 +345,33 @@ function assetsFromCandidate(candidate: UiCandidate): UiAsset[] {
     }];
   }
   return [];
+}
+
+function adaptBrandAsset(asset: unknown): UiAsset[] {
+  if (!asset || typeof asset !== "object") return [];
+  const value = asset as any;
+  const artifactId = typeof value.artifactId === "string" ? value.artifactId : "";
+  const locator = typeof value.locator === "string" && value.locator.trim().length > 0
+    ? value.locator.trim()
+    : artifactId
+      ? `artifact:${artifactId}`
+      : "";
+  if (!locator) return [];
+  const id = typeof value.id === "string" && value.id.trim().length > 0 ? value.id : `asset-${hashText(locator)}`;
+  const name = typeof value.name === "string" && value.name.trim().length > 0
+    ? value.name.trim()
+    : artifactId
+      ? `Artifact ${artifactId.slice(0, 8)}`
+      : "Uploaded brand asset";
+  return [{
+    id,
+    category: typeof value.category === "string" && value.category.trim().length > 0 ? value.category.trim() : "Uploaded brand asset",
+    locator,
+    rightsBasis: typeof value.rightsBasis === "string" && value.rightsBasis.trim().length > 0 ? value.rightsBasis.trim() : "Uploaded brand asset",
+    permittedUse: typeof value.permittedUse === "string" && value.permittedUse.trim().length > 0 ? value.permittedUse.trim() : "Candidate review",
+    name,
+    status: typeof value.status === "string" ? value.status : "ACTIVE"
+  }];
 }
 
 function readinessScore(candidates: UiCandidate[]) {

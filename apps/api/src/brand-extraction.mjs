@@ -115,8 +115,26 @@ export function extractBrandUsps(page) {
       .slice(0, 5)
       .map((item) => evidenceCandidate("usp", item, 0.84, page, uspMatch[0]));
   }
-  const offers = text.match(/\b(practical [^.]+|metro-connected [^.]+|transparent [^.]+)\b/gi) ?? [];
-  return offers.slice(0, 5).map((item) => evidenceCandidate("usp", item.trim(), 0.72, page, item));
+  // Fallback heuristic. The real-estate cues are retained for back-compat; the cue/benefit phrases
+  // are vertical-agnostic value propositions so non-real-estate sites yield USPs until the v3 LLM
+  // pass (unique_selling_points in the Firecrawl homepage schema) is wired. This is a fallback, not
+  // the primary extractor: confidence is kept low to mark these as heuristic evidence.
+  const practical = text.match(/\b(practical [^.!?]+|metro-connected [^.!?]+|transparent [^.!?]+)\b/gi) ?? [];
+  const cue = text.match(/\b(?:what sets us apart|what makes us different|what makes (?:it|this) different|why choose us|why us|our unique|uniquely|sets us apart)\b[^.!?]{0,160}/gi) ?? [];
+  const benefit = text.match(/\b(?:lifetime warranty|handmade(?: in [^.!?]+)?|carbon[- ]neutral[^.!?]{0,80}|sustainably (?:sourced|made|manufactured|produced)[^.!?]{0,80}|locally sourced[^.!?]{0,80}|small batches|same[- ]day [a-z]+|no hidden fees|free [a-z]+ delivery)\b[^.!?]{0,80}/gi) ?? [];
+  const offers = [...practical, ...cue, ...benefit];
+  const seen = new Set();
+  const uniqueOffers = [];
+  for (const item of offers) {
+    const key = item.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    uniqueOffers.push(item.trim());
+  }
+  return uniqueOffers.slice(0, 5).map((item) => {
+    const isPractical = practical.some((value) => value.trim().toLowerCase() === item.toLowerCase());
+    return evidenceCandidate("usp", item, isPractical ? 0.72 : 0.66, page, item);
+  });
 }
 
 export function extractCallsToAction(page) {
