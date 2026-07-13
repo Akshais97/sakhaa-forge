@@ -5,6 +5,12 @@ Long operations return `202 Accepted` with a canonical job.
 
 ## Contract Ownership
 
+For the brand crawl payload content produced behind these API routes,
+`Features/Firecrawl/brand-crawl-universal.md` and
+`Features/Firecrawl/brand-crawl-verticals.md` are the current sources of truth for passes,
+prompts, schemas, fields, asset harvesting and output shapes. This API document owns the
+public transport, authentication, authorisation, idempotency, redaction and error contract.
+
 - A versioned OpenAPI document under the backend API package is the executable contract.
 - NestJS DTOs and validation schemas generate the OpenAPI document.
 - The Next.js client is generated from that document; browser code must not duplicate

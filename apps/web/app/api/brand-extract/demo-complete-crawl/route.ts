@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server.js';
+import { NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
 
@@ -91,16 +91,16 @@ export async function POST(request: Request) {
       industry: typeof input.industry === 'string' ? input.industry : ''
     })
   });
-  const completedBody = await completed.json().catch(() => ({}));
+  const completionBody = await completed.json().catch(() => ({}));
   if (!completed.ok) {
     return NextResponse.json(
       {
-        code: completedBody?.code || 'DEMO_JOB_COMPLETE_FAILED',
-        detail: completedBody?.detail || 'Could not complete the backend crawl job.'
+        code: completionBody?.code || 'DEMO_JOB_COMPLETE_FAILED',
+        detail: completionBody?.detail || 'Could not complete the backend crawl job.'
       },
       { status: completed.status || 502 }
     );
   }
 
-  return NextResponse.json(completedBody);
+  return NextResponse.json(completionBody);
 }

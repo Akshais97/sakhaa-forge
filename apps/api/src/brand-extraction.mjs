@@ -139,18 +139,32 @@ export function extractBrandUsps(page) {
 
 export function extractCallsToAction(page) {
   const text = stripPromptInjection(cleanText(page.text ?? page.markdown ?? ""));
+  const jsonCtas = asArray(page.json?.cta_buttons ?? page.json?.cta_button);
+  if (jsonCtas.length > 0) {
+    return jsonCtas.slice(0, 5).map((item) => evidenceCandidate("cta", normalizeSentenceCase(item), 0.9, page, item));
+  }
   const matches = [...new Set((text.match(new RegExp(ctaPattern.source, "gi")) ?? []).map(normalizeSentenceCase))];
-  return matches.slice(0, 5).map((item) => evidenceCandidate("cta", item, 0.9, page, item));
+  return matches.slice(0, 5).map((item) => evidenceCandidate("cta", item, 0.65, page, item));
 }
 
 export function extractAudiences(page) {
   const text = stripPromptInjection(cleanText(page.text ?? page.markdown ?? ""));
-  const matches = [...new Set((text.match(/\b(urban professionals and families|home buyers|investors|first-time buyers)\b/gi) ?? []).map((item) => item.toLowerCase()))];
+  const matches = [];
   const brandingAudience = page.branding?.personality?.targetAudience;
   if (typeof brandingAudience === "string" && brandingAudience.trim() && brandingAudience !== "unknown") {
-    matches.unshift(brandingAudience.trim().toLowerCase());
+    matches.push({ value: brandingAudience.trim().toLowerCase(), confidence: 0.85 });
   }
-  return [...new Set(matches)].slice(0, 5).map((item) => evidenceCandidate("audience", item, 0.76, page, item));
+  const whoItsFor = page.json?.who_its_for;
+  if (typeof whoItsFor === "string" && whoItsFor.trim()) {
+    matches.push({ value: whoItsFor.trim().toLowerCase(), confidence: 0.85 });
+  }
+  const regexMatches = [...new Set((text.match(/\b(urban professionals and families|home buyers|investors|first-time buyers)\b/gi) ?? []).map((item) => item.toLowerCase()))];
+  for (const match of regexMatches) {
+    if (!matches.some(m => m.value === match)) {
+      matches.push({ value: match, confidence: 0.55 });
+    }
+  }
+  return matches.slice(0, 5).map((item) => evidenceCandidate("audience", item.value, item.confidence, page, item.value));
 }
 
 export function extractVisualCandidates(page) {
@@ -176,8 +190,12 @@ export function extractVisualCandidates(page) {
 
 export function extractProhibitedClaims(page) {
   const text = stripPromptInjection(cleanText(page.text ?? page.markdown ?? ""));
+  const jsonProhibitions = asArray(page.json?.prohibited_claims ?? page.json?.avoid_claims);
+  if (jsonProhibitions.length > 0) {
+    return jsonProhibitions.slice(0, 10).map((item) => evidenceCandidate("prohibited_claim", item.toLowerCase(), 0.93, page, item));
+  }
   const matches = [...new Set((text.match(new RegExp(prohibitedClaimPattern.source, "gi")) ?? []).map((item) => item.toLowerCase()))];
-  return matches.slice(0, 10).map((item) => evidenceCandidate("prohibited_claim", item, 0.93, page, item));
+  return matches.slice(0, 10).map((item) => evidenceCandidate("prohibited_claim", item, 0.65, page, item));
 }
 
 export function extractFirecrawlSkillCandidates(page) {
@@ -204,7 +222,6 @@ export function extractFirecrawlSkillCandidates(page) {
       candidates.push(evidenceCandidate("media_asset", { type: item.type ?? "media", locator: item.locator }, 0.72, page, item.locator));
     }
   }
-  candidates.push(evidenceCandidate("readiness_score", { score: 60, basis: "evidence-backed starter pack" }, 0.7, page, "readiness score calculated from retained candidates"));
   return candidates;
 }
 
@@ -261,18 +278,28 @@ export function extractFirecrawlV3Candidates({ scrape, universal, vertical, asse
     if (!asset?.locator && !asset?.type) {
       continue;
     }
+    let fieldType = "rights_asset";
+    const category = asset.type || "uncategorised";
+    if (category === "logo") {
+      fieldType = "logo";
+    } else if (category === "product") {
+      fieldType = "product";
+    } else if (["lifestyle", "team", "facility", "media_asset"].includes(category)) {
+      fieldType = "media_asset";
+    }
+
     candidates.push(
       metadataCandidate(
-        "rights_asset",
+        fieldType,
         {
-          type: asset.type ?? "asset",
+          type: category,
           locator: asset.locator ?? "unknown",
           rightsBasis: asset.rightsBasis ?? null,
           permittedUse: asset.permittedUse ?? null
         },
         0.8,
         firstPage,
-        `${asset.type ?? "asset"}:${asset.locator ?? "unknown"}`
+        `${category}:${asset.locator ?? "unknown"}`
       )
     );
   }
@@ -320,6 +347,10 @@ function extractUniversalProfileCandidates(profile, page) {
     guaranteeLanguage: copy.guarantee_language
   }), 0.84, page, copy.hero_h1 ?? copy.tagline);
 
+  for (const item of asArray(copy.unique_selling_points).slice(0, 10)) {
+    candidates.push(metadataCandidate("usp", item, 0.86, page, item));
+  }
+
   addCandidate(candidates, "social_proof", compactObject({
     testimonials: asArray(proof.testimonials),
     aggregateRating: proof.aggregate_rating,
@@ -354,8 +385,18 @@ function extractUniversalProfileCandidates(profile, page) {
   }, 0.78, page, firstArrayValue(personality.social_links));
 
   for (const image of asArray(visual.downloaded_images).slice(0, 50)) {
-    addCandidate(candidates, "rights_asset", compactObject({
-      type: image.category ?? "image",
+    let fieldType = "rights_asset";
+    const category = image.category || "uncategorised";
+    if (category === "logo") {
+      fieldType = "logo";
+    } else if (category === "product") {
+      fieldType = "product";
+    } else if (["lifestyle", "team", "facility", "media_asset"].includes(category)) {
+      fieldType = "media_asset";
+    }
+
+    addCandidate(candidates, fieldType, compactObject({
+      type: category,
       locator: image.url ?? image.locator,
       rightsBasis: "public website crawl evidence",
       permittedUse: "candidate review"

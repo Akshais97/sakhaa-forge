@@ -12,6 +12,7 @@ import { BrandData } from '../types';
 import {
   adaptBrandCrawlRunResponse,
   buildApprovalDraftFromCandidates,
+  shouldCompleteCrawlWithLocalDemo,
   type UiCandidate
 } from '../candidate-adapter';
 import { createGeneratedWorkflowClient, makeIdempotencyKey } from '../../../../src/workflow/v0-actions';
@@ -217,8 +218,8 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
   // STEP 4 State: Candidate Dossier
   const [candidates, setCandidates] = useState<UiCandidate[]>([]);
-  const [readinessScore, setReadinessScore] = useState<number>(78);
-  const [basisBreakdown, setBasisBreakdown] = useState<any>({ identity: 80, visuals: 70, copy: 80, proof: 80 });
+  const [readinessScore, setReadinessScore] = useState<number>(0);
+  const [basisBreakdown, setBasisBreakdown] = useState<any>({ identity: 0, visual: 0, copy: 0, proof: 0 });
   const [dossierFilter, setDossierFilter] = useState<'all' | 'approved' | 'rejected' | 'conflict' | 'low-confidence'>('all');
   const [activeCandidateSection, setActiveCandidateSection] = useState<string>('identity');
   const [selectedCandidateForEvidence, setSelectedCandidateForEvidence] = useState<any | null>(null);
@@ -561,7 +562,11 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
       const body = response.body as any;
       const createdRunId = body?.crawlRun?.id;
       if (createdRunId) {
-        if (apiContext.source === 'local-demo' && body?.job?.id) {
+        if (shouldCompleteCrawlWithLocalDemo({
+          source: apiContext.source,
+          jobId: body?.job?.id,
+          crawlProvider: body?.crawlRun?.crawlProvider
+        })) {
           const demoCompletion = await fetch('/api/brand-extract/demo-complete-crawl', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -612,7 +617,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
         setCrawlRun(adapted);
         if (adapted.status === 'ready') {
           clearInterval(interval);
-          setDetectedVertical(adapted.detectedBrandType || setupForm.brandType);
+          setDetectedVertical(adapted.detectedBrandType || 'Unknown');
           setCandidates(adapted.candidates);
           // Merge the dedicated grouped asset pack (getBrandAssetPack) with candidate-derived
           // assets so harvested logos and visual identity render in the Asset Pack Viewer.
@@ -633,7 +638,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
           setBasisBreakdown(adapted.basisBreakdown);
           
           // Auto resolve conflict choice if matching
-          if ((adapted.detectedBrandType || setupForm.brandType) === setupForm.brandType) {
+          if (adapted.detectedBrandType === setupForm.brandType) {
             setVerticalConflictResolved(true);
             setConflictResolvedSelection(setupForm.brandType);
           } else {
@@ -658,13 +663,46 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     
     if (crawlRunId) {
       try {
-        await fetch(`/api/brand-crawl-run/${crawlRunId}/candidates/${candidateId}/status`, {
+        const response = await fetch(`/api/v0/brands/crawl-runs/${crawlRunId}/candidates/${candidateId}/status`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiContext.authToken.trim()}`
+          },
           body: JSON.stringify({ status })
         });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          console.error('Failed to update candidate status on server:', body.detail || response.statusText);
+        }
       } catch (err) {
-        // Safe console fail, state is updated locally
+        console.error('Failed to update candidate status:', err);
+      }
+    }
+  };
+
+  const handleApproveAllSection = async (section: string) => {
+    const sectionCandidates = candidates.filter(c => c.section === section && c.status !== 'approved');
+    if (sectionCandidates.length === 0) return;
+
+    // Optimistically update all in frontend
+    setCandidates(prev => prev.map(c => c.section === section ? { ...c, status: 'approved' } : c));
+
+    // Send status updates to backend for each
+    if (crawlRunId) {
+      for (const cand of sectionCandidates) {
+        try {
+          await fetch(`/api/v0/brands/crawl-runs/${crawlRunId}/candidates/${cand.id}/status`, {
+            method: 'POST',
+            headers: { 
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiContext.authToken.trim()}`
+            },
+            body: JSON.stringify({ status: 'approved' })
+          });
+        } catch (err) {
+          console.error(`Failed to approve candidate ${cand.id}:`, err);
+        }
       }
     }
   };
@@ -1408,7 +1446,17 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                   {/* Candidates List centered */}
                   <div className="md:col-span-9 space-y-3 min-h-[300px]">
                     <div className="flex justify-between items-center mb-1 bg-zinc-900/40 p-2 rounded-lg border border-white/5">
-                      <span className="text-[10px] font-mono text-zinc-400 uppercase">Field Evidence items</span>
+                      <div className="flex items-center gap-3">
+                        <span className="text-[10px] font-mono text-zinc-400 uppercase">Field Evidence items</span>
+                        {candidates.filter(c => c.section === activeCandidateSection && c.status !== 'approved').length > 0 && (
+                          <button
+                            onClick={() => handleApproveAllSection(activeCandidateSection)}
+                            className="px-2 py-0.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded text-[9px] font-mono uppercase transition-colors"
+                          >
+                            Approve All
+                          </button>
+                        )}
+                      </div>
                       
                       {/* Filter tabs */}
                       <div className="flex gap-1 bg-black/40 p-1 rounded font-mono text-[9px]">
@@ -1497,6 +1545,11 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                                           <span className="text-[10px] font-mono text-zinc-300 uppercase">{role}: {hex}</span>
                                         </div>
                                       ))}
+                                    </div>
+                                  ) : cand.fieldType === 'color' && typeof cand.value === 'object' && cand.value !== null ? (
+                                    <div className="flex items-center gap-1.5 bg-zinc-900/60 p-1 px-2 border border-white/5 rounded w-fit">
+                                      <div className="h-3.5 w-3.5 rounded-sm border border-white/20" style={{ backgroundColor: (cand.value as any).value || '#FFFFFF' }} />
+                                      <span className="text-[10px] font-mono text-zinc-300 uppercase">{(cand.value as any).role || 'color'}: <span className="text-white font-bold">{(cand.value as any).value}</span></span>
                                     </div>
                                   ) : cand.fieldType === 'rights_asset' && typeof cand.value === 'object' && cand.value !== null ? (
                                     <div className="grid grid-cols-3 gap-2">
@@ -1722,6 +1775,15 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                             rows={2}
                             value={approvalDraft.positioning.proof_points?.join('\n')}
                             onChange={(e) => setApprovalDraft(prev => ({ ...prev, positioning: { ...prev.positioning, proof_points: e.target.value.split('\n') } }))}
+                            className="w-full rounded border border-white/10 bg-zinc-950 px-2.5 py-1.5 text-white font-mono text-[10px]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[8px] font-mono uppercase text-zinc-500 mb-1">Unique Selling Propositions (USPs / Differentiators) (One per line)</label>
+                          <textarea
+                            rows={3}
+                            value={approvalDraft.positioning.differentiators?.join('\n') || ''}
+                            onChange={(e) => setApprovalDraft(prev => ({ ...prev, positioning: { ...prev.positioning, differentiators: e.target.value.split('\n') } }))}
                             className="w-full rounded border border-white/10 bg-zinc-950 px-2.5 py-1.5 text-white font-mono text-[10px]"
                           />
                         </div>

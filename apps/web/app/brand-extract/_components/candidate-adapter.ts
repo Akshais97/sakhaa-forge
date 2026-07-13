@@ -170,6 +170,17 @@ const fieldLabels: Record<string, string> = {
 const completeStatuses = new Set(["SUCCEEDED", "READY", "ready", "succeeded"]);
 const failedStatuses = new Set(["FAILED", "failed"]);
 
+export function shouldCompleteCrawlWithLocalDemo(input: {
+  source?: string;
+  jobId?: unknown;
+  crawlProvider?: { mode?: string; configured?: boolean } | null;
+}): boolean {
+  return input.source === "local-demo"
+    && typeof input.jobId === "string"
+    && input.jobId.trim().length > 0
+    && input.crawlProvider?.mode === "simulator";
+}
+
 export function adaptBrandCrawlRunResponse(response: {
   crawlRun?: BackendCrawlRun;
   data?: { crawlRun?: BackendCrawlRun; candidates?: BackendCandidate[]; brandAssets?: unknown[] };
@@ -184,7 +195,7 @@ export function adaptBrandCrawlRunResponse(response: {
   return {
     id: crawlRun.id ?? "",
     status: completeStatuses.has(status) ? "ready" : failedStatuses.has(status) ? "failed" : status.toLowerCase(),
-    progress: completeStatuses.has(status) ? 100 : failedStatuses.has(status) ? 100 : 65,
+    progress: completeStatuses.has(status) ? 100 : 0,
     selectedBrandType: crawlRun.selectedBrandType ?? "",
     detectedBrandType: crawlRun.detectedBrandType ?? null,
     extractionSchemaVersion: crawlRun.extractionSchemaVersion ?? "unknown",

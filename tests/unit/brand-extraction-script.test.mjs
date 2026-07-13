@@ -52,9 +52,10 @@ test("B2 extraction script expands Firecrawl skill groups without approving them
   });
 
   assert.equal(result.ok, true);
-  for (const fieldType of ["positioning", "pricing", "rating", "regulated_claim", "missing_asset", "tone", "media_asset", "readiness_score"]) {
+  for (const fieldType of ["positioning", "pricing", "rating", "regulated_claim", "missing_asset", "tone", "media_asset"]) {
     assert.equal(result.candidates.some((candidate) => candidate.fieldType === fieldType), true, fieldType);
   }
+  assert.equal(result.candidates.some((candidate) => candidate.fieldType === "readiness_score"), false);
   assert.equal(result.candidates.every((candidate) => candidate.decision === "candidate"), true);
 });
 
@@ -99,6 +100,9 @@ test("B2 extraction maps Firecrawl v3 universal and vertical contract fields int
     crawlRunId: "crawl-v3",
     workspaceId: "workspace-1",
     schemaVersion: "brand.extraction.output.v3",
+    assets: [
+      { locator: "https://aster.example.com/rights.pdf", type: "document" }
+    ],
     scrape: {
       pages: [
         {

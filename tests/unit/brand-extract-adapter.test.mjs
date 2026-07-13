@@ -1,9 +1,44 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import {
   adaptBrandCrawlRunResponse,
-  buildApprovalDraftFromCandidates
+  buildApprovalDraftFromCandidates,
+  shouldCompleteCrawlWithLocalDemo
 } from "../../apps/web/app/brand-extract/_components/candidate-adapter.ts";
+
+test("local demo completion only owns simulator crawl jobs", () => {
+  assert.equal(
+    shouldCompleteCrawlWithLocalDemo({
+      source: "local-demo",
+      jobId: "job-simulator",
+      crawlProvider: { mode: "simulator", configured: false }
+    }),
+    true
+  );
+  assert.equal(
+    shouldCompleteCrawlWithLocalDemo({
+      source: "local-demo",
+      jobId: "job-firecrawl",
+      crawlProvider: { mode: "firecrawl", configured: true }
+    }),
+    false,
+    "Firecrawl jobs belong to the canonical queue processor, not the Next.js demo route"
+  );
+  assert.equal(
+    shouldCompleteCrawlWithLocalDemo({
+      source: "local-demo",
+      jobId: "",
+      crawlProvider: { mode: "simulator", configured: false }
+    }),
+    false
+  );
+});
+
+test("local demo route cannot execute Firecrawl outside the canonical queue processor", async () => {
+  const route = await readFile("apps/web/app/api/brand-extract/demo-complete-crawl/route.ts", "utf8");
+  assert.doesNotMatch(route, /runFirecrawlBrandExtraction|FIRECRAWL_API_KEY/);
+});
 
 // These tests exercise the brand-extract frontend adapter at runtime. The adapter module is
 // TypeScript but contains only type annotations (no value imports), so Node's built-in type

@@ -49,12 +49,6 @@ POST https://api.firecrawl.dev/v2/scrape
     { "type": "rawHtml" },
     {
       "type": "screenshot",
-      "fullPage": false,
-      "quality": 90,
-      "viewport": { "width": 1440, "height": 900 }
-    },
-    {
-      "type": "screenshot",
       "fullPage": true,
       "quality": 80
     },
@@ -62,6 +56,14 @@ POST https://api.firecrawl.dev/v2/scrape
       "type": "json",
       "prompt": "SEE PROMPT: P1-HOMEPAGE below",
       "schema": "SEE SCHEMA: S1-HOMEPAGE below"
+    }
+  ],
+  "actions": [
+    {
+      "type": "screenshot",
+      "fullPage": false,
+      "quality": 90,
+      "viewport": { "width": 1440, "height": 900 }
     }
   ],
   "onlyMainContent": false,
@@ -167,7 +169,7 @@ Return ONLY fields that are explicitly present. Use null for absent fields. Do n
 | OG image URL | `branding.images.ogImage` | G1 |
 | Brand personality (tone, energy, audience) | `branding.personality` | G4 |
 | Hero screenshot (above fold) | `actions.screenshots[0]` | G1 |
-| Full page screenshot | `actions.screenshots[1]` | G1 |
+| Full page screenshot | `screenshot` | G1 |
 | All image URLs (for Pass 4 download) | `images` array | G1 |
 | All page links (for Pass 2 URL routing) | `links` array | G5 |
 | Social media links | `json.social_links` | G4 |

@@ -1,5 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto';
-import { NextResponse } from 'next/server.js';
+import { NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
 
@@ -69,5 +69,13 @@ export async function POST() {
     workspaceId: body.workspace.id,
     authToken,
     expiresAt: new Date(expiresAtSeconds * 1000).toISOString()
+  });
+}
+
+export async function GET() {
+  return NextResponse.json({
+    message: "Welcome to the Sakhaa Forge Brand Extract Demo Session endpoint.",
+    usage: "To register a new demo session workspace, make a POST request to this endpoint.",
+    tip: "You can click the 'Create Demo Session' button in the Brand Extraction Studio UI, or use a POST request via curl/fetch."
   });
 }

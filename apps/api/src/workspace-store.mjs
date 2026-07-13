@@ -692,6 +692,29 @@ export function createWorkspaceStore(env = process.env) {
     };
   }
 
+  function updateBrandCandidateDecision(actor, crawlRunId, candidateId, decision) {
+    const crawlRun = brandCrawlRuns.get(crawlRunId);
+    if (!crawlRun || !getWorkspaceForActor(actor, crawlRun.workspaceId)) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    const candidate = brandCandidates.get(candidateId);
+    if (!candidate || candidate.crawlRunId !== crawlRunId) {
+      return {
+        ok: false,
+        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+      };
+    }
+    candidate.decision = decision;
+    brandCandidates.set(candidateId, candidate);
+    return {
+      ok: true,
+      response: { success: true, candidate: publicBrandCandidate(candidate) }
+    };
+  }
+
   function getBrandCrawlRun(actor, crawlRunId) {
     const crawlRun = brandCrawlRuns.get(crawlRunId);
     if (!crawlRun || !getWorkspaceForActor(actor, crawlRun.workspaceId)) {
@@ -733,7 +756,7 @@ export function createWorkspaceStore(env = process.env) {
           complianceRights: byGroup(["prohibited_claim", "regulated_claim", "rights_warning", "disclaimer", "rights_asset"]),
           missingAssets: byGroup(["missing_asset"]),
           readiness: {
-            score: candidates.length > 0 ? 60 : 0,
+            score: calculateBrandCandidateReadiness(candidates),
             status: candidates.length > 0 ? "approval_required" : "missing_assets"
           }
         }
@@ -6639,6 +6662,41 @@ export function createWorkspaceStore(env = process.env) {
     for (const candidate of retained) {
       brandCandidates.set(candidate.id, candidate);
     }
+    const retainedBrandAssets = [];
+    for (const assetInput of Array.isArray(input.retainedAssets) ? input.retainedAssets : []) {
+      if (!isValidRetainedCrawlAsset(assetInput, job.workspaceId)) {
+        return { ok: false, problem: problem("PROVIDER_OUTPUT_INVALID", 422, "Provider output invalid", "A retained crawl asset failed validation.") };
+      }
+      const artifact = {
+        id: randomUUID(),
+        workspaceId: job.workspaceId,
+        fileName: assetInput.fileName.trim(),
+        contentType: assetInput.contentType.trim().toLowerCase(),
+        byteSize: assetInput.byteSize,
+        sha256: assetInput.sha256.trim().toLowerCase(),
+        status: "CLEAN",
+        retentionClass: "clean-media",
+        producer: `job:${job.id}`,
+        schemaVersion: "brand.crawl.asset.v1",
+        objectKey: assetInput.objectKey,
+        createdAt: now,
+        updatedAt: now
+      };
+      const brandAsset = {
+        id: randomUUID(),
+        workspaceId: job.workspaceId,
+        crawlRunId: crawlRun.id,
+        artifactId: artifact.id,
+        rightsBasis: assetInput.rightsBasis.trim(),
+        permittedUse: assetInput.permittedUse.trim(),
+        status: "ACTIVE",
+        createdAt: now,
+        updatedAt: now
+      };
+      artifacts.set(artifact.id, artifact);
+      brandAssets.set(brandAsset.id, brandAsset);
+      retainedBrandAssets.push(publicBrandAsset(brandAsset, artifact));
+    }
     leased.status = "SUCCEEDED";
     leased.completedAt = now;
     leased.updatedAt = now;
@@ -6661,7 +6719,7 @@ export function createWorkspaceStore(env = process.env) {
     }
     appendJobEvent(jobEvents, job, "brand.candidates.extracted", { candidateCount: retained.length, requestId: job.input.requestId, traceId: job.input.traceId });
     appendJobEvent(jobEvents, job, "job.completed", { attemptId: leased.id, requestId: job.input.requestId, traceId: job.input.traceId });
-    return { ok: true, response: { job: publicJob(job), candidates: retained.map(publicBrandCandidate) } };
+    return { ok: true, response: { job: publicJob(job), candidates: retained.map(publicBrandCandidate), brandAssets: retainedBrandAssets } };
   }
 
   function failJob(jobId, input) {
@@ -7359,6 +7417,7 @@ export function createWorkspaceStore(env = process.env) {
     getJobForActor,
     listJobEventsForActor,
     listBrandCandidates,
+    updateBrandCandidateDecision,
     listDeadLetterJobs,
     claimJob,
     heartbeatJob,
@@ -7980,6 +8039,35 @@ export function createPrismaWorkspaceStore(env = process.env) {
           crawlRun: publicBrandCrawlRun(crawlRun),
           candidates: candidates.map(publicBrandCandidate)
         }
+      };
+    });
+  }
+
+  async function updateBrandCandidateDecision(actor, crawlRunId, candidateId, decision) {
+    return withActor(actor, async (tx) => {
+      const crawlRun = await tx.brandCrawlRun.findFirst({ where: { id: crawlRunId } });
+      if (!crawlRun) {
+        return {
+          ok: false,
+          problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+        };
+      }
+      const candidate = await tx.brandCandidate.findFirst({
+        where: { id: candidateId, crawlRunId, workspaceId: crawlRun.workspaceId }
+      });
+      if (!candidate) {
+        return {
+          ok: false,
+          problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+        };
+      }
+      const updated = await tx.brandCandidate.update({
+        where: { id: candidateId },
+        data: { decision }
+      });
+      return {
+        ok: true,
+        response: { success: true, candidate: publicBrandCandidate(updated) }
       };
     });
   }
@@ -12127,6 +12215,37 @@ export function createPrismaWorkspaceStore(env = process.env) {
         })
       );
     }
+    const retainedBrandAssets = [];
+    for (const assetInput of Array.isArray(input.retainedAssets) ? input.retainedAssets : []) {
+      if (!isValidRetainedCrawlAsset(assetInput, job.workspaceId)) {
+        return { ok: false, problem: problem("PROVIDER_OUTPUT_INVALID", 422, "Provider output invalid", "A retained crawl asset failed validation.") };
+      }
+      const artifact = await tx.artifact.create({
+        data: {
+          workspaceId: job.workspaceId,
+          fileName: assetInput.fileName.trim(),
+          contentType: assetInput.contentType.trim().toLowerCase(),
+          byteSize: assetInput.byteSize,
+          sha256: assetInput.sha256.trim().toLowerCase(),
+          status: "CLEAN",
+          retentionClass: "clean-media",
+          producer: `job:${job.id}`,
+          schemaVersion: "brand.crawl.asset.v1",
+          objectKey: assetInput.objectKey
+        }
+      });
+      const brandAsset = await tx.brandAsset.create({
+        data: {
+          workspaceId: job.workspaceId,
+          crawlRunId: crawlRun.id,
+          artifactId: artifact.id,
+          rightsBasis: assetInput.rightsBasis.trim(),
+          permittedUse: assetInput.permittedUse.trim(),
+          status: "ACTIVE"
+        }
+      });
+      retainedBrandAssets.push(publicBrandAsset(brandAsset, artifact));
+    }
     const updatedAttempt = await tx.jobAttempt.update({
       where: { id: attempt.id },
       data: { status: "SUCCEEDED", completedAt: new Date() }
@@ -12173,7 +12292,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
       }
     ];
     await tx.jobEvent.createMany({ data: events });
-    return { ok: true, response: { job: publicJob(updatedJob), candidates: retained.map(publicBrandCandidate) } };
+    return { ok: true, response: { job: publicJob(updatedJob), candidates: retained.map(publicBrandCandidate), brandAssets: retainedBrandAssets } };
   }
 
   async function failJob(jobId, input) {
@@ -15573,6 +15692,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
     getJobForActor,
     listJobEventsForActor,
     listBrandCandidates,
+    updateBrandCandidateDecision,
     listDeadLetterJobs,
     claimJob,
     heartbeatJob,
@@ -15607,7 +15727,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
   };
 }
 
-const supportedContentTypes = new Set(["image/png", "image/jpeg", "video/mp4"]);
+const supportedContentTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/svg+xml", "video/mp4"]);
 const supportedWorkspaceCapabilities = new Set(["media_processing"]);
 const supportedCredentialRotationStatuses = new Set(["ACTIVE", "ROTATION_DUE", "REVOKED"]);
 const supportedSimulatorBoundaries = new Set(["provider", "payment", "publishing", "worker"]);
@@ -15944,7 +16064,23 @@ function publicBrandCrawlRun(crawlRun) {
 
 function resolveCrawlProviderStatus(env) {
   const mode = env?.BRAND_CRAWL_MODE || (env?.FIRECRAWL_API_KEY ? "firecrawl" : "simulator");
-  return { mode, configured: mode === "firecrawl" };
+  return { mode, configured: mode === "firecrawl" && typeof env?.FIRECRAWL_API_KEY === "string" && env.FIRECRAWL_API_KEY.trim().length > 0 };
+}
+
+function calculateBrandCandidateReadiness(candidates) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return 0;
+  const groups = [
+    ["identity", "summary"],
+    ["visual_identity", "logo", "color", "font", "rights_asset", "media_asset"],
+    ["copy_messaging", "usp", "cta", "positioning"],
+    ["audience"],
+    ["voice", "tone"],
+    ["product_service", "product", "service"],
+    ["social_proof", "testimonial", "rating", "certification", "award", "case_study", "metric"],
+    ["claim", "regulated_claim", "prohibited_claim", "disclaimer"]
+  ];
+  const present = new Set(candidates.map((candidate) => candidate.fieldType));
+  return Math.round((groups.filter((group) => group.some((fieldType) => present.has(fieldType))).length / groups.length) * 100);
 }
 
 function brandCrawlRunMetadata(crawlRun) {
@@ -16023,6 +16159,19 @@ function isValidBrandExtractionOutput(input) {
     verticalAssets.raw_vertical_data &&
     Array.isArray(input.pages) &&
     input.pages.length > 0
+  );
+}
+
+function isValidRetainedCrawlAsset(asset, workspaceId) {
+  return Boolean(
+    asset &&
+    typeof asset.fileName === "string" && asset.fileName.trim() &&
+    typeof asset.contentType === "string" && supportedContentTypes.has(asset.contentType.trim().toLowerCase()) &&
+    Number.isInteger(asset.byteSize) && asset.byteSize > 0 && asset.byteSize <= 10 * 1024 * 1024 &&
+    isSha256(asset.sha256) &&
+    typeof asset.objectKey === "string" && asset.objectKey.startsWith(`clean-media/${workspaceId}/brand-crawl/`) &&
+    typeof asset.rightsBasis === "string" && asset.rightsBasis.trim() &&
+    typeof asset.permittedUse === "string" && asset.permittedUse.trim()
   );
 }
 

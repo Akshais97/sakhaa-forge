@@ -4,10 +4,76 @@ import {
   buildFirecrawlBrandPassPlan,
   buildFirecrawlCrawlRequest,
   buildFirecrawlVerticalPassPlan,
+  buildImageInventory,
   runFirecrawlBrandExtraction,
   normaliseFirecrawlPages,
+  selectUniversalPagePlan,
   startBrandCrawl
 } from "../../apps/api/src/firecrawl-provider.mjs";
+
+test("Firecrawl universal routing discovers five eligible internal pages without explicit path scope", () => {
+  const plan = selectUniversalPagePlan({
+    baseUrl: "https://aster.example.com/",
+    links: [
+      "https://aster.example.com/our-story",
+      "https://aster.example.com/testimonials",
+      "https://aster.example.com/help",
+      "https://aster.example.com/insights",
+      "https://aster.example.com/contact",
+      "https://external.example.net/about"
+    ],
+    crawlScope: { maxPages: 5, permittedPathPrefixes: ["/"] }
+  });
+
+  assert.deepEqual(plan.pages.map((page) => page.key), ["homepage", "about", "reviews", "faq", "blog_index"]);
+  assert.deepEqual(plan.pages.map((page) => page.url), [
+    "https://aster.example.com/",
+    "https://aster.example.com/our-story",
+    "https://aster.example.com/testimonials",
+    "https://aster.example.com/help",
+    "https://aster.example.com/insights"
+  ]);
+  assert.equal(plan.minimumExpectedPages, 5);
+  assert.equal(plan.partial, false);
+});
+
+test("Firecrawl universal routing preserves restrictive scope and reports a partial inventory", () => {
+  const plan = selectUniversalPagePlan({
+    baseUrl: "https://aster.example.com/",
+    links: ["https://aster.example.com/about", "https://aster.example.com/projects/a"],
+    crawlScope: { maxPages: 5, permittedPathPrefixes: ["/projects"] }
+  });
+
+  assert.deepEqual(plan.pages.map((page) => page.url), ["https://aster.example.com/", "https://aster.example.com/projects/a"]);
+  assert.equal(plan.partial, true);
+  assert.equal(plan.warnings.some((warning) => warning.code === "CRAWL_MINIMUM_PAGE_COUNT_NOT_MET"), true);
+});
+
+test("Firecrawl image inventory uses extracted context and does not duplicate unclassified images into every category", () => {
+  const inventory = buildImageInventory([
+    {
+      url: "https://cdn.example.com/a-1738.jpg",
+      alt: "Living room at Aster Heights",
+      context: "Project gallery",
+      category: "project"
+    },
+    {
+      url: "https://cdn.example.com/b-9921.jpg",
+      alt: "Aster sales team",
+      context: "Meet our team"
+    },
+    {
+      url: "https://cdn.example.com/pixel.gif",
+      alt: "",
+      context: "tracking pixel"
+    }
+  ]);
+
+  assert.deepEqual(inventory.productImages, ["https://cdn.example.com/a-1738.jpg"]);
+  assert.deepEqual(inventory.teamImages, ["https://cdn.example.com/b-9921.jpg"]);
+  assert.equal(inventory.lifestyleImages.includes("https://cdn.example.com/a-1738.jpg"), false);
+  assert.equal(inventory.all.some((asset) => asset.url.endsWith("pixel.gif")), false);
+});
 
 test("Firecrawl adapter builds a scoped V0 brand crawl request without unsafe expansion", () => {
   const request = buildFirecrawlCrawlRequest(
@@ -132,7 +198,11 @@ test("Firecrawl adapter builds documented universal scrape passes with typed jso
   assert.equal(homepage.endpoint, "/scrape");
   assert.equal(homepage.request.url, "https://aster.example.com/");
   assert.equal(homepage.request.formats.some((format) => format.type === "rawHtml"), true);
-  assert.equal(homepage.request.formats.filter((format) => format.type === "screenshot").length, 2);
+  assert.equal(homepage.request.formats.filter((format) => format.type === "screenshot").length, 1);
+  assert.equal(homepage.request.formats.find((format) => format.type === "screenshot").fullPage, true);
+  assert.deepEqual(homepage.request.actions, [
+    { type: "screenshot", fullPage: false, quality: 90, viewport: { width: 1440, height: 900 } }
+  ]);
   const jsonFormat = homepage.request.formats.find((format) => format.type === "json");
   assert.match(jsonFormat.prompt, /BRAND NAME/);
   assert.match(jsonFormat.prompt, /UNIQUE_SELLING_POINTS/);
@@ -213,7 +283,8 @@ test("Firecrawl adapter runs universal before vertical with the server-side API 
   assert.equal(calls.every((call) => call.url.endsWith("/scrape")), true);
   assert.equal(calls.some((call) => call.url.endsWith("/crawl")), false);
   assert.equal(calls[0].init.body.url, "https://aster.example.com/");
-  assert.equal(calls.at(-1).init.body.url, "https://aster.example.com/listings");
+  assert.equal(calls.some((call) => call.init.body.url === "https://aster.example.com/listings"), true);
+  assert.equal(calls.some((call) => call.init.body.url === "https://aster.example.com/projects/aster-heights"), true);
   assert.equal(result.output.schemaVersion, "brand.extraction.output.v3");
   assert.equal(result.output.provider, "firecrawl");
   assert.equal(result.output.universal.profile.copy_messaging.brand_name, "Aster Heights");
@@ -221,7 +292,96 @@ test("Firecrawl adapter runs universal before vertical with the server-side API 
   assert.equal(result.output.universal.profile.metadata.schema_org_type, "RealEstateListing");
   assert.equal(result.output.vertical.assets.detected_vertical, "G8");
   assert.deepEqual(result.output.vertical.assets.raw_vertical_data.rera_numbers, ["RERA-KA-123"]);
+  assert.equal(result.output.pageInventory.completed.length >= 5, true);
+  assert.equal(result.output.pageInventory.partial, false);
   assert.equal(/fc-secret|authorization/i.test(JSON.stringify(result.output)), false);
+});
+
+test("Firecrawl adapter deep-reads the two most recent same-origin blog posts from P2D", async () => {
+  const calledUrls = [];
+  const result = await runFirecrawlBrandExtraction(
+    {
+      id: "crawl-blog",
+      normalizedUrl: "https://aster.example.com/",
+      crawlScope: { maxPages: 5, brandExtraction: { selectedBrandType: "real_estate" } }
+    },
+    {
+      env: { FIRECRAWL_API_KEY: "fc-secret", FIRECRAWL_API_BASE_URL: "https://api.firecrawl.dev/v2" },
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(init.body);
+        calledUrls.push(body.url);
+        const json = body.url === "https://aster.example.com/blog"
+          ? {
+              post_headlines: ["Post one", "Post two", "External post"],
+              post_urls: ["/blog/post-one", "https://aster.example.com/blog/post-two", "https://outside.example/blog/post"]
+            }
+          : body.url.includes("/blog/post-")
+            ? {
+                post_title: body.url.endsWith("one") ? "Post one" : "Post two",
+                vocabulary_signature: [body.url.endsWith("one") ? "thoughtful" : "practical"],
+                writing_style_tags: ["educational"],
+                key_claims: ["Explicit claim"]
+              }
+            : {};
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: {
+              metadata: { sourceURL: body.url },
+              links: body.url.endsWith("/")
+                ? ["/about", "/reviews", "/faq", "/blog"]
+                : [],
+              images: [],
+              json
+            }
+          })
+        };
+      }
+    }
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(calledUrls.includes("https://aster.example.com/blog/post-one"), true);
+  assert.equal(calledUrls.includes("https://aster.example.com/blog/post-two"), true);
+  assert.equal(calledUrls.includes("https://outside.example/blog/post"), false);
+  assert.deepEqual(result.output.universal.profile.brand_personality.vocabulary_signature.sort(), ["practical", "thoughtful"]);
+  assert.deepEqual(result.output.universal.profile.brand_personality.key_claims, ["Explicit claim"]);
+});
+
+test("Firecrawl v2 format screenshots are retained from data.screenshot", async () => {
+  const result = await runFirecrawlBrandExtraction(
+    {
+      id: "crawl-screenshot",
+      normalizedUrl: "https://aster.example.com/",
+      crawlScope: { maxPages: 1, permittedPathPrefixes: ["/"], brandExtraction: { selectedBrandType: "real_estate" } }
+    },
+    {
+      env: { FIRECRAWL_API_KEY: "fc-secret", FIRECRAWL_API_BASE_URL: "https://api.firecrawl.dev/v2" },
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(init.body);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: {
+              metadata: { sourceURL: body.url },
+              markdown: "Aster homes",
+              links: [],
+              images: [],
+              screenshot: "https://cdn.example.com/homepage-full.png",
+              json: { brand_name: "Aster", schema_type: "RealEstateListing" }
+            }
+          })
+        };
+      }
+    }
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.output.universal.profile.visual_identity.full_page_screenshot_url, "https://cdn.example.com/homepage-full.png");
 });
 
 function firecrawlScrapeFixture(bodyText) {

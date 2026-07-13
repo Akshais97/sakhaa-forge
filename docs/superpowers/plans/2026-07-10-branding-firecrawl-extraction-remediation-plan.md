@@ -51,7 +51,7 @@
   - `apps/api/src/brand-crawl/page-router.mjs`
   - deterministic fixtures under `tests/fixtures/brand-crawl/`
 
-### 3. Low-quality prompts and hardcoded extracted-looking values
+### 3. FIXED: Low-quality prompts and hardcoded extracted-looking values
 
 #### Prompt hand-off: goal intended and current prompt
 

@@ -1,10 +1,10 @@
 # V0 Firecrawl Brand Asset Acquisition Plan
 
-**Status:** Implementation planning note for V0-B1, V0-B2 and the backend-only
-Firecrawl revamp sprint  
-**Scope:** Product V0 only  
+**Status:** Supporting integration note for V0-B1, V0-B2 and the backend-only
+Firecrawl revamp sprint; not the extraction-detail source of truth
+**Scope:** Product V0 only
 **Primary flow:** Company URL -> safe crawl -> fixed universal Firecrawl pass ->
-selected or detected vertical pass -> evidence-backed candidates -> human approval  
+selected or detected vertical pass -> evidence-backed candidates -> human approval
 **Do not treat this document as approval to use extracted assets in production.** The
 canonical approval contract remains `docs/V0/V0_BRAND_PROFILE_CONTRACT.md`.
 
@@ -30,14 +30,16 @@ Authoritative V0 and project sources:
 - `docs/Project/Operations/PROJECT_CONFIGURATION_CATALOG.md`
 - `docs/Project/Governance/karpathy_SKILL.md`
 
-Firecrawl feature sources:
+Current Firecrawl extraction sources of truth:
 
 - `docs/V0/Features/Firecrawl/brand-crawl-universal.md`
 - `docs/V0/Features/Firecrawl/brand-crawl-verticals.md`
 
-`brand-crawl-universal.md` is fixed for this feature. V0 implementation consumes it as
-the universal crawl contract and may wrap, validate, normalise and redact its output, but
-must not rewrite it as part of the backend sprint.
+These two feature guides supersede this plan and older V0 documents for crawl passes,
+request parameters, prompts, schemas, extracted fields, asset harvesting and output
+shapes. This plan supplies integration, security, tenancy, evidence and approval context
+only. Where a safety rule conflicts with an extraction detail, the owning safety contract
+continues to take priority.
 
 ## 2. First-Principles Workflow
 
@@ -265,15 +267,17 @@ Firecrawl revamp works:
    user billing unless a later price-version contract authorises it.
 5. Asset retention needs a clear policy for public images whose page permits viewing but
    not production reuse.
-6. UI work is intentionally deferred; backend responses must still carry enough grouped
-   evidence for a future brand-type selector and vertical review panel.
+6. Retained crawl artifacts use the existing private-artifact access contract; browser
+   rendering must resolve `artifactId` through authorised short-lived access and must not
+   treat `artifact:<id>` or a provider URL as a public image URL.
 
 ## 12. Acceptance Criteria For The Backend Revamp
 
 - The universal Firecrawl guide remains unchanged.
 - User-selected brand type is accepted, validated and retained.
 - Universal extraction always runs before any vertical extraction.
-- Exactly one vertical pass runs for the selected or detected type.
+- Exactly one vertical section runs for the selected or detected type; every documented
+  index, detail, gallery, pricing or team pass inside that section may run.
 - Selected/detected disagreement creates visible conflict evidence.
 - Firecrawl API key is server-side only and is absent from browser code, logs, analytics,
   job events and retained artifacts.

@@ -17,6 +17,10 @@ retained asset/evidence artifacts and returns grouped candidates for later appro
 
 ## Source Contracts
 
+For extraction details, the two Firecrawl feature guides below are primary and supersede
+older V0 planning prose. The remaining sources govern integration, security, tenancy,
+approval, persistence, jobs and evidence.
+
 - `../V0.md`
 - `../V0_PRODUCT_SPECIFICATION.md`
 - `../V0_VERTICAL_OUTCOME_SLICES.md`
@@ -100,12 +104,14 @@ Nearby tests:
 
 ## Backend Design Decisions
 
-- **Universal guide is fixed:** implementation reads and follows
-  `brand-crawl-universal.md`; sprint work may not rewrite that document.
+- **Feature guides are primary:** implementation reads and follows
+  `brand-crawl-universal.md` and `brand-crawl-verticals.md` for pass sequence, request
+  parameters, prompts, schemas, fields, asset harvesting and output shapes.
 - **Universal first:** even when the user selects a brand type, universal extraction runs
   before the vertical pass so all brand profiles share the same base evidence contract.
-- **One vertical pass:** the backend runs only one vertical section per crawl run. Running
-  multiple verticals would multiply cost, complicate evidence and blur approval.
+- **One vertical section:** the backend runs only one selected/detected vertical section
+  per crawl run and executes that section's documented index, detail, gallery, pricing or
+  team passes. It never runs unrelated vertical sections.
 - **Selection is not truth:** user-selected type controls crawl depth; detected type remains
   evidence. A mismatch is a candidate conflict for human review.
 - **Provider cost is operational telemetry:** Firecrawl credits are retained for evidence
@@ -158,12 +164,19 @@ approval. The UI must read canonical backend/job status.
 - Job event trace showing universal pass before vertical pass.
 - Gap review against `V0_FIRECRAWL_BRAND_ASSET_ACQUISITION_PLAN.md`.
 
-## Known Gaps To Close During Implementation
+## Implementation evidence (2026-07-10)
 
-- Decide the exact schema placement for selected/detected brand type after inspecting the
-  executable Prisma schema: dedicated columns or versioned fields inside `crawlScope`.
-- Define the final JSON Schema for `brand.extraction.output.v3`.
-- Confirm whether production Firecrawl mode uses queue-processor network calls or a
-  private worker, while preserving the rule that browser code never calls Firecrawl.
-- Extend approval UI contracts in a later frontend sprint so new candidate groups can be
-  reviewed without inventing labels or statuses.
+- Selected/detected type remains versioned inside `crawlScope.brandExtraction`; no schema
+  migration was required.
+- The CPU queue processor claims an opaque canonical job ID through the internal API,
+  invokes Firecrawl with the server-side key, heartbeats and completes through the same API.
+- Homepage link discovery selects five eligible internal pages by default, reports exact
+  partial/skipped evidence, runs P3 against at most two same-origin blog posts and then runs
+  the selected vertical section.
+- Downloaded image bytes are content-type/size validated, hashed, retained under the
+  workspace/crawl namespace and represented by CLEAN `Artifact` plus ACTIVE `BrandAsset`
+  records. Private redirect targets and non-logo SVGs are rejected.
+- `usp` candidates and the dedicated approval editor are wired. Readiness and progress no
+  longer use fixed extracted-looking percentages.
+- Release evidence is incomplete until full repository verification, Prisma/RLS coverage
+  and authorised browser artifact rendering are green.

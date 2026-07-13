@@ -2,6 +2,13 @@
 
 ## Job Types
 
+For `brand_crawl` extraction behaviour, the current sources of truth are
+`Features/Firecrawl/brand-crawl-universal.md` and
+`Features/Firecrawl/brand-crawl-verticals.md`. They supersede older V0 job prose for
+Firecrawl pass sequence, request parameters, prompts, schemas, extracted fields, asset
+harvesting and output shapes. This document continues to own durable job state, leases,
+retries, completion validation and secret-safe worker boundaries.
+
 ```text
 brand_crawl
 brand_asset_validate
@@ -241,6 +248,12 @@ produced, not a prediction of reach, virality, conversion or causal performance.
 or missing final video hides behind `WORKSPACE_ACCESS_DENIED` (404).
 
 ## Pipeline Rules
+
+For `brand_crawl`, the CPU worker receives only the opaque canonical job ID, claims the
+job through the internal generated client, heartbeats the lease, invokes the Firecrawl
+adapter and completes or fails through the internal API. `BRAND_CRAWL_MODE=firecrawl`
+requires `FIRECRAWL_API_KEY`; the key is read only by API startup validation and the queue
+worker and is never placed in a queue payload, job input, response or retained artifact.
 
 - Brand approval is a dependency for every production script/generation job.
 - Formula derivation requires a valid blueprint or the approved default formula.

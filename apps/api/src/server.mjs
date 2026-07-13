@@ -1,5 +1,6 @@
 import "reflect-metadata";
 import { readFile } from "node:fs/promises";
+import { validateFirecrawlConfiguration } from "./firecrawl-provider.mjs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Controller, Get, HttpCode, HttpException, Module, Param, Patch, Post, Query, Req } from "@nestjs/common";
@@ -15,11 +16,16 @@ import { isSwaggerEnabled, setupSwagger } from "./swagger.mjs";
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const openApiPath = resolve(currentDir, "../../../packages/contracts/generated/openapi.v0.json");
 
-export async function createApiServer(env = process.env) {
+export async function createApiServer(env = process.env, dependencies = {}) {
   if (env === process.env) {
     await loadApiLocalEnv(env);
   }
-  const { AppModule, store } = createAppModule(env);
+  configureLocalBrandCrawlWorker(env);
+  const firecrawlConfiguration = validateFirecrawlConfiguration(env);
+  if (!firecrawlConfiguration.ok) {
+    throw new Error(firecrawlConfiguration.problem.detail);
+  }
+  const { AppModule, store } = createAppModule(env, dependencies);
   const app = await NestFactory.create(
     AppModule,
     new FastifyAdapter({ logger: false }),
@@ -77,10 +83,10 @@ export function getTestStore(app) {
   return testStores.get(app);
 }
 
-function createAppModule(env) {
+function createAppModule(env, dependencies = {}) {
   const store = createStore(env);
-  const RootController = createF0Controller(env, store, "");
-  const V0Controller = createF0Controller(env, store, "api/v0");
+  const RootController = createF0Controller(env, store, "", dependencies);
+  const V0Controller = createF0Controller(env, store, "api/v0", dependencies);
 
   class AppModule {}
   Module({
@@ -90,7 +96,7 @@ function createAppModule(env) {
   return { AppModule, store };
 }
 
-function createF0Controller(env, store, prefix) {
+function createF0Controller(env, store, prefix, dependencies = {}) {
   class F0Controller {
     health() {
       return getHealth(env);
@@ -337,6 +343,13 @@ function createF0Controller(env, store, prefix) {
           if (!created.ok) {
             throw new HttpException(created.problem, created.problem.status);
           }
+
+          if (shouldDispatchLocalBrandCrawl(env)) {
+            dispatchLocalBrandCrawl(created.response.job.id, env, dependencies).catch((error) => {
+              console.error(`local_brand_crawl_dispatch_failed:${error?.code ?? "unknown"}`);
+            });
+          }
+
           return created.response;
         }
       );
@@ -352,6 +365,30 @@ function createF0Controller(env, store, prefix) {
         throw new HttpException(auth.problem, auth.problem.status);
       }
       const result = await store.listBrandCandidates(auth.actor, crawlRunId);
+      if (!result.ok) {
+        throw new HttpException(result.problem, result.problem.status);
+      }
+      return result.response;
+    }
+
+    async updateBrandCandidateStatus(request, crawlRunId, candidateId) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) {
+        throw new HttpException(auth.problem, auth.problem.status);
+      }
+      const status = request.body?.status;
+      if (status !== "approved" && status !== "rejected") {
+        throw new HttpException(
+          problem("VALIDATION_FAILED", 422, "Validation failed", "Status must be approved or rejected."),
+          422
+        );
+      }
+      const result = await store.updateBrandCandidateDecision(
+        auth.actor,
+        crawlRunId,
+        candidateId,
+        status === "approved" ? "approve" : "reject"
+      );
       if (!result.ok) {
         throw new HttpException(result.problem, result.problem.status);
       }
@@ -1954,6 +1991,7 @@ function createF0Controller(env, store, prefix) {
   route("brands/crawl-runs/:crawlRunId", F0Controller, "getBrandCrawlRun", [Req(), Param("crawlRunId")], 200);
   route("brands/crawl-runs/:crawlRunId/asset-pack", F0Controller, "getBrandAssetPack", [Req(), Param("crawlRunId")], 200);
   route("brands/crawl-runs/:crawlRunId/candidates", F0Controller, "listBrandCandidates", [Req(), Param("crawlRunId")], 200);
+  postRoute("brands/crawl-runs/:crawlRunId/candidates/:candidateId/status", F0Controller, "updateBrandCandidateStatus", [Req(), Param("crawlRunId"), Param("candidateId")], 200);
   route("users/me/profile", F0Controller, "getUserProfile", [Req()], 200);
   patchRoute("users/me/profile", F0Controller, "updateUserProfile", [Req()], 200);
   route("onboarding/brand-context", F0Controller, "getOnboardingBrandContext", [Req(), Query()], 200);
@@ -2056,6 +2094,44 @@ function createF0Controller(env, store, prefix) {
   postRoute("internal/jobs/:jobId/fail", F0Controller, "failJob", [Req(), Param("jobId")], 200);
 
   return F0Controller;
+}
+
+function configureLocalBrandCrawlWorker(env) {
+  const production = env.APP_ENV === "production" || env.NODE_ENV === "production";
+  if (!production && !env.REDIS_URL && !env.V0_INTERNAL_WORKER_TOKEN) {
+    env.V0_INTERNAL_WORKER_TOKEN = "local-dev-worker-token";
+  }
+}
+
+function shouldDispatchLocalBrandCrawl(env) {
+  const production = env.APP_ENV === "production" || env.NODE_ENV === "production";
+  return !production && !env.REDIS_URL && validateFirecrawlConfiguration(env).mode === "firecrawl";
+}
+
+async function dispatchLocalBrandCrawl(jobId, env, dependencies) {
+  const processBrandCrawlJob = dependencies.processBrandCrawlJobImpl
+    ?? (await import("../../../workers/queue/src/brand-crawl-processor.mjs")).processBrandCrawlJob;
+  const result = await processBrandCrawlJob(jobId, {
+    apiBaseUrl: resolveInternalApiBaseUrl(env),
+    workerToken: env.V0_INTERNAL_WORKER_TOKEN,
+    env
+  });
+  if (!result?.ok) {
+    const error = new Error("The local brand crawl processor did not complete the queued job.");
+    error.code = result?.problem?.code ?? "DEPENDENCY_UNAVAILABLE";
+    throw error;
+  }
+}
+
+function resolveInternalApiBaseUrl(env) {
+  const configured = env.API_BASE_URL || env.V0_API_BASE_URL;
+  if (!configured) return `http://127.0.0.1:${env.PORT || "3001"}/api/v0`;
+  const parsed = new URL(configured);
+  const pathname = parsed.pathname.replace(/\/$/, "");
+  parsed.pathname = pathname.endsWith("/api/v0") ? pathname : `${pathname}/api/v0`.replace(/\/{2,}/g, "/");
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString().replace(/\/$/, "");
 }
 
 async function assertWorkspacePermission(store, actor, workspaceId, capability) {
