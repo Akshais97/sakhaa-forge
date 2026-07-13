@@ -91,11 +91,11 @@ The following rules are non-negotiable for every suggestion:
 
 **Tree-of-thought options for stage transitions:**
 
-| Option | Description | Pros | Cons | Verdict |
-| --- | --- | --- | --- | --- |
-| A. Direction-aware slide | Content exits `x: -20`, enters `x: 20` on next stage; reverse on back. | Reinforces narrative direction; Apple spatial consistency. | Requires careful reduced-motion fallback; can feel heavy on mobile. | **Selected** |
-| B. Crossfade only | Opacity fade, no position change. | Safe, calm, easy reduced-motion. | Does not communicate "moving forward" in a multi-stage demo. | Fallback |
-| C. Shared element transition | A persistent shape (e.g., the 9:16 player) morphs between stage mockups. | High craft, explains continuity. | Complex, may fight with mock content differences; overkill for V0 landing. | Defer |
+| Option                       | Description                                                              | Pros                                                       | Cons                                                                       | Verdict      |
+| ---------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------- | -------------------------------------------------------------------------- | ------------ |
+| A. Direction-aware slide     | Content exits `x: -20`, enters `x: 20` on next stage; reverse on back.   | Reinforces narrative direction; Apple spatial consistency. | Requires careful reduced-motion fallback; can feel heavy on mobile.        | **Selected** |
+| B. Crossfade only            | Opacity fade, no position change.                                        | Safe, calm, easy reduced-motion.                           | Does not communicate "moving forward" in a multi-stage demo.               | Fallback     |
+| C. Shared element transition | A persistent shape (e.g., the 9:16 player) morphs between stage mockups. | High craft, explains continuity.                           | Complex, may fight with mock content differences; overkill for V0 landing. | Defer        |
 
 **Selected recommendations for landing page:**
 
