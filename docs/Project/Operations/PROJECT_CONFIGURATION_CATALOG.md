@@ -127,6 +127,12 @@ Workers receive no PostgreSQL or Redis configuration.
 | `LLM_API_KEY` | queue | provider secret | Provider mode | Secret | Capability disabled |
 | `LLM_MODEL_ID` | queue | approved model identifier | Provider mode | Internal | Fail |
 | `LLM_REQUEST_TIMEOUT_MS` | queue | integer | No | Internal | `60000` |
+| `BRAND_CRAWL_MODE` | queue | enum `simulator,firecrawl` | Yes for B1/B2 | Internal | local/test `simulator`; prod explicit |
+| `FIRECRAWL_API_BASE_URL` | queue | HTTPS URL | Firecrawl mode | Internal | `https://api.firecrawl.dev/v2` |
+| `FIRECRAWL_API_KEY` | queue | provider secret | Firecrawl mode | Secret | Brand crawl provider disabled |
+| `FIRECRAWL_TIMEOUT_MS` | queue | integer 1000-120000 | No | Internal | `60000` |
+| `BRAND_CRAWL_DEFAULT_MAX_PAGES` | queue | integer 1-50 | No | Internal | `5` |
+| `BRAND_CRAWL_MAX_PAGES` | queue | integer 1-50 | No | Internal | `50` |
 | `CRAWL_USER_AGENT` | queue | non-empty contact-bearing identifier | Yes | Public | Fail |
 | `CRAWL_MAX_PAGES` | queue | integer 1-100 | No | Internal | `25` |
 | `CRAWL_MAX_REDIRECTS` | queue | integer 0-10 | No | Internal | `5` |
@@ -162,9 +168,16 @@ Prices are versioned database records, not environment variables.
 | `AE_FONT_MANIFEST_PATH` | absolute file path | AE worker | Sensitive reference | Fail |
 | `AE_RENDER_TIMEOUT_SECONDS` | integer | No | Internal | `1800` |
 | `AE_OUTPUT_CODEC` | approved codec enum | No | Internal | `h264` |
+| `AE_WORKER_MODE` | enum `simulator` | No | Internal | `simulator`; any other value refuses renders with `AE_RENDER_FAILED` |
+| `V0_C2_SIMULATOR_MODE` | enum `success,crash,bad_output,capability_drift` | No | Internal (test) | `success`; drives the deterministic AE render simulator in V0-C2 |
 | `FFMPEG_PATH` | absolute path | media workers | Sensitive reference | Fail |
 
-A readiness render must pass before the worker accepts leases.
+A readiness render must pass before the worker accepts leases. V0 runs the AE render worker
+as a deterministic simulator; `AE_WORKER_MODE` gates acceptance and `V0_C2_SIMULATOR_MODE`
+selects the simulator path (`success` produces a valid golden render, `crash` leaves the
+attempt `running` for crash-recovery proof, `bad_output` returns an incompatible output,
+`capability_drift` reports an unexpected capability version). Production AE worker mode is
+out of V0 scope.
 
 ## 12. Payments
 
@@ -190,6 +203,12 @@ Finance/provider owner rotates payment secrets; ledger state is never configurat
 | `META_WEBHOOK_VERIFY_TOKEN` | secret | Meta mode | Secret | Callback fails |
 | `YOUTUBE_CLIENT_ID` | provider ID | YouTube mode | Internal | YouTube disabled |
 | `YOUTUBE_CLIENT_SECRET` | secret | YouTube mode | Secret | Disabled |
+| `YOUTUBE_WEBHOOK_SECRET` | signing secret | YouTube API mode | Secret | Callback verification fails |
+| `YOUTUBE_MODE` | enum `simulator,api` | Yes | Internal | local `simulator`; `api` is the live YouTube route (out of V0 scope); any other value refuses submission with `PROVIDER_UNAVAILABLE` |
+| `V0_YOUTUBE_SIMULATOR_SECRET` | signing secret | No | Internal (test) | `v0-local-youtube-secret`; deterministic local callback signing secret (production uses `YOUTUBE_WEBHOOK_SECRET`) |
+| `V0_YOUTUBE_SIMULATOR_MODE` | enum `success,timeout,malformed,duplicate,processing` | No | Internal (test) | `success`; drives the deterministic YouTube Shorts publish simulator |
+| `V0_YOUTUBE_SIMULATOR_QUOTA` | enum `exhausted` | No | Internal (test) | unset; `exhausted` forces a pre-flight `PUBLISH_QUOTA_EXHAUSTED` refusal (models the 3 uploads/day quota) |
+| `V0_YOUTUBE_SIMULATOR_RECONCILE` | enum `accepted,processing,completed,failed,pending` | No | Internal (test) | `completed`; drives the deterministic YouTube reconcile outcome |
 | `PUBLISH_CALLBACK_BASE_URL` | HTTPS URL | Provider mode | Internal | Fail |
 | `VERIFY_RETRY_SCHEDULE_SECONDS` | comma-separated bounded integers | No | Internal | `0,60,180,420,900` |
 
@@ -229,6 +248,13 @@ payloads.
   status, created/rotated/expires timestamps and actor, never the secret.
 - Rotation tests confirm old credentials stop working after the overlap window.
 - Production startup records a redacted configuration fingerprint and schema version.
+
+`BRAND_CRAWL_MODE=simulator` is the deterministic local/test path. `firecrawl` may be enabled
+only server-side for the V0 brand crawl worker boundary; browser code must never receive
+`FIRECRAWL_API_KEY`, raw Firecrawl payloads, provider crawl IDs that grant access, object keys,
+signed URLs or prompt material. Generic LLM configuration remains `LLM_PROVIDER`,
+`LLM_API_KEY` and `LLM_MODEL_ID`; vendor-specific aliases such as `OPEN_API_KEY` or
+`OPENAI_API_KEY` are not canonical V0 configuration names.
 
 ## 17. Catalog Change Rule
 

@@ -35,6 +35,11 @@ flowchart LR
 - Provider SDKs live behind adapters and never enter domain modules.
 - V0 owns production generation, review, publishing, billing and performance capture.
 - V0 stores enough immutable lineage for later V1/V2 use but does not call V2.
+- V0-A3 statically enforces the V1/V2 absence boundary: the reference journey runs through `/api/v0`
+  only, and a dedicated absence check asserts that the V0 OpenAPI document exposes no V1/V2 routes,
+  the Prisma schema maps no V1/V2 tables or models, and the API runtime imports no V1/V2 modules.
+  Schema-version suffixes (for example `ae.plan.v1`) are content fingerprints, not Product V1/V2
+  runtime dependencies.
 
 ## Modules
 

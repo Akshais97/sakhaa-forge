@@ -123,6 +123,9 @@ test("brand crawl intake creates durable crawl run, brand asset rights and queue
       assert.equal(run.body.crawlRun.normalizedUrl, "https://aster.example.com/projects/");
       assert.equal(run.body.brandAssets.length, 1);
       assert.equal(run.body.brandAssets[0].artifactId, upload.body.artifact.id);
+      assert.equal(run.body.brandAssets[0].name, "logo.png");
+      assert.equal(run.body.brandAssets[0].category, "Uploaded image");
+      assert.equal(run.body.brandAssets[0].locator, `artifact:${upload.body.artifact.id}`);
       assert.equal(run.body.job.type, "brand_crawl");
       assert.equal(job.body.job.status, "QUEUED");
     }

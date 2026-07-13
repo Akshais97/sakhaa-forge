@@ -207,6 +207,111 @@ test("web shell renders P5 ready blueprint script input contract states", async 
   }
 });
 
+test("web shell renders S1 script tournament variant, evaluation and guard states", async () => {
+  const port = 3925;
+  const child = spawn(process.execPath, ["apps/web/src/server.mjs"], {
+    env: { ...process.env, PORT: String(port) },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForServer(`http://127.0.0.1:${port}`);
+    const response = await fetch(`http://127.0.0.1:${port}`);
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /data-testid="script-tournament-contract"/);
+    assert.match(html, /Script tournament contract/);
+    assert.match(html, /Ten to twenty formula- and brand-constrained variants are generated, evaluated and retained/);
+    assert.match(html, /raw prompts and script text never enter analytics/);
+    assert.match(html, /prompt\/model provenance with a source hash/);
+    assert.match(html, /analytics buckets only/);
+    assert.match(html, /Fewer than ten valid scripts after prohibited-claim or brand-rule refusal stops advancement/);
+    assert.match(html, /An unapproved brand profile or a draft blueprint cannot enter script generation/);
+  } finally {
+    child.kill();
+  }
+});
+
+test("web shell renders S2 script selection immutable, stale and ineligible states", async () => {
+  const port = 3926;
+  const child = spawn(process.execPath, ["apps/web/src/server.mjs"], {
+    env: { ...process.env, PORT: String(port) },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForServer(`http://127.0.0.1:${port}`);
+    const response = await fetch(`http://127.0.0.1:${port}`);
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /data-testid="script-selection-contract"/);
+    assert.match(html, /Script selection contract/);
+    assert.match(html, /compares evaluated variants and selects one exact immutable script version/);
+    assert.match(html, /One canonical, immutable selected script is retained per tournament/);
+    assert.match(html, /analytics script_selected bucket only/);
+    assert.match(html, /An optimistic-version guard rejects a selection made from a stale comparison tab/);
+    assert.match(html, /data-state="stale"/);
+    assert.match(html, /An unevaluated, refused, superseded or cross-workspace variant cannot be selected/);
+    assert.match(html, /selection never implies generation approval or credit reservation/);
+  } finally {
+    child.kill();
+  }
+});
+
+test("web shell renders the real S1/S2 workflow form, state banners and variant container", async () => {
+  const port = 3927;
+  const child = spawn(process.execPath, ["apps/web/src/server.mjs"], {
+    env: { ...process.env, PORT: String(port) },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForServer(`http://127.0.0.1:${port}`);
+    const response = await fetch(`http://127.0.0.1:${port}`);
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /data-testid="script-tournament-form"/);
+    assert.match(html, /Run script tournament/);
+    assert.match(html, /name="blueprintRequestId"/);
+    assert.match(html, /name="variantCount"/);
+    assert.match(html, /data-testid="script-tournament-status" data-state="empty"/);
+    assert.match(html, /data-testid="script-selection-status" data-state="empty"/);
+    assert.match(html, /data-testid="script-tournament-variants"/);
+    assert.match(html, /<script type="module" src="\/script-tournament-workflow\.mjs"><\/script>/);
+  } finally {
+    child.kill();
+  }
+});
+
+test("web shell serves the workflow and generated client modules", async () => {
+  const port = 3928;
+  const child = spawn(process.execPath, ["apps/web/src/server.mjs"], {
+    env: { ...process.env, PORT: String(port) },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForServer(`http://127.0.0.1:${port}`);
+    const workflow = await fetch(`http://127.0.0.1:${port}/script-tournament-workflow.mjs`);
+    assert.equal(workflow.status, 200);
+    assert.match(workflow.headers.get("content-type"), /javascript/);
+    const workflowText = await workflow.text();
+    assert.match(workflowText, /export function deriveWorkflowState/);
+    assert.match(workflowText, /selectScriptVariant/);
+
+    const client = await fetch(`http://127.0.0.1:${port}/v0-client.mjs`);
+    assert.equal(client.status, 200);
+    assert.match(client.headers.get("content-type"), /javascript/);
+    const clientText = await client.text();
+    assert.match(clientText, /export class V0Client/);
+  } finally {
+    child.kill();
+  }
+});
+
 async function waitForServer(url) {
   const started = Date.now();
   while (Date.now() - started < 5000) {

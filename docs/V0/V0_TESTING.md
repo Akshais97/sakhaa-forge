@@ -20,6 +20,11 @@ crash-window coverage where applicable.
 - Missing brand approval prevents generation.
 - Cross-workspace reads, signed URLs, ledger entries and callbacks fail.
 - Crawl SSRF and oversized/malicious media are blocked.
+- A Firecrawl-mode brand crawl proves the queue worker sends the server-side bearer key,
+  discovers at least five eligible same-origin pages by default, executes the selected
+  vertical section, retains downloaded image hashes and never surfaces the key or object key.
+- Universal crawl contract tests cover USP evidence, P1-P2D prompt/schema fields, two
+  same-origin P3 blog deep reads, partial-page warnings and metadata-based image categories.
 - Blueprint stages expose partial/low-confidence status without silently succeeding.
 - Script selection points to the evaluated immutable variant.
 - Empty, malformed, schema-invalid and refused AI outputs become explicit retryable or

@@ -220,14 +220,17 @@ User/client may specify: target product, target audience, funnel stage, platform
 
 ## 5. Brand Learning and Creative Brain
 
-### 5.1 Brand Extraction Flow (Crawl4AI)
+### 5.1 Brand Extraction Flow (Firecrawl)
 
 ```
 Client Website URL
-  → Crawl homepage, about, product, service, blog, contact pages
-  → Extract HTML, markdown, media, links, metadata, screenshots
-  → Filter likely brand assets
-  → Detect logo, colors, fonts, copy style, CTAs, social links
+  → Safe URL, scope, robots/policy and source-use attestation
+  → Optional user-selected brand type
+  → Firecrawl universal pass from Features/Firecrawl/brand-crawl-universal.md
+  → Detected vertical evidence from schema.org type and vertical signals
+  → One selected or detected vertical pass from Features/Firecrawl/brand-crawl-verticals.md
+  → Retain eligible images, screenshots and documents through quarantine and validation
+  → Extract universal and vertical brand candidates with evidence
   → Store candidates in brand asset library
   → Human approves final brand kit  ← required gate
   → Approved assets activate in Creative Brain
@@ -235,18 +238,23 @@ Client Website URL
 
 **Human approval is a hard gate.** No video workflow starts until a human has approved the brand kit. Crawling discovers candidates; it does not approve them.
 
-### 5.2 Crawl4AI Extraction Scope
+### 5.2 Firecrawl Extraction Scope
 
 | Asset / Signal | Phase 1 Handling |
 |---|---|
-| Logo images | Extract by filename, alt text, class names, placement |
-| Favicon / app icons | Parse icon links, Apple touch icons, manifest files |
-| Product/hero images | Crawl product pages; collect image candidates |
-| Brand colors | Crawl CSS/screenshots → custom color-extraction module |
-| Fonts | Crawl CSS/font references → custom font-detection module |
-| Page copy/tone | Extract and summarize positioning, offers, CTAs, voice |
-| Social links | Instagram, Facebook, LinkedIn, YouTube, Threads, others |
-| Downloadable files | Brand guidelines — download only when allowed |
+| Logo, favicon and OG image | Extract through universal `branding`, `images`, metadata and retained asset evidence |
+| Product/hero images | Collect from universal and vertical image passes; retain only through rights, quarantine and validation |
+| Brand colors | Extract from Firecrawl `branding.colors` and screenshots, then approve by role before production use |
+| Fonts and typography | Extract from Firecrawl `branding.typography`; approve licence/source/fallback before production use |
+| Page copy/tone | Extract hero copy, CTAs, pain points, testimonials, FAQ, vocabulary and writing style with source evidence |
+| Social links | Retain public outbound profile links as publishing/social candidates, never credentials |
+| Downloadable files | Brochures, legal documents, price sheets and brand guidelines are collected only when crawl permission allows it |
+| Vertical details | Run one vertical group such as real estate, SaaS or healthcare after universal extraction |
+| Crawl cost evidence | Retain Firecrawl credit/timing telemetry for operations; it is not approved brand truth |
+
+If a user-selected brand type disagrees with the universal pass detection, the system
+retains both as conflict evidence and requires human review. It must not silently override
+the selected type or detected type.
 
 ### 5.3 Creative Brain / Brand Memory
 
@@ -1204,7 +1212,7 @@ Must pass: intended platform account, matching platform post ID, audience-facing
 
 ## 24. Build Order
 
-1. Brand profile + asset approval system (Crawl4AI, upload, Creative Brain storage)
+1. Brand profile + asset approval system (Firecrawl universal/vertical crawl, upload, Creative Brain storage)
 2. Default Blueprint Selection area (existing Blueprint Library or viral extraction path)
 3. Xpoz viral candidate ingestion (fetch, rank, Trending Content Library)
 4. Thumbnail deciphering (download, vision, OCR, director translation)

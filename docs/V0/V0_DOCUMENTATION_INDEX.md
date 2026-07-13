@@ -33,6 +33,18 @@
 23. `V0_CUSTOMER_BRAND_INTAKE_TEMPLATE.md`
 24. `V0_BRAND_PROFILE_CONTRACT.md`
 
+## Firecrawl Brand Extraction Authority
+
+For Firecrawl brand data extraction, the current subject-matter sources of truth are:
+
+- `Features/Firecrawl/brand-crawl-universal.md`
+- `Features/Firecrawl/brand-crawl-verticals.md`
+
+They own crawl passes, Firecrawl request parameters, prompts, schemas, extracted fields,
+asset harvesting and universal/vertical output shapes. Older or broader V0 documents are
+supporting integration context only for those details. Security, privacy, tenancy, rights,
+approval and financial rules remain governed by their owning canonical V0 contracts.
+
 Project-wide documents required for V0 implementation:
 
 - `../Project/DESIGN.md`

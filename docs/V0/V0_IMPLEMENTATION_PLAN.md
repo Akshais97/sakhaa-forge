@@ -42,9 +42,9 @@ to build every checklist item as one large technical-layer batch.
 
 ## Gate 3: Script Tournament
 
-- [ ] Generate 10-20 formula- and brand-constrained variants.
-- [ ] Evaluate hooks, cadence, CTA, claims and sound-off captions.
-- [ ] Preserve all variants/evaluations and require explicit selected-script identity.
+- [x] Generate 10-20 formula- and brand-constrained variants.
+- [x] Evaluate hooks, cadence, CTA, claims and sound-off captions.
+- [x] Preserve all variants/evaluations and require explicit selected-script identity.
 
 ## Gate 4: Credits and HeyGen Generation
 

@@ -49,8 +49,34 @@ export class V0Client {
     return this.#post("/brands/crawl-runs", input, options);
   }
 
+  async getBrandCrawlRun(crawlRunId) {
+    return this.#get(`/brands/crawl-runs/${encodeURIComponent(crawlRunId)}`);
+  }
+
+  async getBrandAssetPack(crawlRunId) {
+    return this.#get(`/brands/crawl-runs/${encodeURIComponent(crawlRunId)}/asset-pack`);
+  }
+
   async listBrandCandidates(crawlRunId) {
     return this.#get(`/brands/crawl-runs/${encodeURIComponent(crawlRunId)}/candidates`);
+  }
+
+  async getUserProfile() {
+    return this.#get("/users/me/profile");
+  }
+
+  async updateUserProfile(input) {
+    return this.#patch("/users/me/profile", input);
+  }
+
+  async getOnboardingBrandContext(input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    return this.#get(`/onboarding/brand-context?${params.toString()}`);
+  }
+
+  async saveOnboardingBrandContext(input) {
+    return this.#post("/onboarding/brand-context", input);
   }
 
   async approveBrandProfile(brandId, input) {
@@ -61,6 +87,110 @@ export class V0Client {
     return this.#post("/generation-estimates", input);
   }
 
+  async confirmGenerationEstimate(estimateId, input, options = {}) {
+    return this.#post("/generation-estimates/" + encodeURIComponent(estimateId) + "/confirm", input, options);
+  }
+
+  async getGenerationJob(jobId, input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    return this.#get("/generation-jobs/" + encodeURIComponent(jobId) + "?" + params.toString());
+  }
+
+  async submitGenerationJob(jobId, input, options = {}) {
+    return this.#post("/generation-jobs/" + encodeURIComponent(jobId) + "/submit", input, options);
+  }
+
+  async reconcileGenerationJob(jobId, input, options = {}) {
+    return this.#post("/generation-jobs/" + encodeURIComponent(jobId) + "/reconcile", input, options);
+  }
+
+  async cancelGenerationJob(jobId, input, options = {}) {
+    return this.#post("/generation-jobs/" + encodeURIComponent(jobId) + "/cancel", input, options);
+  }
+
+  async settleGenerationJob(jobId, input, options = {}) {
+    return this.#post("/generation-jobs/" + encodeURIComponent(jobId) + "/settle", input, options);
+  }
+
+  async createCompositionPlan(input, options = {}) {
+    return this.#post("/composition-plans", input, options);
+  }
+
+  async renderCompositionPlan(compositionPlanId, input, options = {}) {
+    return this.#post("/composition-plans/" + encodeURIComponent(compositionPlanId) + "/render", input, options);
+  }
+
+  async createReviewItem(input, options = {}) {
+    return this.#post("/review-items", input, options);
+  }
+
+  async listReviewItems(input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    if (input.limit !== undefined) params.set("limit", String(input.limit));
+    if (input.cursor) params.set("cursor", input.cursor);
+    return this.#get(`/review-items?${params.toString()}`);
+  }
+
+  async getReviewItem(reviewItemId, input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    return this.#get(`/review-items/${encodeURIComponent(reviewItemId)}?${params.toString()}`);
+  }
+
+  async addReviewComment(reviewItemId, input, options = {}) {
+    return this.#post(`/review-items/${encodeURIComponent(reviewItemId)}/comments`, input, options);
+  }
+
+  async listReviewComments(reviewItemId, input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    if (input.limit !== undefined) params.set("limit", String(input.limit));
+    if (input.cursor) params.set("cursor", input.cursor);
+    return this.#get(`/review-items/${encodeURIComponent(reviewItemId)}/comments?${params.toString()}`);
+  }
+
+  async recordReviewDecision(reviewItemId, input, options = {}) {
+    return this.#post(`/review-items/${encodeURIComponent(reviewItemId)}/decisions`, input, options);
+  }
+
+  async createCalendarPost(input, options = {}) {
+    return this.#post("/calendar-posts", input, options);
+  }
+
+  async publishCalendarPost(calendarPostId, input, options = {}) {
+    return this.#post("/calendar-posts/" + encodeURIComponent(calendarPostId) + "/publish", input, options);
+  }
+
+  async reconcilePublishOperation(calendarPostId, input, options = {}) {
+    return this.#post("/calendar-posts/" + encodeURIComponent(calendarPostId) + "/publish/reconcile", input, options);
+  }
+
+  async verifyCalendarPost(calendarPostId, input, options = {}) {
+    return this.#post("/calendar-posts/" + encodeURIComponent(calendarPostId) + "/verify", input, options);
+  }
+
+  async getLineage(finalVideoId, input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    return this.#get("/lineage/" + encodeURIComponent(finalVideoId) + "?" + params.toString());
+  }
+
+  async collectPerformance(calendarPostId, input, options = {}) {
+    return this.#post("/calendar-posts/" + encodeURIComponent(calendarPostId) + "/performance-collect", input, options);
+  }
+
+  async getPerformance(calendarPostId, input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    return this.#get("/calendar-posts/" + encodeURIComponent(calendarPostId) + "/performance?" + params.toString());
+  }
+
+  async updateCalendarPost(calendarPostId, input, options = {}) {
+    return this.#patch("/calendar-posts/" + encodeURIComponent(calendarPostId), input, options);
+  }
+
   async listBlueprints(input) {
     const params = new URLSearchParams();
     params.set("workspaceId", input.workspaceId);
@@ -68,6 +198,54 @@ export class V0Client {
     if (input.limit !== undefined) params.set("limit", String(input.limit));
     if (input.cursor) params.set("cursor", input.cursor);
     return this.#get(`/blueprints?${params.toString()}`);
+  }
+
+  async listAvatars(input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    params.set("brandProfileId", input.brandProfileId);
+    if (input.limit !== undefined) params.set("limit", String(input.limit));
+    if (input.cursor) params.set("cursor", input.cursor);
+    return this.#get(`/avatars?${params.toString()}`);
+  }
+
+  async revokeAvatarConsent(avatarProfileId, input) {
+    return this.#post(`/avatars/${encodeURIComponent(avatarProfileId)}/consent-revocation`, input);
+  }
+
+  async createCreditPurchase(input, options = {}) {
+    return this.#post("/credit-purchases", input, options);
+  }
+
+  async getWalletLedger(walletId, input) {
+    const params = new URLSearchParams();
+    params.set("workspaceId", input.workspaceId);
+    if (input.limit !== undefined) params.set("limit", String(input.limit));
+    if (input.cursor) params.set("cursor", input.cursor);
+    return this.#get(`/credit-wallets/${encodeURIComponent(walletId)}/ledger?${params.toString()}`);
+  }
+
+  async createCreditAdjustment(walletId, input, options = {}) {
+    return this.#post(`/credit-wallets/${encodeURIComponent(walletId)}/adjustments`, input, options);
+  }
+
+  async postRazorpayCallback(envelope, signature) {
+    return this.#postSigned("/callbacks/razorpay", envelope, "x-razorpay-signature", signature);
+  }
+
+  async postStripeCallback(envelope, signature) {
+    return this.#postSigned("/callbacks/stripe", envelope, "stripe-signature", signature);
+  }
+
+  async postHeygenCallback(envelope, signature) {
+    return this.#postSigned("/callbacks/heygen", envelope, "x-heygen-signature", signature);
+  }
+
+  async postPublishingCallback(provider, envelope, signature) {
+    // The signature header is provider-selected (Meta: x-meta-signature, YouTube:
+    // x-youtube-signature) to match the server-side publish adapter registry.
+    const signatureHeader = provider === "youtube" ? "x-youtube-signature" : "x-meta-signature";
+    return this.#postSigned("/callbacks/publishing/" + encodeURIComponent(provider), envelope, signatureHeader, signature);
   }
 
   async seedBlueprintLibraryEntry(input) {
@@ -80,6 +258,14 @@ export class V0Client {
 
   async createReadyBlueprint(blueprintRequestId, input) {
     return this.#post(`/blueprint-requests/${encodeURIComponent(blueprintRequestId)}/ready-blueprint`, input);
+  }
+
+  async createScriptTournament(input, options = {}) {
+    return this.#post("/script-tournaments", input, options);
+  }
+
+  async selectScriptVariant(tournamentId, input, options = {}) {
+    return this.#post(`/script-tournaments/${encodeURIComponent(tournamentId)}/select`, input, options);
   }
 
   async searchViralCandidates(input) {
@@ -126,6 +312,13 @@ export class V0Client {
     return this.#post(`/workspaces/${encodeURIComponent(workspaceId)}/service-credentials`, input);
   }
 
+  async rotateServiceCredential(workspaceId, credentialId, input) {
+    return this.#post(
+      `/workspaces/${encodeURIComponent(workspaceId)}/service-credentials/${encodeURIComponent(credentialId)}/rotate`,
+      input
+    );
+  }
+
   async setSimulatorMode(workspaceId, input) {
     return this.#post(`/workspaces/${encodeURIComponent(workspaceId)}/simulator-mode`, input);
   }
@@ -136,6 +329,22 @@ export class V0Client {
 
   async runRedactionScan(workspaceId, input) {
     return this.#post(`/workspaces/${encodeURIComponent(workspaceId)}/redaction-scan`, input);
+  }
+
+  async runB2Benchmark(workspaceId, input) {
+    return this.#post(`/workspaces/${encodeURIComponent(workspaceId)}/b2-benchmark`, input);
+  }
+
+  async runBacklogSimulation(workspaceId, input) {
+    return this.#post(`/workspaces/${encodeURIComponent(workspaceId)}/backlog-simulation`, input);
+  }
+
+  async runIncidentRehearsal(workspaceId, input) {
+    return this.#post(`/workspaces/${encodeURIComponent(workspaceId)}/incident-rehearsal`, input);
+  }
+
+  async getWorkspaceOperationalAlerts(workspaceId) {
+    return this.#get(`/workspaces/${encodeURIComponent(workspaceId)}/operations/alerts`);
   }
 
   async listDeadLetterJobs(workspaceId) {
@@ -185,6 +394,40 @@ export class V0Client {
       headers: this.#headers({
         "content-type": "application/json",
         ...(options.idempotencyKey ? { "idempotency-key": options.idempotencyKey } : {})
+      }),
+      body: JSON.stringify(input)
+    });
+    const body = await response.json();
+    return {
+      ok: response.ok,
+      status: response.status,
+      body
+    };
+  }
+
+  async #patch(path, input, options = {}) {
+    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "PATCH",
+      headers: this.#headers({
+        "content-type": "application/json",
+        ...(options.idempotencyKey ? { "idempotency-key": options.idempotencyKey } : {})
+      }),
+      body: JSON.stringify(input)
+    });
+    const body = await response.json();
+    return {
+      ok: response.ok,
+      status: response.status,
+      body
+    };
+  }
+
+  async #postSigned(path, input, signatureHeader, signature) {
+    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: this.#headers({
+        "content-type": "application/json",
+        ...(signature ? { [signatureHeader]: signature } : {})
       }),
       body: JSON.stringify(input)
     });

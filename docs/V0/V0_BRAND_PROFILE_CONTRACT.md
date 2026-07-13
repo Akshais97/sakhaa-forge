@@ -32,6 +32,7 @@
   "offers": [],
   "calls_to_action": [],
   "claims": [],
+  "vertical_assets": {},
   "rules": [],
   "publishing": {},
   "source_summary": {},
@@ -109,6 +110,9 @@ registration, completion, price, distance, return or availability claims.
 | `positioning.differentiators` | evidence string[] | No | Evidence-backed |
 | `positioning.proof_points` | evidence string[] | No | Links to claims/evidence |
 | `competitors` | evidence object[] | No | Includes allowed/prohibited comparison |
+| `source_summary.selected_brand_type` | enum/string | No | User-selected crawl type; evidence only until approval |
+| `source_summary.detected_brand_type` | enum/string | No | Firecrawl universal detection result |
+| `source_summary.brand_type_conflict` | boolean | No | Blocks silent approval of disputed vertical-sensitive fields |
 
 ### Visual Identity
 
@@ -158,6 +162,12 @@ Product fields:
 - geographic scope;
 - required disclosures;
 - status.
+
+Vertical assets are approved into the relevant product, offer, claim, audience, CTA,
+visual identity or rule fields. Raw vertical output is retained as source evidence and
+does not become an independent production shortcut. For example, real-estate listing
+names, RERA numbers, possession dates, amenities and price ranges become product or claim
+candidates with evidence and review state.
 
 Offer fields:
 
@@ -247,6 +257,10 @@ When material values disagree:
 - block approval for required fields;
 - require an authorised actor to choose or enter a replacement;
 - retain rejected alternatives and the decision reason.
+
+If the user-selected crawl brand type and Firecrawl-detected brand type disagree, retain
+both values in `source_summary`, create a conflict candidate and require an authorised
+actor to resolve the affected vertical-sensitive approval fields.
 
 ## 8. Approval
 

@@ -33,7 +33,13 @@ test("generated OpenAPI exposes F0 health, readiness and version operations", as
   assert.ok(openapi.paths["/workspaces/{workspace_id}/restore-drills"].post);
   assert.ok(openapi.paths["/workspaces/{workspace_id}/redaction-scan"].post);
   assert.ok(openapi.paths["/brands/crawl-runs"].post);
+  assert.ok(openapi.paths["/brands/crawl-runs/{crawl_run_id}"].get);
+  assert.ok(openapi.paths["/brands/crawl-runs/{crawl_run_id}/asset-pack"].get);
   assert.ok(openapi.paths["/brands/crawl-runs/{crawl_run_id}/candidates"].get);
+  assert.ok(openapi.paths["/users/me/profile"].get);
+  assert.ok(openapi.paths["/users/me/profile"].patch);
+  assert.ok(openapi.paths["/onboarding/brand-context"].get);
+  assert.ok(openapi.paths["/onboarding/brand-context"].post);
   assert.ok(openapi.paths["/brands/{brand_id}/approvals"].post);
   assert.ok(openapi.paths["/generation-estimates"].post);
   assert.ok(openapi.paths["/blueprints"].get);
@@ -77,7 +83,13 @@ test("generated client has V0 public and internal worker methods through P5", as
   assert.match(client, /recordRestoreDrill/);
   assert.match(client, /runRedactionScan/);
   assert.match(client, /createBrandCrawlRun/);
+  assert.match(client, /getBrandCrawlRun/);
+  assert.match(client, /getBrandAssetPack/);
   assert.match(client, /listBrandCandidates/);
+  assert.match(client, /getUserProfile/);
+  assert.match(client, /updateUserProfile/);
+  assert.match(client, /getOnboardingBrandContext/);
+  assert.match(client, /saveOnboardingBrandContext/);
   assert.match(client, /approveBrandProfile/);
   assert.match(client, /createGenerationEstimate/);
   assert.match(client, /listBlueprints/);

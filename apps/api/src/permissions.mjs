@@ -19,7 +19,8 @@ const roleCapabilities = {
     "adjust_credits",
     "view_provider_financial_reconciliation",
     "retry_reconcile_provider_jobs",
-    "export_delete_workspace"
+    "export_delete_workspace",
+    "view_lineage_and_performance"
   ],
   ADMIN: [
     "manage_workspace_members",
@@ -39,7 +40,8 @@ const roleCapabilities = {
     "adjust_credits",
     "view_provider_financial_reconciliation",
     "retry_reconcile_provider_jobs",
-    "export_delete_workspace"
+    "export_delete_workspace",
+    "view_lineage_and_performance"
   ],
   CLIENT_MANAGER: [
     "approve_brand_profile",
@@ -49,7 +51,8 @@ const roleCapabilities = {
     "submit_review_comments",
     "approve_reject_final_video",
     "schedule_publish_approved_media",
-    "purchase_credits_and_view_wallet_ledger"
+    "purchase_credits_and_view_wallet_ledger",
+    "view_lineage_and_performance"
   ],
   REVIEWER: ["submit_review_comments"]
 };

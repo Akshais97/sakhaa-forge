@@ -328,11 +328,13 @@ journey.
 
 ### V0-B2: Evidence-Backed Brand Candidate Extraction
 
-**Outcome:** The user sees extracted logo, color, font, tone, offer, USP, CTA, audience
-and prohibited-claim candidates with confidence and source evidence.
+**Outcome:** The user sees extracted logo, color, font, tone, offer, USP, CTA, audience,
+product/service, social proof, positive claim and prohibited-claim candidates with
+confidence and source evidence.
 
-**Includes:** crawl parsing, CSS/font/color analysis, copy extraction, prompt-injection
-isolation, candidate provenance, partial results and explicit low-confidence states.
+**Includes:** crawl parsing, Firecrawl universal output parsing, CSS/font/color analysis,
+copy extraction, prompt-injection isolation, candidate provenance, partial results and
+explicit low-confidence states.
 
 **Primary records:** `BrandCandidate`, `BrandAsset`, `Artifact`, `JobEvent`.
 
@@ -346,6 +348,33 @@ become approved brand truth.
 UI and candidate-source trace.
 
 **Depends on:** V0-B1.  
+**Gate:** V0-G1.
+
+### V0-B2A: Firecrawl Brand Crawl Backend Revamp
+
+**Outcome:** A brand crawl run accepts an optional brand type, runs the fixed Firecrawl
+universal pass first, runs exactly one selected or detected vertical pass, retains eligible
+asset evidence and exposes grouped universal and vertical candidates for review.
+
+**Includes:** `brand.extraction.output.v3`, selected/detected brand-type retention,
+selected/detected conflict evidence, Firecrawl adapter wiring, universal and vertical
+output artifacts, provider credit telemetry, crawled image/document retention through
+quarantine and expanded candidate groups.
+
+**Primary records:** `BrandCrawlRun`, `BrandCandidate`, `BrandAsset`, `Artifact`, `JobEvent`.
+
+**Contracts/jobs:** `POST /brands/crawl-runs` optional `brandType`, candidate and
+asset-pack reads, `brand_crawl`.
+
+**Failure contract:** Unsupported brand types, malformed provider output, evidence-free
+output, prompt-injected crawl content, selected/detected conflicts and disallowed asset
+retention cannot become approved brand truth or leak provider secrets.
+
+**Evidence:** Firecrawl v3 fixtures, universal-before-vertical job trace, selected/detected
+conflict test, retained asset hash evidence, secret redaction scan, RLS/cross-workspace
+tests and OpenAPI/client generation proof.
+
+**Depends on:** V0-B2.  
 **Gate:** V0-G1.
 
 ### V0-B3: Human-Approved Versioned Brand Memory
@@ -367,7 +396,7 @@ or supersession prevents new production use without rewriting historical lineage
 **Evidence:** concurrent-approval test, downstream rejection test, version-diff browser
 journey and approval audit.
 
-**Depends on:** V0-B2.  
+**Depends on:** V0-B2A.  
 **Gate:** Completes V0-G1.
 
 ## 5. Blueprint Slices
@@ -869,11 +898,22 @@ reconciliation totals and rollback rehearsal.
 
 This slice also proves:
 
-- workspace export is bounded, authorized and hash-manifested;
 - consent revocation blocks future avatar use immediately;
-- deletion revokes access before binary lifecycle purge;
 - financial, audit and published-lineage records follow their retention basis;
 - provider credentials can be rotated without exposing secret values.
+
+The following two "also proves" dimensions are not pinned to a deterministic contract by V0-A2
+and are deferred pending an owner-pinned contract (owner-decision per CLAUDE.md §1/§19, not
+blockers of the failure contract above). A2 delivers the partial proof each names; the
+remaining step is gated on the owner pinning the missing contract:
+
+- workspace export is bounded, authorized and hash-manifested — the per-final-video lineage
+  export shipped in V0-A1 demonstrates the bounded/authorized/hash-manifested pattern; a
+  full-workspace export manifest (which tables, which retention class, which artifacts) is
+  deferred pending an owner-pinned export scope contract;
+- deletion revokes access before binary lifecycle purge — the monotonic consent revocation
+  and credential revocation shipped here demonstrate revoke-before-purge at the data layer;
+  the binary purge step is deferred pending an owner-pinned retention/deletion contract.
 
 **Depends on:** All preceding functional slices used by the reference journey.  
 **Gate:** V0-G8.
@@ -883,9 +923,9 @@ This slice also proves:
 **Outcome:** One India-first real-estate workspace completes brand intake through verified
 publication without manual intervention inside the pipeline, while V1 and V2 are absent.
 
-**Includes:** real/staging-approved providers, exact screenshots, stable IDs/hashes,
-ledger reconciliation, manual-intervention time capture, first-video timing, revisions, cost and
-pilot scorecard evidence.
+**Includes:** real/staging-approved providers, stable IDs/hashes, ledger reconciliation,
+manual-intervention time capture, first-video timing, revisions, cost and deterministic
+technical scorecard evidence.
 
 **Primary records:** All V0 production records.
 
@@ -894,17 +934,28 @@ pilot scorecard evidence.
 **Failure contract:** No manual database edits, hidden provider retries, unrecorded file
 movement, V1/V2 calls or evidence gaps are permitted.
 
-**Evidence:**
+**Evidence (A3 technical closure):**
 
-- brand approval screenshot and ID;
+- brand approval ID and approval audit;
 - blueprint choice and immutable artifact hashes;
 - complete script tournament and selected-script ID;
 - estimate, reservation, provider operation and settled ledger;
 - AE plan, final-video hash and review decision;
 - calendar post, external ID, public URL and audience verification;
 - complete lineage manifest;
-- recovery/security reports;
-- founder-reviewed pilot scorecard.
+- recovery/security reports surfaced inside the reference journey workspace;
+- deterministic technical scorecard (retained IDs, content hashes, integer-minor cost,
+  reconciled ledger, `observationsOnly`, `v1V2Absent`, `noClaimOf`).
+
+A3 closes technical completion only (per `docs/V0/V0.md` "V0 Completion Rule"). Two artifact
+types named by the broader V0 acceptance contracts are **not** A3 closure evidence: the
+**founder-reviewed measured pilot scorecard** is the human business acceptance step before
+external launch (`docs/V0/V0.md`, `docs/Project/Governance/PROJECT_GOVERNANCE_FOUNDER_RISK_ACCEPTANCE.md`),
+not automatable and not claimed by A3; and **screenshots** of the user journey screens remain
+required V0 acceptance evidence retained at the final V0 acceptance run / Build Gate V0-G8,
+not reproducible in a headless generated-client local verification, where the deterministic
+proof (stable IDs, content hashes, public URLs, complete lineage manifest) stands in for
+screenshot evidence for this local verification scope only.
 
 **Depends on:** V0-A1, V0-A2.  
 **Gate:** Completes V0-G8 and Product V0.
@@ -934,6 +985,7 @@ evidence.
 |---|---|---|---|
 | `V0-B1` | Brand intake accepts a private/link-local URL, unsafe redirect, unsupported file or missing rights acknowledgement. | Build URL normalization, crawl scope preview, robots/policy recording, upload association, rights declaration and intake status states. | SSRF suite, malformed-file suite, crawl-scope audit, browser journey for URL plus approved files. |
 | `V0-B2` | Malformed, empty, refused or prompt-injected extraction output can become a candidate without source evidence. | Parse crawl/assets, isolate prompt input, extract brand fields with confidence and provenance, support partial/low-confidence states. | Deterministic site/document fixtures, prompt-injection test, partial-result UI, candidate-source trace. |
+| `V0-B2A` | Firecrawl universal/vertical output is accepted without preserving brand type, vertical evidence, asset retention proof or provider redaction. | Add optional brand type, run universal first then one vertical pass, normalise `brand.extraction.output.v3`, retain eligible assets and conflict evidence behind the provider boundary. | v3 fixtures, universal-before-vertical trace, selected/detected conflict test, asset hash evidence, redaction scan, RLS tests and OpenAPI/client generation. |
 | `V0-B3` | Two concurrent approvals create two active profiles, or a superseded profile can be used downstream. | Implement candidate editing, version diff, approval/rejection, brand rules, one-active-version constraint and downstream approved-version contract. | Concurrent approval test, downstream rejection test, version diff browser evidence and approval audit. |
 | `V0-P1` | The system silently selects a blueprint path or accepts archived/cross-workspace/incompatible blueprint input. | Build explicit existing/discovery/default choice, bounded library list, compatibility metadata, empty states and selected brand-profile binding. | Existing and discovery contract convergence test, stale selection rejection, empty-state browser journey. |
 | `V0-P2` | Provider outage, empty results, malformed payloads or changed metrics fabricate or mutate candidate evidence. | Add Xpoz adapter behind simulator, candidate ranking, manual fallback, immutable metric snapshots, source/right warnings and outage states. | Adapter fixtures, deterministic ranking test, provider-outage UI and immutable snapshot proof. |
@@ -972,14 +1024,14 @@ evidence.
 |---|---|---|---|
 | `V0-A1` | Lineage export silently omits ancestry, accepts hash mismatch or leaks cross-workspace references. | Implement bounded lineage traversal/export from brand through performance snapshot, cost attribution, timestamps and artifact manifest. | Full ancestry assertion, immutable snapshot test, bounded export and hash-verified manifest. |
 | `V0-A2` | Recovery/load/security drills expose tenant data, duplicate paid work, lose lineage or falsely report publication success. | Run zero-tolerance security suite, queue backlog simulation, Redis loss, worker crash, callback replay, provider uncertainty, restore, B2 benchmark and reconciliation drills. | Signed test report, restore report, India-to-B2 benchmark, alert screenshots, reconciliation totals and rollback rehearsal. |
-| `V0-A3` | The reference real-estate journey needs manual database edits, hidden retries, V1/V2 calls or has evidence gaps. | Execute the full production-shaped journey with V1/V2 absent, approved providers/simulators as allowed, screenshots, IDs, hashes, cost and pilot scorecard. | Brand approval, blueprint choice, selected script, estimate/reservation/provider/ledger, AE plan, final hash, review, calendar, external ID, public URL, verification, lineage manifest and founder-reviewed scorecard. |
+| `V0-A3` | The reference real-estate journey needs manual database edits, hidden retries, V1/V2 calls or has evidence gaps. | Execute the full production-shaped journey through the generated `/api/v0` client with V1/V2 absent, approved providers/simulators as allowed, retaining stable IDs, content hashes, integer-minor cost and the deterministic technical scorecard. | Brand approval, blueprint choice, selected script, estimate/reservation/provider/ledger, AE plan, final hash, review, calendar, external ID, public URL, verification, lineage manifest and deterministic technical scorecard. Founder-reviewed pilot scorecard and screenshots are post-A3 human / V0-G8 acceptance gates, not A3 closure evidence (per `docs/V0/V0.md`). |
 
 ## 13. Slice Dependency Graph
 
 ```text
 F0 -> F1 -> F2 -> F3 -> F4 -> F5
                           |
-                          +-> B1 -> B2 -> B3
+                          +-> B1 -> B2 -> B2A -> B3
                                           |
                                           +-> P1 -> P2 -> P3 -> P4 -> P5
                                           |                         |
@@ -1016,7 +1068,7 @@ No parallel feature work begins before V0-F5.
 | Lane | Slices | Merge dependency |
 |---|---|---|
 | Foundation | F0 -> F1 -> F2 -> F3 -> F4 -> F5 | Must complete first |
-| Brand/creative | B1 -> B2 -> B3 -> P1 -> P2 -> P3 -> P4 -> P5 -> S1 -> S2 | Foundation |
+| Brand/creative | B1 -> B2 -> B2A -> B3 -> P1 -> P2 -> P3 -> P4 -> P5 -> S1 -> S2 | Foundation |
 | Billing/provider | G2; then G3 -> G4 -> G5 after S2 and G1 | Foundation plus selected script/avatar |
 | Avatar | G1 | Foundation and approved brand |
 | Composition | AE readiness during F5; C1 -> C2 after G5 | Generated asset |
@@ -1031,7 +1083,7 @@ immutable predecessor identity they consume.
 | V0 gate | Closing slices |
 |---|---|
 | V0-G0 Foundation | F0-F5 |
-| V0-G1 Brand | B1-B3 |
+| V0-G1 Brand | B1-B2A-B3 |
 | V0-G2 Blueprint | P1-P5 |
 | V0-G3 Scripts | S1-S2 |
 | V0-G4 Generation | G1-G5 |
@@ -1083,7 +1135,7 @@ immutable predecessor identity they consume.
 |---|---|
 | `User`, `Workspace`, `Membership` | F1 |
 | `ServiceCredential`, `WorkspaceCapability`, derived trace/metrics/restore evidence | F5 |
-| `BrandProfile`, `BrandCrawlRun`, `BrandCandidate`, `BrandAsset`, `BrandApproval`, `BrandRule` | B1-B3 |
+| `BrandProfile`, `BrandCrawlRun`, `BrandCandidate`, `BrandAsset`, `BrandApproval`, `BrandRule` | B1-B2A-B3 |
 | `ViralCandidate`, `MetricSnapshot`, `MediaAcquisition`, `ThumbnailBlueprint` | P2-P3 |
 | `VideoBlueprint`, `BlueprintScene`, `FormulaDerivation`, `DirectorPrompt`, `BlueprintLibraryEntry`, `BlueprintRequest` | P1, P4-P5 |
 | `ScriptTournament`, `ScriptVariant`, `ScriptEvaluation`, `SelectedScript` | S1-S2 |
@@ -1102,7 +1154,7 @@ immutable predecessor identity they consume.
 | Contract family | Owning slices |
 |---|---|
 | Workspace and membership context | F1 |
-| Brand crawl, uploads and approvals | B1-B3 |
+| Brand crawl, Firecrawl universal/vertical extraction, uploads and approvals | B1-B2A-B3 |
 | Blueprint library and viral discovery | P1-P5 |
 | Script tournament and selection | S1-S2 |
 | Avatar list | G1 |
@@ -1137,7 +1189,7 @@ The slices must not implement:
 | No cross-workspace access succeeds | F1, F3, every domain slice, A2 |
 | No paid provider submission/capture occurs twice | F2, G2-G5, A2 |
 | No uncertain provider operation is blindly resubmitted | G4, A2 |
-| No unconsented avatar, voice, media or brand asset is used | B1-B3, G1, A2 |
+| No unconsented avatar, voice, media or brand asset is used | B1-B2A-B3, G1, A2 |
 | No approval applies to different/superseded media | C2, R1-R2, U1 |
 | No publication succeeds before audience verification | U2-U4 |
 | No workflow requires a later product version | F0, A3 |
@@ -1148,7 +1200,7 @@ The slices must not implement:
 | Role | Slice outcomes exercised |
 |---|---|
 | Owner/Admin | Workspace, credentials, recovery, reconciliation, export/deletion and all approval paths |
-| Client Manager | B1-B3, P1-P5, S1-S2, G1-G3, R1-R2 and U1-U4 production, wallet and publishing paths |
+| Client Manager | B1-B2A-B3, P1-P5, S1-S2, G1-G3, R1-R2 and U1-U4 production, wallet and publishing paths |
 | Reviewer | R1 comments and read-only review evidence |
 
 Role access never bypasses brand approval, consent, credit, exact-version review or
