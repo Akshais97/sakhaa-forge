@@ -9,6 +9,7 @@ const hexPattern = /^#[0-9a-f]{6}$/i;
 export function buildBrandExtractionCandidates({
   crawlRunId,
   workspaceId,
+  brandId,
   scrape,
   schemaVersion = "brand.extraction.output.v1",
   universal = null,
@@ -47,6 +48,7 @@ export function buildBrandExtractionCandidates({
       candidates.push({
         id: null,
         workspaceId,
+        brandId,
         crawlRunId,
         fieldType: extracted.fieldType,
         value: extracted.value,
@@ -72,6 +74,7 @@ export function buildBrandExtractionCandidates({
       candidates.push({
         id: null,
         workspaceId,
+        brandId,
         crawlRunId,
         fieldType: extracted.fieldType,
         value: extracted.value,

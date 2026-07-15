@@ -12,6 +12,7 @@ const allowedContentTypes = new Map([
 export async function retainCrawlAssets(assets, {
   workspaceId,
   crawlRunId,
+  objectStorage = null,
   storageRoot = process.env.LOCAL_STORAGE_ROOT || ".local/storage",
   fetchImpl = globalThis.fetch,
   maxAssets = 50,
@@ -48,13 +49,39 @@ export async function retainCrawlAssets(assets, {
       }
       const sha256 = createHash("sha256").update(bytes).digest("hex");
       const objectKey = `clean-media/${workspaceId}/brand-crawl/${crawlRunId}/${sha256}${extension}`;
-      const absoluteRoot = path.resolve(storageRoot);
-      const absolutePath = path.resolve(absoluteRoot, ...objectKey.split("/"));
-      if (!absolutePath.startsWith(`${absoluteRoot}${path.sep}`)) throw new Error("ASSET_PATH_INVALID");
-      await mkdir(path.dirname(absolutePath), { recursive: true });
-      await writeFile(absolutePath, bytes, { flag: "wx" }).catch((error) => {
-        if (error?.code !== "EEXIST") throw error;
-      });
+      if (objectStorage) {
+        const quarantineKey = `quarantine/${workspaceId}/brand-crawl/${crawlRunId}/${sha256}${extension}`;
+        await objectStorage.putObject({
+          area: "quarantine",
+          key: quarantineKey,
+          body: bytes,
+          contentType,
+          sha256
+        });
+        const retained = await objectStorage.headObject({ area: "quarantine", key: quarantineKey });
+        if (retained.byteSize !== bytes.length || (retained.contentType && retained.contentType !== contentType)) {
+          throw new Error("ASSET_STORAGE_VERIFICATION_FAILED");
+        }
+        await objectStorage.copyObject({
+          sourceArea: "quarantine",
+          sourceKey: quarantineKey,
+          destinationArea: "clean-media",
+          destinationKey: objectKey,
+          contentType,
+          sha256
+        });
+        const clean = await objectStorage.headObject({ area: "clean-media", key: objectKey });
+        if (clean.byteSize !== bytes.length) throw new Error("ASSET_STORAGE_VERIFICATION_FAILED");
+        await objectStorage.deleteObject({ area: "quarantine", key: quarantineKey });
+      } else {
+        const absoluteRoot = path.resolve(storageRoot);
+        const absolutePath = path.resolve(absoluteRoot, ...objectKey.split("/"));
+        if (!absolutePath.startsWith(`${absoluteRoot}${path.sep}`)) throw new Error("ASSET_PATH_INVALID");
+        await mkdir(path.dirname(absolutePath), { recursive: true });
+        await writeFile(absolutePath, bytes, { flag: "wx" }).catch((error) => {
+          if (error?.code !== "EEXIST") throw error;
+        });
+      }
       retainedAssets.push({
         fileName: `${asset.type ?? "brand-image"}-${sha256.slice(0, 12)}${extension}`,
         contentType,

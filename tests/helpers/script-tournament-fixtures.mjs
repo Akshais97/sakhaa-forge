@@ -60,7 +60,7 @@ export async function prepareApprovedBrand(client, label) {
     },
     { idempotencyKey: `crawl-${randomUUID()}` }
   );
-  const approved = await client.approveBrandProfile(randomUUID(), approvalPayload(workspaceId, crawl.body.crawlRun.id, 0));
+  const approved = await client.approveBrandProfile(crawl.body.brand.id, approvalPayload(workspaceId, crawl.body.crawlRun.id, 0));
   assert.equal(approved.status, 201, JSON.stringify(approved.body));
   return {
     workspaceId,

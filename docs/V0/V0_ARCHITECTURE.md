@@ -67,6 +67,10 @@ Use private buckets or equivalently isolated prefixes:
 
 PostgreSQL stores ownership, hashes, status and retention. Presigned URLs are short-lived.
 Provider URLs are transient and never the retained production source.
+`OBJECT_STORAGE_PROVIDER=b2` is mandatory outside local/test. The local filesystem adapter
+is a deterministic simulator only. Upload and crawl acquisition both write quarantine,
+verify retained bytes, copy to clean media and delete the quarantine object; database state
+may advance to `CLEAN` only after that storage sequence succeeds.
 
 ## Job Flow
 

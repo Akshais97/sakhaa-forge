@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import { V0Client } from "../../packages/contracts/generated/v0-client.mjs";
-import { withApiServer } from "../helpers/server.mjs";
+import { uploadInitiatedArtifact, withApiServer } from "../helpers/server.mjs";
 
 const jwtSecret = "test-supabase-jwt-secret";
 
@@ -21,20 +21,22 @@ test("Owner disables simulated media capability and new job starts are blocked w
         { idempotencyKey: "f5-capability-workspace" }
       );
       const workspaceId = created.body.workspace.id;
-      const sourceHash = sha256("capability-source");
+      const sourceBytes = "capability-source";
+      const sourceHash = sha256(sourceBytes);
       const source = await client.initiateBrandAssetUpload(
         {
           workspaceId,
           fileName: "source.mp4",
           contentType: "video/mp4",
-          byteSize: 12,
+          byteSize: Buffer.byteLength(sourceBytes),
           sha256: sourceHash
         },
         { idempotencyKey: "f5-capability-source" }
       );
+      await uploadInitiatedArtifact(baseUrl, source, sourceBytes);
       await client.completeBrandAssetUpload(source.body.artifact.id, {
         workspaceId,
-        byteSize: 12,
+        byteSize: Buffer.byteLength(sourceBytes),
         sha256: sourceHash
       });
 

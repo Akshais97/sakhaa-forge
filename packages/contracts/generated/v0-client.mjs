@@ -49,6 +49,14 @@ export class V0Client {
     return this.#post("/brands/crawl-runs", input, options);
   }
 
+  async listBrands(workspaceId) {
+    return this.#get(`/workspaces/${encodeURIComponent(workspaceId)}/brands`);
+  }
+
+  async listBrandAssets(brandId) {
+    return this.#get(`/brands/${encodeURIComponent(brandId)}/assets`);
+  }
+
   async getBrandCrawlRun(crawlRunId) {
     return this.#get(`/brands/crawl-runs/${encodeURIComponent(crawlRunId)}`);
   }

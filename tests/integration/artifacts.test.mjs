@@ -33,7 +33,13 @@ test("workspace user uploads a clean artifact and receives authorized retrieval 
         },
         { idempotencyKey: "f3-upload-clean-logo" }
       );
+      await uploadBytes(baseUrl, initiated.body.upload, "clean-image-bytes");
       const completed = await userA.completeBrandAssetUpload(initiated.body.artifact.id, {
+        workspaceId,
+        byteSize: 17,
+        sha256: expectedHash
+      });
+      const replayedCompletion = await userA.completeBrandAssetUpload(initiated.body.artifact.id, {
         workspaceId,
         byteSize: 17,
         sha256: expectedHash
@@ -50,6 +56,8 @@ test("workspace user uploads a clean artifact and receives authorized retrieval 
       assert.equal(completed.status, 200);
       assert.equal(completed.body.artifact.status, "CLEAN");
       assert.equal(completed.body.artifact.retentionClass, "clean-media");
+      assert.equal(replayedCompletion.status, 200);
+      assert.equal(replayedCompletion.body.artifact.id, completed.body.artifact.id);
       assert.equal(download.status, 200);
       assert.equal(download.body.artifact.id, initiated.body.artifact.id);
       assert.equal(download.body.download.method, "GET");
@@ -75,21 +83,24 @@ test("hash mismatch rejects artifact substitution and keeps artifact out of clea
         { idempotencyKey: "f3-create-aster-hash" }
       );
       const workspaceId = created.body.workspace.id;
+      const expectedBytes = "expected-video-data";
+      const substitutedBytes = "modified-video-data";
       const initiated = await client.initiateBrandAssetUpload(
         {
           workspaceId,
           fileName: "render.mp4",
           contentType: "video/mp4",
-          byteSize: 19,
-          sha256: sha256("expected-video-bytes")
+          byteSize: Buffer.byteLength(expectedBytes),
+          sha256: sha256(expectedBytes)
         },
         { idempotencyKey: "f3-upload-video-hash" }
       );
+      await uploadBytes(baseUrl, initiated.body.upload, substitutedBytes);
 
       const completed = await client.completeBrandAssetUpload(initiated.body.artifact.id, {
         workspaceId,
-        byteSize: 19,
-        sha256: sha256("substituted-video-bytes")
+        byteSize: Buffer.byteLength(expectedBytes),
+        sha256: sha256(expectedBytes)
       });
 
       assert.equal(completed.status, 409);
@@ -125,6 +136,7 @@ test("unsupported file type becomes a retained rejected artifact", async () => {
         },
         { idempotencyKey: "f3-upload-rejected-exe" }
       );
+      await uploadBytes(baseUrl, initiated.body.upload, "binary-executable");
 
       const completed = await client.completeBrandAssetUpload(initiated.body.artifact.id, {
         workspaceId,
@@ -140,6 +152,37 @@ test("unsupported file type becomes a retained rejected artifact", async () => {
     }
   );
 });
+
+test("completion refuses to promote an artifact when no bytes were uploaded", async () => {
+  await withApiServer(
+    { APP_ENV: "test", APP_VERSION: "test", SUPABASE_JWT_SECRET: jwtSecret },
+    async ({ baseUrl }) => {
+      const client = new V0Client({ baseUrl, authToken: signJwt("user-incomplete") });
+      const created = await client.createWorkspace({ name: "Incomplete Upload" }, { idempotencyKey: "incomplete-workspace" });
+      const bytes = "not-uploaded";
+      const initiated = await client.initiateBrandAssetUpload(
+        { workspaceId: created.body.workspace.id, fileName: "logo.png", contentType: "image/png", byteSize: Buffer.byteLength(bytes), sha256: sha256(bytes) },
+        { idempotencyKey: "incomplete-upload" }
+      );
+      const completed = await client.completeBrandAssetUpload(initiated.body.artifact.id, {
+        workspaceId: created.body.workspace.id,
+        byteSize: Buffer.byteLength(bytes),
+        sha256: sha256(bytes)
+      });
+      assert.equal(completed.status, 409);
+      assert.equal(completed.body.code, "UPLOAD_URL_EXPIRED");
+    }
+  );
+});
+
+async function uploadBytes(baseUrl, upload, value) {
+  const response = await fetch(new URL(upload.url, baseUrl), {
+    method: upload.method,
+    headers: upload.headers,
+    body: Buffer.from(value)
+  });
+  assert.equal(response.status, 200, await response.text());
+}
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");

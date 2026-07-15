@@ -1,6 +1,7 @@
 import { V0Client } from "../../../packages/contracts/generated/v0-client.mjs";
 import { runFirecrawlBrandExtraction, validateFirecrawlConfiguration } from "../../../apps/api/src/firecrawl-provider.mjs";
 import { retainCrawlAssets } from "./brand-asset-acquisition.mjs";
+import { createObjectStorage } from "../../../packages/config/src/storage.mjs";
 
 export async function processBrandCrawlJob(jobId, {
   apiBaseUrl = process.env.API_BASE_URL || "http://localhost:3001/api/v0",
@@ -9,7 +10,8 @@ export async function processBrandCrawlJob(jobId, {
   apiFetchImpl = globalThis.fetch,
   providerFetchImpl = globalThis.fetch,
   assetFetchImpl = globalThis.fetch,
-  storageRoot = env.LOCAL_STORAGE_ROOT || ".local/storage"
+  storageRoot = env.LOCAL_STORAGE_ROOT || ".local/storage",
+  objectStorage = createObjectStorage(env)
 } = {}) {
   if (typeof jobId !== "string" || !jobId.trim() || typeof workerToken !== "string" || !workerToken.trim()) {
     return { ok: false, problem: { code: "DEPENDENCY_UNAVAILABLE", status: 503, detail: "The brand crawl worker is not configured." } };
@@ -45,6 +47,7 @@ export async function processBrandCrawlJob(jobId, {
   const acquisition = await retainCrawlAssets(providerResult.output.assets, {
     workspaceId: claimed.body.job.workspaceId,
     crawlRunId: input.brandCrawlRunId,
+    objectStorage,
     storageRoot,
     fetchImpl: assetFetchImpl
   });

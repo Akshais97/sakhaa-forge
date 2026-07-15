@@ -206,6 +206,7 @@ model Workspace {
   auditEvents AuditEvent[]
   idempotencyRecords IdempotencyRecord[]
   artifacts Artifact[]
+  brands Brand[]
   brandCrawlRuns BrandCrawlRun[]
   brandAssets BrandAsset[]
   brandCandidates BrandCandidate[]
@@ -262,6 +263,31 @@ model Workspace {
   @@unique([slug])
   @@index([status, createdAt])
   @@map("workspaces")
+}
+
+model Brand {
+  id               String       @id @default(uuid()) @db.Uuid
+  workspaceId      String       @map("workspace_id") @db.Uuid
+  name             String       @db.VarChar(200)
+  slug             String       @db.VarChar(220)
+  websiteUrl       String       @map("website_url") @db.VarChar(500)
+  normalizedDomain String       @map("normalized_domain") @db.VarChar(253)
+  status           RecordStatus @default(ACTIVE)
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  workspace        Workspace    @relation(fields: [workspaceId], references: [id])
+  crawlRuns        BrandCrawlRun[]
+  assets           BrandAsset[]
+  candidates       BrandCandidate[]
+  profiles         BrandProfile[]
+  approvals        BrandApproval[]
+  rules            BrandRule[]
+
+  @@unique([workspaceId, slug])
+  @@unique([id, workspaceId])
+  @@index([workspaceId, normalizedDomain, status])
+  @@index([workspaceId, status, createdAt])
+  @@map("brands")
 }
 
 model ServiceCredential {
@@ -433,6 +459,7 @@ model Artifact {
 model BrandCrawlRun {
   id                 String       @id @default(uuid()) @db.Uuid
   workspaceId        String       @map("workspace_id") @db.Uuid
+  brandId            String       @map("brand_id") @db.Uuid
   sourceUrl          String       @map("source_url") @db.VarChar(1000)
   normalizedUrl      String       @map("normalized_url") @db.VarChar(500)
   status             JobStatus    @default(QUEUED)
@@ -448,6 +475,7 @@ model BrandCrawlRun {
   createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
   workspace          Workspace    @relation(fields: [workspaceId], references: [id])
+  brand              Brand        @relation(fields: [brandId, workspaceId], references: [id, workspaceId])
   crawlPlanArtifact  Artifact?    @relation("BrandCrawlRunCrawlPlanArtifact", fields: [crawlPlanArtifactId], references: [id])
   pageInventoryArtifact Artifact? @relation("BrandCrawlRunPageInventoryArtifact", fields: [pageInventoryArtifactId], references: [id])
   assetPackArtifact  Artifact?    @relation("BrandCrawlRunAssetPackArtifact", fields: [assetPackArtifactId], references: [id])
@@ -459,13 +487,15 @@ model BrandCrawlRun {
 
   @@index([workspaceId, status, createdAt])
   @@index([workspaceId, normalizedUrl])
+  @@index([workspaceId, brandId, createdAt])
   @@map("brand_crawl_runs")
 }
 
 model BrandAsset {
   id           String        @id @default(uuid()) @db.Uuid
   workspaceId  String        @map("workspace_id") @db.Uuid
-  crawlRunId   String        @map("crawl_run_id") @db.Uuid
+  brandId      String        @map("brand_id") @db.Uuid
+  crawlRunId   String?       @map("crawl_run_id") @db.Uuid
   artifactId   String        @map("artifact_id") @db.Uuid
   rightsBasis  String        @map("rights_basis") @db.VarChar(240)
   permittedUse String        @map("permitted_use") @db.VarChar(240)
@@ -473,17 +503,20 @@ model BrandAsset {
   createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
   workspace    Workspace     @relation(fields: [workspaceId], references: [id])
-  crawlRun     BrandCrawlRun @relation(fields: [crawlRunId], references: [id])
+  brand        Brand         @relation(fields: [brandId, workspaceId], references: [id, workspaceId])
+  crawlRun     BrandCrawlRun? @relation(fields: [crawlRunId], references: [id])
   artifact     Artifact      @relation(fields: [artifactId], references: [id])
 
   @@unique([workspaceId, artifactId, crawlRunId])
   @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, brandId, status, createdAt])
   @@map("brand_assets")
 }
 
 model BrandCandidate {
   id                String        @id @default(uuid()) @db.Uuid
   workspaceId       String        @map("workspace_id") @db.Uuid
+  brandId           String        @map("brand_id") @db.Uuid
   crawlRunId        String        @map("crawl_run_id") @db.Uuid
   fieldType         String        @map("field_type") @db.VarChar(120)
   value             Json
@@ -496,6 +529,7 @@ model BrandCandidate {
   createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
   workspace         Workspace     @relation(fields: [workspaceId], references: [id])
+  brand             Brand         @relation(fields: [brandId, workspaceId], references: [id, workspaceId])
   crawlRun          BrandCrawlRun @relation(fields: [crawlRunId], references: [id])
 
   @@unique([workspaceId, crawlRunId, fieldType, sourceFingerprint])
@@ -520,6 +554,7 @@ model BrandProfile {
   createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
   workspace        Workspace     @relation(fields: [workspaceId], references: [id])
+  brand            Brand         @relation(fields: [brandId, workspaceId], references: [id, workspaceId])
   crawlRun         BrandCrawlRun @relation(fields: [crawlRunId], references: [id])
   approvals        BrandApproval[]
   rules            BrandRule[]
@@ -546,6 +581,7 @@ model BrandApproval {
   reason         String?      @db.VarChar(500)
   createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   workspace      Workspace    @relation(fields: [workspaceId], references: [id])
+  brand          Brand        @relation(fields: [brandId, workspaceId], references: [id, workspaceId])
   brandProfile   BrandProfile @relation(fields: [brandProfileId], references: [id])
 
   @@index([workspaceId, brandId, createdAt])
@@ -565,6 +601,7 @@ model BrandRule {
   createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
   workspace      Workspace    @relation(fields: [workspaceId], references: [id])
+  brand          Brand        @relation(fields: [brandId, workspaceId], references: [id, workspaceId])
   brandProfile   BrandProfile @relation(fields: [brandProfileId], references: [id])
 
   @@unique([workspaceId, brandProfileId, type, value])

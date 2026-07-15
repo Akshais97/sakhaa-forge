@@ -20,6 +20,7 @@ import { createGeneratedWorkflowClient, makeIdempotencyKey } from '../../../../s
 interface BrandExtractionStudioProps {
   activeBrand: BrandData;
   onUpdateBrandData: (updated: BrandData) => void;
+  onPersistedBrands: (brands: Array<{ id: string; name: string; websiteUrl: string }>) => void;
   onProceedWorkflow: () => void;
 }
 
@@ -158,7 +159,7 @@ async function sha256File(file: File): Promise<string> {
     .join('');
 }
 
-export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, onProceedWorkflow }: BrandExtractionStudioProps) {
+export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, onPersistedBrands, onProceedWorkflow }: BrandExtractionStudioProps) {
   // Navigation Steps
   const steps = [
     { id: 1, name: 'Brand Context' },
@@ -177,6 +178,20 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     authToken: '',
     source: 'pending'
   });
+
+  useEffect(() => {
+    if (!apiContext.workspaceId.trim() || !apiContext.authToken.trim()) return;
+    let cancelled = false;
+    void createGeneratedWorkflowClient({ baseUrl: '/api/v0', authToken: apiContext.authToken.trim() })
+      .then(client => client.listBrands(apiContext.workspaceId.trim()))
+      .then(response => {
+        if (!cancelled && response.status < 400 && Array.isArray((response.body as any)?.brands)) {
+          onPersistedBrands((response.body as any).brands);
+        }
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [apiContext.workspaceId, apiContext.authToken, onPersistedBrands]);
 
   // STEP 1 State: Brand Context Onboarding Form
   const [onboardingForm, setOnboardingForm] = useState({
@@ -199,6 +214,31 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     pathPrefixes: ['/'],
     assets: [] as UploadedBrandAsset[]
   });
+
+  useEffect(() => {
+    if (!apiContext.workspaceId.trim() || !apiContext.authToken.trim() || activeBrand.id === 'brand-extract-draft') return;
+    let cancelled = false;
+    void createGeneratedWorkflowClient({ baseUrl: '/api/v0', authToken: apiContext.authToken.trim() })
+      .then(client => client.listBrandAssets(activeBrand.id))
+      .then(response => {
+        const retained = (response.body as any)?.assets;
+        if (cancelled || response.status >= 400 || !Array.isArray(retained)) return;
+        setSetupForm(current => ({
+          ...current,
+          assets: retained.map((asset: any) => ({
+            id: asset.id,
+            artifactId: asset.artifactId,
+            name: asset.name,
+            category: asset.category,
+            rightsBasis: asset.rightsBasis,
+            permittedUse: asset.permittedUse,
+            status: 'clean' as const
+          }))
+        }));
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [activeBrand.id, apiContext.workspaceId, apiContext.authToken]);
   // Local states for adding a path prefix and real asset uploads
   const [newPrefix, setNewPrefix] = useState('');
   const [selectedAssetFile, setSelectedAssetFile] = useState<File | null>(null);
@@ -458,7 +498,12 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
           fileName: file.name,
           contentType: file.type || 'application/octet-stream',
           byteSize: file.size,
-          sha256
+          sha256,
+          ...(activeBrand.id !== 'brand-extract-draft' ? {
+            brandId: activeBrand.id,
+            rightsBasis: assetUploadInput.rightsBasis.trim(),
+            permittedUse: assetUploadInput.permittedUse.trim()
+          } : {})
         },
         { idempotencyKey: makeIdempotencyKey('brand-asset-upload') }
       );
@@ -467,6 +512,17 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
         throw new Error(initiatedBody?.detail || initiatedBody?.title || 'Asset upload initiation failed.');
       }
       const artifactId = initiatedBody.artifact.id;
+      if (!initiatedBody?.upload?.url) {
+        throw new Error('The storage service did not return an upload destination.');
+      }
+      const uploadResponse = await fetch(initiatedBody.upload.url, {
+        method: initiatedBody.upload.method || 'PUT',
+        headers: initiatedBody.upload.headers || { 'content-type': file.type || 'application/octet-stream' },
+        body: file
+      });
+      if (!uploadResponse.ok) {
+        throw new Error('The asset could not be retained in private storage.');
+      }
       const completed = await client.completeBrandAssetUpload(artifactId, {
         workspaceId: apiContext.workspaceId.trim(),
         byteSize: file.size,
@@ -537,6 +593,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
     const payload = {
       workspaceId: apiContext.workspaceId.trim(),
+      brandName: onboardingForm.brandName.trim() || undefined,
       websiteUrl: setupForm.websiteUrl,
       rightsAcknowledged: setupForm.rightsAcknowledged,
       brandType: toBackendBrandType(setupForm.brandType),
@@ -562,6 +619,9 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
       const body = response.body as any;
       const createdRunId = body?.crawlRun?.id;
       if (createdRunId) {
+        if (body?.brand?.id) {
+          onPersistedBrands([{ id: body.brand.id, name: body.brand.name, websiteUrl: body.brand.websiteUrl }]);
+        }
         if (shouldCompleteCrawlWithLocalDemo({
           source: apiContext.source,
           jobId: body?.job?.id,

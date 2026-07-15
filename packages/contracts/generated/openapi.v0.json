@@ -720,6 +720,22 @@
         }
       }
     },
+    "/brands/assets/uploads/{artifact_id}/content": {
+      "put": {
+        "operationId": "putLocalBrandAssetUpload",
+        "description": "Local/test signed-upload simulator. B2 deployments return a provider-signed URL instead.",
+        "parameters": [
+          { "name": "artifact_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "token", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": { "required": true },
+        "responses": {
+          "200": { "description": "Bytes retained in private quarantine storage." },
+          "403": { "description": "Signed upload grant is invalid or expired." },
+          "422": { "description": "Bytes or content type do not match the initiated upload." }
+        }
+      }
+    },
     "/brands/assets/uploads/{artifact_id}/complete": {
       "post": {
         "operationId": "completeBrandAssetUpload",
@@ -758,6 +774,40 @@
           "422": {
             "description": "Completion input validation failed."
           }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/brands": {
+      "get": {
+        "operationId": "listBrands",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{
+          "name": "workspace_id",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string", "format": "uuid" }
+        }],
+        "responses": {
+          "200": { "description": "Bounded recognizable brand entities owned by the workspace." },
+          "401": { "description": "Authentication is required." },
+          "404": { "description": "Workspace is missing or hidden by tenant isolation." }
+        }
+      }
+    },
+    "/brands/{brand_id}/assets": {
+      "get": {
+        "operationId": "listBrandAssets",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{
+          "name": "brand_id",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string", "format": "uuid" }
+        }],
+        "responses": {
+          "200": { "description": "Retained clean asset references owned by the brand; object keys and signed URLs are not exposed." },
+          "401": { "description": "Authentication is required." },
+          "404": { "description": "Brand is missing or hidden by tenant isolation." }
         }
       }
     },

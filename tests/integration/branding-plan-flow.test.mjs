@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import { V0Client } from "../../packages/contracts/generated/v0-client.mjs";
-import { withApiServer } from "../helpers/server.mjs";
+import { uploadInitiatedArtifact, withApiServer } from "../helpers/server.mjs";
 
 const jwtSecret = "test-supabase-jwt-secret";
 const workerToken = "test-worker-token";
@@ -48,6 +48,7 @@ test("branding plan profile, onboarding, crawl detail and asset pack stay tenant
         { workspaceId, fileName: "logo.png", contentType: "image/png", byteSize: 4, sha256: logoHash },
         { idempotencyKey: "branding-flow-logo" }
       );
+      await uploadInitiatedArtifact(baseUrl, upload, "logo");
       await client.completeBrandAssetUpload(upload.body.artifact.id, { workspaceId, byteSize: 4, sha256: logoHash });
       const crawl = await client.createBrandCrawlRun(
         {
@@ -78,7 +79,7 @@ test("branding plan profile, onboarding, crawl detail and asset pack stay tenant
       assert.equal(detail.body.candidates.length > 0, true);
       assert.equal(assetPack.body.assetPack.identity.length > 0, true);
       assert.equal(assetPack.body.assetPack.mediaInventory.length > 0, true);
-      assert.equal(assetPack.body.assetPack.readiness.score, 60);
+      assert.equal(assetPack.body.assetPack.readiness.score, 75);
       assert.equal(/signed_url|objectKey|secret|prompt|rawProviderPayload/i.test(JSON.stringify(assetPack.body)), false);
     }
   );

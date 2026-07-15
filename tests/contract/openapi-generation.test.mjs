@@ -70,6 +70,8 @@ test("generated client has V0 public and internal worker methods through P5", as
   assert.match(client, /setWorkspaceCapability/);
   assert.match(client, /initiateBrandAssetUpload/);
   assert.match(client, /completeBrandAssetUpload/);
+  assert.match(client, /listBrands/);
+  assert.match(client, /listBrandAssets/);
   assert.match(client, /createArtifactDownload/);
   assert.match(client, /startSimulatedMediaProcessing/);
   assert.match(client, /listDeadLetterJobs/);

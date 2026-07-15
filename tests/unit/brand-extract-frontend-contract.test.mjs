@@ -74,6 +74,8 @@ test("brand-extract frontend exposes required crawl controls and validation", as
   assert.match(studio, /type="file"/);
   assert.match(studio, /initiateBrandAssetUpload/);
   assert.match(studio, /completeBrandAssetUpload/);
+  assert.match(studio, /body:\s*file/);
+  assert.match(studio, /listBrandAssets/);
   assert.match(studio, /sha256File/);
 });
 

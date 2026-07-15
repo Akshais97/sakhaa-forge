@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { V0Client } from "../../packages/contracts/generated/v0-client.mjs";
-import { withApiServer } from "../helpers/server.mjs";
+import { uploadInitiatedArtifact, withApiServer } from "../helpers/server.mjs";
 
 const jwtSecret = "test-supabase-jwt-secret";
 const workerToken = "test-worker-token";
@@ -173,12 +173,14 @@ test("A2 operational alerts surface a critical dead-letter alert and hide cross-
     assert.equal(empty.body.alerts.active.length, 0);
 
     // Seed a dead-lettered job to raise a critical dead_letter_present alert.
-    const sourceHash = sha256("a2-alerts-source");
+    const sourceBytes = "a2-alerts-source";
+    const sourceHash = sha256(sourceBytes);
     const source = await client.initiateBrandAssetUpload(
-      { workspaceId, fileName: "source.mp4", contentType: "video/mp4", byteSize: 12, sha256: sourceHash },
+      { workspaceId, fileName: "source.mp4", contentType: "video/mp4", byteSize: Buffer.byteLength(sourceBytes), sha256: sourceHash },
       { idempotencyKey: `a2-alerts-source-${randomUUID()}` }
     );
-    await client.completeBrandAssetUpload(source.body.artifact.id, { workspaceId, byteSize: 12, sha256: sourceHash });
+    await uploadInitiatedArtifact(baseUrl, source, sourceBytes);
+    await client.completeBrandAssetUpload(source.body.artifact.id, { workspaceId, byteSize: Buffer.byteLength(sourceBytes), sha256: sourceHash });
     const started = await client.startSimulatedMediaProcessing(
       { workspaceId, inputArtifactId: source.body.artifact.id, outputFileName: "processed.mp4", maxAttempts: 1 },
       { idempotencyKey: `a2-alerts-processing-${randomUUID()}` }
@@ -273,12 +275,14 @@ test("A2 restore drill preserves RLS and artifact references and hides cross-wor
       { idempotencyKey: `workspace-${randomUUID()}` }
     );
     const workspaceId = created.body.workspace.id;
-    const sourceHash = sha256("a2-restore-source");
+    const sourceBytes = "a2-restore-source";
+    const sourceHash = sha256(sourceBytes);
     const source = await client.initiateBrandAssetUpload(
-      { workspaceId, fileName: "source.mp4", contentType: "video/mp4", byteSize: 12, sha256: sourceHash },
+      { workspaceId, fileName: "source.mp4", contentType: "video/mp4", byteSize: Buffer.byteLength(sourceBytes), sha256: sourceHash },
       { idempotencyKey: `a2-restore-source-${randomUUID()}` }
     );
-    await client.completeBrandAssetUpload(source.body.artifact.id, { workspaceId, byteSize: 12, sha256: sourceHash });
+    await uploadInitiatedArtifact(baseUrl, source, sourceBytes);
+    await client.completeBrandAssetUpload(source.body.artifact.id, { workspaceId, byteSize: Buffer.byteLength(sourceBytes), sha256: sourceHash });
     const artifactId = source.body.artifact.id;
 
     const restore = await client.recordRestoreDrill(workspaceId, { artifactId, reason: "A2 restore drill." });
@@ -313,12 +317,14 @@ async function createCleanSourceAndJob(baseUrl, { idSuffix, maxAttempts = undefi
     { idempotencyKey: `a2-create-${idSuffix}` }
   );
   const workspaceId = created.body.workspace.id;
-  const sourceHash = sha256(`source-video-${idSuffix}`);
+  const sourceBytes = `source-video-${idSuffix}`;
+  const sourceHash = sha256(sourceBytes);
   const source = await client.initiateBrandAssetUpload(
-    { workspaceId, fileName: `source-${idSuffix}.mp4`, contentType: "video/mp4", byteSize: 12, sha256: sourceHash },
+    { workspaceId, fileName: `source-${idSuffix}.mp4`, contentType: "video/mp4", byteSize: Buffer.byteLength(sourceBytes), sha256: sourceHash },
     { idempotencyKey: `a2-source-${idSuffix}` }
   );
-  await client.completeBrandAssetUpload(source.body.artifact.id, { workspaceId, byteSize: 12, sha256: sourceHash });
+  await uploadInitiatedArtifact(baseUrl, source, sourceBytes);
+  await client.completeBrandAssetUpload(source.body.artifact.id, { workspaceId, byteSize: Buffer.byteLength(sourceBytes), sha256: sourceHash });
   const started = await client.startSimulatedMediaProcessing(
     {
       workspaceId,
