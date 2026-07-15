@@ -40,6 +40,7 @@ GET    /brands/{brand_id}/assets           Clean retained assets for one brand
 GET    /brands/crawl-runs/{crawl_run_id}
 GET    /brands/crawl-runs/{crawl_run_id}/asset-pack
 GET    /brands/crawl-runs/{crawl_run_id}/candidates
+POST   /brands/crawl-runs/{crawl_run_id}/candidates/{candidate_id}/status
 POST   /brands/assets/uploads      Idempotency-Key required
 PUT    /brands/assets/uploads/{artifact_id}/content  Local/test signed-upload simulator only
 POST   /brands/assets/uploads/{artifact_id}/complete
@@ -138,6 +139,11 @@ the branding UI: brand identity, universal visual identity, messaging, offers,
 trust/proof, media inventory, voice, selected/detected brand type, vertical assets,
 compliance/rights, missing assets and readiness. The response is a review surface only;
 it does not approve brand truth and does not expose raw provider payloads.
+
+`POST /brands/crawl-runs/{crawl_run_id}/candidates/{candidate_id}/status` retains an
+`approved` or `rejected` review decision for the authenticated crawl-run tuple. A `404`
+intentionally covers both a missing tuple and a tuple hidden by workspace isolation; the
+response must not reveal whether the candidate exists in another workspace or crawl run.
 
 `GET /users/me/profile`, `PATCH /users/me/profile`, `GET /onboarding/brand-context` and
 `POST /onboarding/brand-context` are V0 branding-context helpers for optional onboarding

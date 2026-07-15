@@ -36,6 +36,10 @@ test("generated OpenAPI exposes F0 health, readiness and version operations", as
   assert.ok(openapi.paths["/brands/crawl-runs/{crawl_run_id}"].get);
   assert.ok(openapi.paths["/brands/crawl-runs/{crawl_run_id}/asset-pack"].get);
   assert.ok(openapi.paths["/brands/crawl-runs/{crawl_run_id}/candidates"].get);
+  assert.equal(
+    openapi.paths["/brands/crawl-runs/{crawl_run_id}/candidates/{candidate_id}/status"].post.operationId,
+    "updateBrandCandidateDecision"
+  );
   assert.ok(openapi.paths["/users/me/profile"].get);
   assert.ok(openapi.paths["/users/me/profile"].patch);
   assert.ok(openapi.paths["/onboarding/brand-context"].get);
@@ -88,6 +92,7 @@ test("generated client has V0 public and internal worker methods through P5", as
   assert.match(client, /getBrandCrawlRun/);
   assert.match(client, /getBrandAssetPack/);
   assert.match(client, /listBrandCandidates/);
+  assert.match(client, /async updateBrandCandidateDecision\(crawlRunId, candidateId, input\)/);
   assert.match(client, /getUserProfile/);
   assert.match(client, /updateUserProfile/);
   assert.match(client, /getOnboardingBrandContext/);

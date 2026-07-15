@@ -952,6 +952,53 @@
         }
       }
     },
+    "/brands/crawl-runs/{crawl_run_id}/candidates/{candidate_id}/status": {
+      "post": {
+        "operationId": "updateBrandCandidateDecision",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "crawl_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Candidate decision was retained for the authorized crawl run."
+          },
+          "401": {
+            "description": "Authentication is required."
+          },
+          "404": {
+            "description": "Candidate or crawl run is missing or hidden by tenant isolation."
+          },
+          "422": {
+            "description": "Status must be approved or rejected."
+          }
+        }
+      }
+    },
     "/users/me/profile": {
       "get": {
         "operationId": "getUserProfile",

@@ -83,6 +83,13 @@ export class V0Client {
     return this.#get(\`/brands/crawl-runs/\${encodeURIComponent(crawlRunId)}/candidates\`);
   }
 
+  async updateBrandCandidateDecision(crawlRunId, candidateId, input) {
+    return this.#post(
+      \`/brands/crawl-runs/\${encodeURIComponent(crawlRunId)}/candidates/\${encodeURIComponent(candidateId)}/status\`,
+      input
+    );
+  }
+
   async getUserProfile() {
     return this.#get("/users/me/profile");
   }
