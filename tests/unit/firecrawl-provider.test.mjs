@@ -5,11 +5,27 @@ import {
   buildFirecrawlCrawlRequest,
   buildFirecrawlVerticalPassPlan,
   buildImageInventory,
+  normalizePublicAssetLocator,
   runFirecrawlBrandExtraction,
   normaliseFirecrawlPages,
   selectUniversalPagePlan,
   startBrandCrawl
 } from "../../apps/api/src/firecrawl-provider.mjs";
+
+test("Firecrawl adapter rejects malformed and non-HTTP asset locators", () => {
+  const locators = [
+    "148.72.245.255images/common/logo-blue.png",
+    "https://example.com/favicon.ico",
+    "javascript:alert(1)",
+    "/relative.png",
+    "https://example.com/hero.jpg"
+  ].map(normalizePublicAssetLocator).filter(Boolean);
+
+  assert.deepEqual(locators, [
+    "https://example.com/favicon.ico",
+    "https://example.com/hero.jpg"
+  ]);
+});
 
 test("Firecrawl universal routing discovers five eligible internal pages without explicit path scope", () => {
   const plan = selectUniversalPagePlan({
