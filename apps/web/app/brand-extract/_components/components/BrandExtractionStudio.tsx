@@ -11,6 +11,7 @@ import {
 import { BrandData } from '../types';
 import {
   adaptBrandCrawlRunResponse,
+  buildCanonicalApprovalInput,
   buildApprovalDraftFromCandidates,
   shouldCompleteCrawlWithLocalDemo,
   type UiCandidate
@@ -336,9 +337,10 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
   const [approvalStatus, setApprovalStatus] = useState<{
     submitted: boolean;
     timestamp: string | null;
-    hash: string | null;
-    version: string | null;
-  }>({ submitted: false, timestamp: null, hash: null, version: null });
+    approvalId: string | null;
+    version: number | null;
+  }>({ submitted: false, timestamp: null, approvalId: null, version: null });
+  const [approvalMutation, setApprovalMutation] = useState<'idle' | 'saving' | 'sign-in' | 'stale-session' | 'stale-version' | 'invalid' | 'failed'>('idle');
 
   const ensureDemoSession = async () => {
     if (apiContext.workspaceId.trim() && apiContext.authToken.trim()) {
@@ -381,7 +383,8 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     setCrawlRun(null);
     setCandidates([]);
     setAssetPack([]);
-    setApprovalStatus({ submitted: false, timestamp: null, hash: null, version: null });
+    setApprovalStatus({ submitted: false, timestamp: null, approvalId: null, version: null });
+    setApprovalMutation('idle');
   }, [activeBrand]);
 
   useEffect(() => {
@@ -788,62 +791,87 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
   // Submit final approval
   const handleApproveProfile = async () => {
+    if (!crawlRunId) {
+      setApprovalMutation('stale-session');
+      setApiError('This brand review session is no longer current. Reload the crawl before approving the profile.');
+      return;
+    }
     if (!approvalDraft.rightsAttestationChecked) {
-      setApiError('You must check and confirm the rights attestation to lock in approval.');
+      setApprovalMutation('invalid');
+      setApiError('Check the highlighted approval fields, including the rights attestation.');
       return;
     }
 
-    setLoading(true);
+    setApprovalMutation('saving');
     setApiError(null);
 
-    const payload = {
-      ...approvalDraft,
-      version: approvalDraft.version,
-      approvedBy: 'Client Manager (' + onboardingForm.brandName.trim() + ' Host)',
-      timestamp: new Date().toISOString()
-    };
-
     try {
-      const res = await fetch(`/api/brands/${activeBrand.id}/approvals`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+      const client = await createGeneratedWorkflowClient({
+        baseUrl: '/api/v0',
+        authToken: apiContext.authToken.trim()
       });
-      const json = await res.json();
-      if (json.success) {
-        setApprovalStatus({
-          submitted: true,
-          timestamp: json.data.approvedAt,
-          hash: json.data.approvalHash,
-          version: json.data.version
-        });
+      const response = await client.approveBrandProfile(
+        activeBrand.id,
+        buildCanonicalApprovalInput(approvalDraft, {
+          workspaceId: apiContext.workspaceId.trim(),
+          crawlRunId
+        })
+      );
 
-        // Trigger parent state update to reflect approved brand data
-        onUpdateBrandData({
-          ...activeBrand,
-          name: approvalDraft.name.public,
-          niche: approvalDraft.products[0]?.title || activeBrand.niche,
-          guidelines: [
-            ...approvalDraft.rules.required_phrases,
-            ...approvalDraft.rules.prohibited_phrases.map((p: string) => `PROHIBITED: Do not use "${p}"`)
-          ],
-          reviewItem: {
-            version: 'v' + json.data.version + ' (Approved)',
-            thumbnailUrl: activeBrand.reviewItem.thumbnailUrl,
-            comments: [
-              { user: 'Forge System', text: 'Brand extraction approved and synchronized with Creative Ancestry.', time: 'Just now' }
-            ],
-            status: 'Approved',
-            hash: json.data.approvalHash
-          }
-        });
-      } else {
-        setApiError(json.error || 'Failed to submit final profile approval.');
+      if (response.status !== 201) {
+        const mutation = response.status === 401
+          ? 'sign-in'
+          : response.status === 404
+          ? 'stale-session'
+          : response.status === 409
+          ? 'stale-version'
+          : response.status === 422
+          ? 'invalid'
+          : 'failed';
+        setApprovalMutation(mutation);
+        setApiError({
+          'sign-in': 'Your session expired. Sign in again before approving this profile.',
+          'stale-session': 'This brand review session is no longer current. Reload the crawl before approving the profile.',
+          'stale-version': 'The brand profile changed. Refresh the current profile version and review it again.',
+          'invalid': 'Check the highlighted approval fields and try again.',
+          'failed': 'The brand profile could not be approved. Try again.'
+        }[mutation]);
+        return;
       }
-    } catch (error) {
-      setApiError(error instanceof Error ? error.message : 'Failed to submit final profile approval.');
-    } finally {
-      setLoading(false);
+
+      const body = response.body as {
+        profile: { id: string; version: number; approvedAt: string };
+        approval: { id: string; decision: 'approve' };
+      };
+      setApprovalStatus({
+        submitted: true,
+        timestamp: body.profile.approvedAt,
+        version: body.profile.version,
+        approvalId: body.approval.id
+      });
+      setApprovalMutation('idle');
+
+      onUpdateBrandData({
+        ...activeBrand,
+        name: approvalDraft.name.public,
+        niche: approvalDraft.products[0]?.title || activeBrand.niche,
+        guidelines: [
+          ...approvalDraft.rules.required_phrases,
+          ...approvalDraft.rules.prohibited_phrases.map((p: string) => `PROHIBITED: Do not use "${p}"`)
+        ],
+        reviewItem: {
+          version: 'v' + body.profile.version + ' (Approved)',
+          thumbnailUrl: activeBrand.reviewItem.thumbnailUrl,
+          comments: [
+            { user: 'Forge System', text: 'Brand profile approval was retained with its audit record.', time: 'Just now' }
+          ],
+          status: 'Approved',
+          hash: activeBrand.reviewItem.hash
+        }
+      });
+    } catch {
+      setApprovalMutation('failed');
+      setApiError('The brand profile could not be approved. Try again.');
     }
   };
 
@@ -1802,7 +1830,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                 <div>
                   <h4 className="text-lg font-display text-white font-medium">Approved Brand Profile Constructor</h4>
                   <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
-                    Verify and modify approved fields prior to cryptographic lineage commitment. Once approved, downstream video generators refer exclusively to these parameters.
+                    Verify and modify approved fields before retaining a new approved profile version. Downstream video generators use only the active approved version.
                   </p>
                 </div>
 
@@ -2063,12 +2091,12 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                       
                       <button
                         onClick={handleApproveProfile}
-                        disabled={loading || !approvalDraft.rightsAttestationChecked || !approvalDraft.reviewerSignature || !approvalDraft.name.public}
+                        disabled={approvalMutation === 'saving'}
                         className="px-6 py-2.5 rounded-lg text-xs font-mono tracking-wider uppercase font-semibold text-black transition-all hover:opacity-90 disabled:opacity-30 flex items-center gap-1.5 shadow"
                         style={{ backgroundColor: activeBrand.primaryColor }}
                         id="submit-final-approval-btn"
                       >
-                        {loading ? 'Submitting approval...' : 'Submit Brand Approval'} <CheckCircle className="h-4 w-4" />
+                        {approvalMutation === 'saving' ? 'Submitting approval...' : 'Submit Brand Approval'} <CheckCircle className="h-4 w-4" />
                       </button>
                     </div>
 
@@ -2087,7 +2115,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                     <div className="space-y-2">
                       <h4 className="text-xl font-display font-medium text-white">Brand Profile Approved & Synchronized</h4>
                       <p className="text-sm text-zinc-400 max-w-sm mx-auto leading-relaxed">
-                        The approved parameters for <strong className="text-white">{approvalDraft.name.public}</strong> have been cryptographically bound as version <strong className="text-white">v{approvalStatus.version}</strong>.
+                        The approved parameters for <strong className="text-white">{approvalDraft.name.public}</strong> were retained as version <strong className="text-white">v{approvalStatus.version}</strong> with an approval audit record.
                       </p>
                     </div>
 
@@ -2098,14 +2126,15 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                         <span className="text-emerald-400">STATUS: OK</span>
                       </div>
                       <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Approval Stamp:</span> <span className="text-white">{approvalStatus.timestamp}</span></p>
-                      <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Cryptographic Hash:</span> <span className="text-zinc-300 select-all">{approvalStatus.hash}</span></p>
+                      <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Approval Record:</span> <span className="text-zinc-300 select-all">{approvalStatus.approvalId}</span></p>
                       <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Signatory:</span> <span className="text-white italic">{approvalDraft.reviewerSignature}</span></p>
                     </div>
 
                     <div className="pt-4 flex gap-4 justify-center">
                       <button
                         onClick={() => {
-                          setApprovalStatus({ submitted: false, timestamp: null, hash: null, version: null });
+                          setApprovalStatus({ submitted: false, timestamp: null, approvalId: null, version: null });
+                          setApprovalMutation('idle');
                           setApprovalDraft(prev => ({ ...prev, rightsAttestationChecked: false, reviewerSignature: '' }));
                           setCurrentStep(1);
                         }}

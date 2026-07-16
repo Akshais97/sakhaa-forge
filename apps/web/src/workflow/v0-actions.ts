@@ -1,4 +1,4 @@
-import type { WorkflowStepKey } from "./v0-workflow";
+import type { WorkflowStepKey } from "./v0-workflow.ts";
 
 export type WorkflowResponse = {
   ok: boolean;
@@ -104,20 +104,25 @@ export const WORKFLOW_ACTIONS: Record<WorkflowStepKey, WorkflowAction> = {
       client.approveBrandProfile(ids.brandId, {
         workspaceId,
         crawlRunId: ids.crawlRunId,
-        optimisticProfileVersion: Number(values.optimisticProfileVersion || 1),
-        rightsAttestation: values.rightsAttestation,
-        approvedFields: {
+        decision: "approve",
+        optimisticVersion: Number(values.optimisticProfileVersion),
+        profile: {
           publicName: values.publicName,
-          industry: "real_estate",
-          positioning: values.positioning,
-          targetAudience: values.targetAudience,
-          cta: values.cta,
-          tone: values.tone
+          industry: values.industry,
+          markets: [values.market],
+          positioningStatement: values.positioning,
+          products: [{ name: values.productName, category: values.productCategory, status: "active" }],
+          audiences: [{ name: values.targetAudience, geography: [values.market] }],
+          callsToAction: [{ label: values.cta, actionType: values.ctaActionType }],
+          voice: { attributes: [values.tone], avoid: [], formality: "balanced", languages: [values.language] },
+          visualIdentity: {},
+          claims: [],
+          rightsAttestation: values.rightsAttestation === true
         },
-        rules: {
-          required: values.requiredRule ? [values.requiredRule] : [],
-          prohibited: values.prohibitedRule ? [values.prohibitedRule] : []
-        }
+        rules: [
+          ...(values.requiredRule ? [{ type: "required_phrase", value: values.requiredRule, severity: "warning", rationale: "Approved brand phrase." }] : []),
+          ...(values.prohibitedRule ? [{ type: "prohibited_phrase", value: values.prohibitedRule, severity: "critical", rationale: "Prohibited by approved brand rules." }] : [])
+        ]
       })
     ),
 

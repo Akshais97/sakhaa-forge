@@ -130,6 +130,16 @@ test("brand-extract candidate decisions remain pending until the generated clien
   assert.match(studio, /startPollingCrawl\(crawlRunId\)/);
 });
 
+test("brand-extract approval uses canonical server truth and does not invent a cryptographic hash", async () => {
+  const studio = await readFile("apps/web/app/brand-extract/_components/components/BrandExtractionStudio.tsx", "utf8");
+
+  assert.match(studio, /client\.approveBrandProfile/);
+  assert.match(studio, /response\.status !== 201/);
+  assert.doesNotMatch(studio, /approvalHash/);
+  assert.doesNotMatch(studio, /cryptographically bound/i);
+  assert.match(studio, /body\.approval\.id/);
+});
+
 test("brand-extract studio is an explicit interactive client component", async () => {
   const studio = await readFile("apps/web/app/brand-extract/_components/components/BrandExtractionStudio.tsx", "utf8");
 

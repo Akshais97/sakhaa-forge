@@ -87,6 +87,69 @@ export type AdaptedBrandCrawlRun = {
   crawlProvider: BackendCrawlRun["crawlProvider"];
 };
 
+type CanonicalApprovalDraft = {
+  name: { public: string };
+  industry: string;
+  markets: string[];
+  positioning: { statement: string };
+  products: unknown[];
+  audiences: unknown[];
+  calls_to_action: unknown[];
+  voice: {
+    attributes: string[];
+    avoid_list: string[];
+    formality: string;
+    languages: string[];
+  };
+  visual_identity: unknown;
+  claims: unknown[];
+  rightsAttestationChecked: boolean;
+  rules: {
+    required_phrases: string[];
+    prohibited_phrases: string[];
+    required_disclosures: string[];
+  };
+  version: string;
+};
+
+export function buildCanonicalApprovalInput(
+  draft: CanonicalApprovalDraft,
+  context: { workspaceId: string; crawlRunId: string }
+) {
+  const displayedVersion = Number.parseInt(draft.version.split(".")[0] ?? "", 10);
+  const optimisticVersion = Number.isInteger(displayedVersion) && displayedVersion > 0 ? displayedVersion - 1 : 0;
+
+  return {
+    workspaceId: context.workspaceId,
+    crawlRunId: context.crawlRunId,
+    decision: "approve" as const,
+    optimisticVersion,
+    profile: {
+      publicName: draft.name.public,
+      industry: draft.industry,
+      markets: draft.markets,
+      positioningStatement: draft.positioning.statement,
+      products: draft.products,
+      audiences: draft.audiences,
+      callsToAction: draft.calls_to_action,
+      voice: {
+        attributes: draft.voice.attributes,
+        avoid: draft.voice.avoid_list,
+        formality: draft.voice.formality,
+        languages: draft.voice.languages
+      },
+      visualIdentity: draft.visual_identity,
+      claims: draft.claims,
+      rightsAttestation: draft.rightsAttestationChecked
+    },
+    rules: [
+      ...draft.rules.required_phrases.map(value => ({ type: "required_phrase", value, severity: "warning", rationale: "Approved brand phrase." })),
+      ...draft.rules.prohibited_phrases.map(value => ({ type: "prohibited_phrase", value, severity: "critical", rationale: "Prohibited by approved brand rules." })),
+      ...draft.rules.required_disclosures.map(value => ({ type: "required_disclosure", value, severity: "critical", rationale: "Required approved disclosure." }))
+    ]
+  };
+}
+
 const fieldTypeToSection: Record<string, CandidateSection> = {
   identity: "identity",
   summary: "identity",
