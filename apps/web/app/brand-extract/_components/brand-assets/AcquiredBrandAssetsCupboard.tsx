@@ -1,5 +1,6 @@
-import { Plus, Trash2 } from "lucide-react";
-import { SecureArtifactThumbnail, type SecureArtifactThumbnailStatus } from "./SecureArtifactThumbnail";
+import { Plus, Trash2, Undo2 } from "lucide-react";
+import type { ReactNode } from "react";
+import type { SecureArtifactThumbnailStatus } from "./SecureArtifactThumbnail";
 
 type BrandAssetShelfRow = {
   id: string;
@@ -8,6 +9,7 @@ type BrandAssetShelfRow = {
   provenance: string;
   rights: string;
   previewClassName?: string;
+  selected: boolean;
 };
 
 export type AcquiredBrandAsset = BrandAssetShelfRow & (
@@ -25,11 +27,13 @@ export type AcquiredBrandAsset = BrandAssetShelfRow & (
 
 export type AcquiredBrandAssetsCupboardProps = {
   assets: AcquiredBrandAsset[];
+  renderThumbnail: (asset: AcquiredBrandAsset) => ReactNode;
   onAdd: () => void;
   onRemove: (assetId: string) => void;
+  onRestore?: (assetId: string) => void;
 };
 
-export function AcquiredBrandAssetsCupboard({ assets, onAdd, onRemove }: AcquiredBrandAssetsCupboardProps) {
+export function AcquiredBrandAssetsCupboard({ assets, renderThumbnail, onAdd, onRemove, onRestore }: AcquiredBrandAssetsCupboardProps) {
   return (
     <section aria-labelledby="acquired-assets-title" className="rounded-2xl border border-white/10 bg-black/30 p-4 backdrop-blur-xl sm:p-5">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -51,20 +55,16 @@ export function AcquiredBrandAssetsCupboard({ assets, onAdd, onRemove }: Acquire
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-white/10" role="region" aria-label="Acquired brand assets cupboard" tabIndex={0}>
-        <div className="min-w-[820px]">
-          <div className="grid grid-cols-[148px_170px_120px_180px_150px_52px] gap-3 border-b border-white/10 bg-white/[0.035] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-zinc-500">
-            <span>Preview</span><span>Asset</span><span>Category</span><span>Provenance</span><span>Rights</span><span className="sr-only">Actions</span>
+        <div className="min-w-[980px]">
+          <div className="grid grid-cols-[148px_170px_120px_180px_150px_130px] gap-3 border-b border-white/10 bg-white/[0.035] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-zinc-500">
+            <span>Preview</span><span>Asset</span><span>Category</span><span>Provenance</span><span>Rights</span><span>Profile</span>
           </div>
           {assets.length === 0 ? (
             <div className="flex min-h-36 items-center justify-center px-6 text-sm text-zinc-400">No retained assets yet.</div>
           ) : (
             assets.map((asset) => (
-              <div key={asset.id} className="grid grid-cols-[148px_170px_120px_180px_150px_52px] items-center gap-3 border-b border-white/[0.07] px-3 py-3 last:border-b-0 hover:bg-white/[0.025]">
-                <SecureArtifactThumbnail
-                  {...(asset.status === "rejected" ? { status: asset.status } : { artifactReference: asset.artifactReference, status: asset.status, previewOnly: true as const })}
-                  label={asset.name}
-                  previewClassName={asset.previewClassName}
-                />
+              <div key={asset.id} className={`grid grid-cols-[148px_170px_120px_180px_150px_130px] items-center gap-3 border-b border-white/[0.07] px-3 py-3 last:border-b-0 hover:bg-white/[0.025] ${asset.selected ? "" : "opacity-65"}`}>
+                {renderThumbnail(asset)}
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-zinc-100">{asset.name}</p>
                   <p className="mt-1 font-mono text-[10px] text-zinc-500">
@@ -74,14 +74,27 @@ export function AcquiredBrandAssetsCupboard({ assets, onAdd, onRemove }: Acquire
                 <span className="w-fit rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-zinc-300">{asset.category}</span>
                 <p className="text-xs leading-5 text-zinc-400">{asset.provenance}</p>
                 <p className="text-xs leading-5 text-zinc-400">{asset.rights}</p>
-                <button
-                  type="button"
-                  onClick={() => onRemove(asset.id)}
-                  aria-label={`Remove ${asset.name}`}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-full text-zinc-500 outline-none hover:bg-rose-400/10 hover:text-rose-300 focus-visible:ring-2 focus-visible:ring-rose-300"
-                >
-                  <Trash2 aria-hidden="true" className="h-4 w-4" />
-                </button>
+                <div className="space-y-1.5">
+                  {asset.selected ? (
+                    <button
+                      type="button"
+                      onClick={() => onRemove(asset.id)}
+                      className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-rose-400/20 px-2 text-[10px] font-semibold text-rose-200 outline-none hover:bg-rose-400/10 focus-visible:ring-2 focus-visible:ring-rose-300"
+                    >
+                      <Trash2 aria-hidden="true" className="h-3.5 w-3.5" /> Remove from profile
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onRestore?.(asset.id)}
+                      disabled={!onRestore}
+                      className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-emerald-400/20 px-2 text-[10px] font-semibold text-emerald-200 outline-none hover:bg-emerald-400/10 focus-visible:ring-2 focus-visible:ring-emerald-300 disabled:opacity-50"
+                    >
+                      <Undo2 aria-hidden="true" className="h-3.5 w-3.5" /> Add to profile
+                    </button>
+                  )}
+                  <p className="text-[9px] leading-4 text-zinc-500">Retained evidence is not deleted.</p>
+                </div>
               </div>
             ))
           )}

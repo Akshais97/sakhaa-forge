@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useReducer } from 'react';
+import { useState, useEffect, useMemo, useReducer, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Globe, Shield, CheckCircle2, AlertTriangle, Play, HelpCircle,
@@ -17,6 +17,9 @@ import {
   type UiCandidate
 } from '../candidate-adapter';
 import { createGeneratedWorkflowClient, makeIdempotencyKey } from '../../../../src/workflow/v0-actions';
+import { AcquiredBrandAssetsCupboard } from '../brand-assets/AcquiredBrandAssetsCupboard';
+import { SecureArtifactThumbnail } from '../brand-assets/SecureArtifactThumbnail';
+import type { ArtifactDownloadClient } from '../brand-assets/secure-artifact-media';
 
 interface BrandExtractionStudioProps {
   activeBrand: BrandData;
@@ -184,6 +187,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     authToken: '',
     source: 'pending'
   });
+  const continuingBrandIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!apiContext.workspaceId.trim() || !apiContext.authToken.trim()) return;
@@ -229,6 +233,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
       .then(response => {
         const retained = (response.body as any)?.assets;
         if (cancelled || response.status >= 400 || !Array.isArray(retained)) return;
+        setSelectedAssetIds(new Set(retained.map((asset: any) => asset.id)));
         setSetupForm(current => ({
           ...current,
           assets: retained.map((asset: any) => ({
@@ -280,6 +285,16 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
   // STEP 5 State: Asset Pack
   const [assetPack, setAssetPack] = useState<any[]>([]);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(() => new Set());
+  const artifactDownloadClient = useMemo<ArtifactDownloadClient>(() => ({
+    async createArtifactDownload(artifactId, input) {
+      const client = await createGeneratedWorkflowClient({
+        baseUrl: '/api/v0',
+        authToken: apiContext.authToken.trim()
+      });
+      return client.createArtifactDownload(artifactId, input);
+    }
+  }), [apiContext.authToken]);
 
   // STEP 6 State: Brand Profile Approval Form (fully pre-populated from approved candidates)
   const [approvalDraft, setApprovalDraft] = useState<ApprovalDraft>({
@@ -363,6 +378,10 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
   // Load Brand Onboarding Context on start / change
   useEffect(() => {
+    if (continuingBrandIdRef.current === activeBrand.id) {
+      continuingBrandIdRef.current = null;
+      return;
+    }
     setOnboardingForm({
       brandName: activeBrand.name || '',
       websiteUrl: activeBrand.url || '',
@@ -553,6 +572,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
           asset.id === localId ? { ...asset, artifactId, status: 'clean' } : asset
         )
       }));
+      setSelectedAssetIds(current => new Set(current).add(localId));
       setSelectedAssetFile(null);
       setAssetUploadInput({
         category: 'Logo',
@@ -635,6 +655,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
       const createdRunId = body?.crawlRun?.id;
       if (createdRunId) {
         if (body?.brand?.id) {
+          continuingBrandIdRef.current = body.brand.id;
           onPersistedBrands([{ id: body.brand.id, name: body.brand.name, websiteUrl: body.brand.websiteUrl }]);
         }
         if (shouldCompleteCrawlWithLocalDemo({
@@ -784,10 +805,25 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
       // Populate rules
       draft.rules.required_phrases = [activeBrand.guidelines[3] || 'Legacy of quiet luxury.'];
       draft.rules.prohibited_phrases = ['Cheap EMI', 'Flash Sale', 'Broker-free discount'];
+      draft.visual_identity.logos = setupForm.assets
+        .filter(asset => asset.status === 'clean' && asset.artifactId && selectedAssetIds.has(asset.id))
+        .map(asset => `artifact:${asset.artifactId}`);
 
       setApprovalDraft(draft);
     }
   }, [currentStep]);
+
+  const removeFromProfile = (assetId: string) => {
+    setSelectedAssetIds(current => {
+      const next = new Set(current);
+      next.delete(assetId);
+      return next;
+    });
+  };
+
+  const restoreToProfile = (assetId: string) => {
+    setSelectedAssetIds(current => new Set(current).add(assetId));
+  };
 
   // Submit final approval
   const handleApproveProfile = async () => {
@@ -1742,67 +1778,53 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                   </p>
                 </div>
 
-                {assetPack.length === 0 ? (
-                  <div className="py-16 text-center space-y-4 rounded-xl border border-dashed border-white/10 bg-zinc-950/20 max-w-lg mx-auto">
-                    <UploadCloud className="h-10 w-10 text-zinc-600 mx-auto" />
-                    <div className="space-y-1">
-                      <p className="font-mono text-sm text-zinc-400">No assets were extracted yet</p>
-                      <p className="text-xs text-zinc-500">
-                        {crawlRun?.crawlProvider && !crawlRun.crawlProvider.configured
-                          ? 'No crawl provider is configured. Attach direct uploads or configure a crawl provider to harvest brand visuals from the source site.'
-                          : 'Attach direct uploads or run a crawl to harvest brand visuals from the source site.'}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => setCurrentStep(2)}
-                      className="px-4 py-2 rounded bg-white/5 hover:bg-white/10 text-xs font-mono text-white border border-white/10"
-                    >
-                      Return to Crawl Setup
-                    </button>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    {assetPack.map((asset) => (
-                      <div
-                        key={asset.id}
-                        className="group bg-zinc-900/60 rounded-xl border border-white/5 overflow-hidden transition-all duration-300 hover:border-white/10 flex flex-col justify-between"
-                      >
-                        {/* Thumbnail / image placeholder */}
-                        <div className="relative h-28 bg-zinc-950 flex items-center justify-center overflow-hidden">
-                          <img
-                            src={asset.locator}
-                            alt={asset.name}
-                            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/60 backdrop-blur border border-white/10 text-[8px] font-mono text-zinc-400">
-                            {asset.category}
-                          </div>
-                        </div>
+                <p className="text-[10px] text-zinc-500">Remove from profile changes only the pending profile selection. Retained evidence is not deleted.</p>
+                {setupForm.assets.every(asset => asset.status !== 'clean') && (
+                  <p className="rounded-lg border border-dashed border-white/10 bg-zinc-950/20 p-3 text-xs text-zinc-500">
+                    No retained assets are available. Add a direct upload, or configure the crawl provider before harvesting source visuals.
+                  </p>
+                )}
+                <AcquiredBrandAssetsCupboard
+                  assets={setupForm.assets
+                    .filter(asset => asset.status === 'clean' && asset.artifactId)
+                    .map(asset => ({
+                      id: asset.id,
+                      artifactReference: `artifact:${asset.artifactId}` as `artifact:${string}`,
+                      name: asset.name,
+                      category: asset.category,
+                      provenance: crawlRunId ? `Crawl run ${crawlRunId}` : 'Client upload',
+                      rights: `${asset.rightsBasis} · ${asset.permittedUse}`,
+                      status: 'ready' as const,
+                      selected: selectedAssetIds.has(asset.id)
+                    }))}
+                  renderThumbnail={asset => asset.status === 'rejected' ? null : asset.selected ? (
+                    <SecureArtifactThumbnail
+                      artifactReference={asset.artifactReference}
+                      workspaceId={apiContext.workspaceId.trim()}
+                      client={artifactDownloadClient}
+                      label={asset.name}
+                      status="ready"
+                    />
+                  ) : (
+                    <SecureArtifactThumbnail label={asset.name} status="removed" />
+                  )}
+                  onAdd={() => setCurrentStep(2)}
+                  onRemove={removeFromProfile}
+                  onRestore={restoreToProfile}
+                />
 
-                        {/* Details */}
-                        <div className="p-3 space-y-1.5 text-left font-mono text-[9px] leading-tight border-t border-white/5">
-                          <p className="text-white font-sans font-medium truncate text-[10px]">{asset.name}</p>
-                          <p className="text-zinc-500">BASIS: <span className="text-zinc-300">{asset.rightsBasis}</span></p>
-                          <p className="text-zinc-500">USE: <span className="text-zinc-300">{asset.permittedUse}</span></p>
-                          
-                          <div className="pt-2 flex justify-between items-center text-[8px]">
-                            <span className="text-emerald-400 bg-emerald-500/5 px-1.5 py-0.5 rounded border border-emerald-500/10 uppercase font-semibold">
-                              CLEAN
-                            </span>
-                            <a
-                              href={asset.locator}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-zinc-500 hover:text-white flex items-center gap-1 font-mono"
-                            >
-                              Open <ExternalLink className="h-3 w-3" />
-                            </a>
-                          </div>
+                {assetPack.length > 0 && (
+                  <section aria-labelledby="source-asset-candidates" className="rounded-xl border border-white/5 bg-zinc-950/30 p-4">
+                    <h5 id="source-asset-candidates" className="text-xs font-mono uppercase tracking-wider text-zinc-400">Source candidates not retained</h5>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {assetPack.map(asset => (
+                        <div key={asset.id} className="rounded-lg border border-white/5 bg-white/[0.02] p-3 text-xs text-zinc-400">
+                          <p className="font-medium text-zinc-200">{asset.name}</p>
+                          <p className="mt-1">{asset.category} · Candidate evidence only</p>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  </section>
                 )}
 
                 <div className="flex justify-between pt-4">

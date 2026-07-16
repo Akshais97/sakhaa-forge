@@ -140,6 +140,24 @@ test("brand-extract approval uses canonical server truth and does not invent a c
   assert.match(studio, /body\.approval\.id/);
 });
 
+test("brand-extract live asset review uses the controlled secure cupboard", async () => {
+  const studio = await readFile("apps/web/app/brand-extract/_components/components/BrandExtractionStudio.tsx", "utf8");
+
+  assert.match(studio, /AcquiredBrandAssetsCupboard/);
+  assert.match(studio, /SecureArtifactThumbnail/);
+  assert.match(studio, /Remove from profile/);
+  assert.match(studio, /Retained evidence is not deleted/);
+  assert.doesNotMatch(studio, /src=\{asset\.locator\}/);
+  assert.doesNotMatch(studio, /href=\{asset\.locator\}/);
+});
+
+test("brand creation does not reset an in-flight crawl back to onboarding", async () => {
+  const studio = await readFile("apps/web/app/brand-extract/_components/components/BrandExtractionStudio.tsx", "utf8");
+
+  assert.match(studio, /continuingBrandIdRef/);
+  assert.match(studio, /continuingBrandIdRef\.current === activeBrand\.id/);
+});
+
 test("brand-extract studio is an explicit interactive client component", async () => {
   const studio = await readFile("apps/web/app/brand-extract/_components/components/BrandExtractionStudio.tsx", "utf8");
 

@@ -45,9 +45,26 @@ test("playwright drives brand-extract crawl setup end to end and captures screen
     );
     await page.screenshot({ path: path.join(screenshotDir, "04-playwright-step-3-succeeded.png"), fullPage: true });
 
+    await page.getByRole("button", { name: /Use Selected:/ }).click();
+    await page.getByTestId("review-dossier-button").waitFor({ state: "visible" });
     await page.getByTestId("review-dossier-button").click();
     await page.getByText("Extracted Candidate Dossier").waitFor({ timeout: 30000 });
     await page.screenshot({ path: path.join(screenshotDir, "05-playwright-step-4-dossier.png"), fullPage: true });
+
+    await page.getByRole("button", { name: /View Asset Pack/ }).click();
+    await page.getByRole("heading", { name: "Acquired brand assets" }).waitFor({ timeout: 30000 });
+    await page.setViewportSize({ width: 760, height: 1000 });
+    const cupboard = page.getByRole("region", { name: "Acquired brand assets cupboard" });
+    await cupboard.waitFor({ state: "visible" });
+    assert.equal(await cupboard.getByText("No retained assets yet.").isVisible(), true);
+    assert.equal(await page.getByText(/Retained evidence is not deleted\./).first().isVisible(), true);
+    assert.equal(await page.locator('img[src^="artifact:"]').count(), 0);
+    assert.equal(
+      await cupboard.evaluate((element) => element.scrollWidth > element.clientWidth),
+      true,
+      "the acquired-assets cupboard should overflow sideways at a narrow viewport"
+    );
+    await page.screenshot({ path: path.join(screenshotDir, "06-playwright-step-5-acquired-assets.png"), fullPage: true });
 
     assert.equal(
       consoleErrors.some((entry) => /Illegal invocation|Illegal execution|Failed to fetch on 'window'/i.test(entry)),
@@ -74,7 +91,7 @@ test("selenium opens brand-extract and verifies crawl setup is usable", async ()
 
     const screenshot = await driver.takeScreenshot();
     await import("node:fs/promises").then(({ writeFile }) =>
-      writeFile(path.join(screenshotDir, "06-selenium-step-2-crawl-setup.png"), screenshot, "base64")
+      writeFile(path.join(screenshotDir, "07-selenium-step-2-crawl-setup.png"), screenshot, "base64")
     );
 
     const crawlUrlValue = await driver.findElement(By.css('[data-testid="crawl-website-url-input"]')).getAttribute("value");

@@ -32,6 +32,10 @@ test("asset cupboard exposes truthful states and horizontal keyboard-safe access
   assert.match(cupboard, /aria-label/);
   assert.match(cupboard, /onAdd/);
   assert.match(cupboard, /onRemove/);
+  assert.match(cupboard, /renderThumbnail/);
+  assert.match(cupboard, /selected/);
+  assert.match(cupboard, /Remove from profile/);
+  assert.match(cupboard, /Retained evidence is not deleted/);
   assert.match(thumbnail, /loading|unavailable|rejected/);
   assert.match(thumbnail, /requestArtifactDownload/);
   assert.match(thumbnail, /src=\{signedUrl\}/);
