@@ -48,6 +48,13 @@ test("brand-extract local demo flow runs end to end with filled fields and extra
         );
         assert.equal(upload.status, 201, JSON.stringify(upload.body));
 
+        const retainedUpload = await fetch(new URL(upload.body.upload.url, baseUrl), {
+          method: upload.body.upload.method,
+          headers: upload.body.upload.headers,
+          body: assetBytes
+        });
+        assert.equal(retainedUpload.status, 200, await retainedUpload.text());
+
         const completedUpload = await postJson(
           `${baseUrl}/brands/assets/uploads/${upload.body.artifact.id}/complete`,
           {
@@ -108,6 +115,23 @@ test("brand-extract local demo flow runs end to end with filled fields and extra
         assert.ok(detail.body.candidates.some((candidate) => candidate.fieldType === "logo"));
         assert.ok(detail.body.candidates.some((candidate) => candidate.fieldType === "color"));
         assert.ok(detail.body.candidates.every((candidate) => candidate.sourceEvidence.length > 0));
+
+        const candidate = detail.body.candidates[0];
+        const decision = await postJson(
+          `${baseUrl}/brands/crawl-runs/${crawl.body.crawlRun.id}/candidates/${candidate.id}/status`,
+          { status: "approved" },
+          { authorization: `Bearer ${session.body.authToken}` }
+        );
+        assert.equal(decision.status, 200, JSON.stringify(decision.body));
+        assert.equal(decision.body.candidate.decision, "approve");
+
+        const staleDecision = await postJson(
+          `${baseUrl}/brands/crawl-runs/${crawl.body.crawlRun.id}/candidates/00000000-0000-4000-8000-000000000000/status`,
+          { status: "approved" },
+          { authorization: `Bearer ${session.body.authToken}` }
+        );
+        assert.equal(staleDecision.status, 404, JSON.stringify(staleDecision.body));
+        assert.equal(staleDecision.body.detail, "We could not find that item.");
 
         const assetPack = await getJson(`${baseUrl}/brands/crawl-runs/${crawl.body.crawlRun.id}/asset-pack`, {
           authorization: `Bearer ${session.body.authToken}`

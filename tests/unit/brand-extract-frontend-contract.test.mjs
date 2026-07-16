@@ -119,6 +119,17 @@ test("brand-extract generated client binds browser fetch before passing it to V0
   assert.match(actions, /fetchImpl:\s*boundFetchImpl/);
 });
 
+test("brand-extract candidate decisions remain pending until the generated client confirms them", async () => {
+  const studio = await readFile("apps/web/app/brand-extract/_components/components/BrandExtractionStudio.tsx", "utf8");
+
+  assert.match(studio, /client\.updateBrandCandidateDecision\(crawlRunId, candidateId, \{ status \}\)/);
+  assert.doesNotMatch(studio, /Optimistically update/);
+  assert.match(studio, /setCandidateMutation\(\{ candidateId, state: ['"]saving['"] \}\)/);
+  assert.match(studio, /['"]stale-session['"]/);
+  assert.match(studio, /This review session is no longer current\. Reload the crawl before changing decisions\./);
+  assert.match(studio, /startPollingCrawl\(crawlRunId\)/);
+});
+
 test("brand-extract studio is an explicit interactive client component", async () => {
   const studio = await readFile("apps/web/app/brand-extract/_components/components/BrandExtractionStudio.tsx", "utf8");
 

@@ -1,5 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto';
-import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server.js';
 
 export const runtime = 'nodejs';
 

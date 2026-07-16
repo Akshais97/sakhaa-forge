@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useReducer } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Globe, Shield, CheckCircle2, AlertTriangle, Play, HelpCircle,
@@ -119,6 +119,11 @@ type UploadedBrandAsset = {
   permittedUse: string;
   status: 'uploading' | 'clean' | 'failed';
   error?: string;
+};
+
+type CandidateMutation = {
+  candidateId: string;
+  state: 'saving' | 'saved' | 'failed' | 'stale-session';
 };
 
 function normalizeUrlInput(value: string): string {
@@ -264,6 +269,13 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
   const [activeCandidateSection, setActiveCandidateSection] = useState<string>('identity');
   const [selectedCandidateForEvidence, setSelectedCandidateForEvidence] = useState<any | null>(null);
   const [expandedEvidenceIds, setExpandedEvidenceIds] = useState<Record<string, boolean>>({});
+  const [candidateMutations, setCandidateMutation] = useReducer(
+    (current: Record<string, CandidateMutation>, mutation: CandidateMutation) => ({
+      ...current,
+      [mutation.candidateId]: mutation
+    }),
+    {}
+  );
 
   // STEP 5 State: Asset Pack
   const [assetPack, setAssetPack] = useState<any[]>([]);
@@ -716,54 +728,43 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     }, 1000);
   };
 
-  // Approve/Reject candidates
-  const handleUpdateCandidateStatus = async (candidateId: string, status: 'approved' | 'rejected') => {
-    // Optimistically update
-    setCandidates(prev => prev.map(c => c.id === candidateId ? { ...c, status } : c));
-    
-    if (crawlRunId) {
-      try {
-        const response = await fetch(`/api/v0/brands/crawl-runs/${crawlRunId}/candidates/${candidateId}/status`, {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiContext.authToken.trim()}`
-          },
-          body: JSON.stringify({ status })
-        });
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({}));
-          console.error('Failed to update candidate status on server:', body.detail || response.statusText);
-        }
-      } catch (err) {
-        console.error('Failed to update candidate status:', err);
+  // Candidate decisions remain pending until the authenticated domain API confirms them.
+  const persistCandidateDecision = async (candidateId: string, status: 'approved' | 'rejected') => {
+    if (!crawlRunId) return false;
+    setCandidateMutation({ candidateId, state: 'saving' });
+
+    try {
+      const client = await createGeneratedWorkflowClient({
+        baseUrl: '/api/v0',
+        authToken: apiContext.authToken.trim()
+      });
+      const response = await client.updateBrandCandidateDecision(crawlRunId, candidateId, { status });
+      if (response.status === 200) {
+        setCandidates(current => current.map(candidate => candidate.id === candidateId ? { ...candidate, status } : candidate));
+        setCandidateMutation({ candidateId, state: 'saved' });
+        return true;
       }
+
+      setCandidateMutation({
+        candidateId,
+        state: response.status === 404 ? 'stale-session' : 'failed'
+      });
+    } catch {
+      setCandidateMutation({ candidateId, state: 'failed' });
     }
+    return false;
+  };
+
+  const handleUpdateCandidateStatus = async (candidateId: string, status: 'approved' | 'rejected') => {
+    await persistCandidateDecision(candidateId, status);
   };
 
   const handleApproveAllSection = async (section: string) => {
     const sectionCandidates = candidates.filter(c => c.section === section && c.status !== 'approved');
     if (sectionCandidates.length === 0) return;
 
-    // Optimistically update all in frontend
-    setCandidates(prev => prev.map(c => c.section === section ? { ...c, status: 'approved' } : c));
-
-    // Send status updates to backend for each
-    if (crawlRunId) {
-      for (const cand of sectionCandidates) {
-        try {
-          await fetch(`/api/v0/brands/crawl-runs/${crawlRunId}/candidates/${cand.id}/status`, {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiContext.authToken.trim()}`
-            },
-            body: JSON.stringify({ status: 'approved' })
-          });
-        } catch (err) {
-          console.error(`Failed to approve candidate ${cand.id}:`, err);
-        }
-      }
+    for (const candidate of sectionCandidates) {
+      await persistCandidateDecision(candidate.id, 'approved');
     }
   };
 
@@ -1551,6 +1552,8 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                             const isRejected = cand.status === 'rejected';
                             const isConflict = cand.status === 'conflict';
                             const isExpanded = expandedEvidenceIds[cand.id];
+                            const mutation = candidateMutations[cand.id];
+                            const isSaving = mutation?.state === 'saving';
 
                             return (
                               <div
@@ -1579,6 +1582,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                                   <div className="flex gap-1.5 font-mono text-[9px]">
                                     <button
                                       onClick={() => handleUpdateCandidateStatus(cand.id, 'rejected')}
+                                      disabled={isSaving}
                                       className={`px-2 py-1 rounded transition-colors ${
                                         isRejected ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-transparent'
                                       }`}
@@ -1587,6 +1591,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                                     </button>
                                     <button
                                       onClick={() => handleUpdateCandidateStatus(cand.id, 'approved')}
+                                      disabled={isSaving}
                                       className={`px-2 py-1 rounded transition-colors flex items-center gap-1 ${
                                         isApproved ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-transparent'
                                       }`}
@@ -1595,6 +1600,25 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                                     </button>
                                   </div>
                                 </div>
+
+                                {mutation?.state === 'saving' && (
+                                  <p role="status" className="text-[10px] text-zinc-400">Saving decision…</p>
+                                )}
+                                {mutation?.state === 'failed' && (
+                                  <p role="alert" className="text-[10px] text-amber-300">The decision could not be saved. Try again.</p>
+                                )}
+                                {mutation?.state === 'stale-session' && (
+                                  <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-2 text-[10px] text-amber-200">
+                                    <span>This review session is no longer current. Reload the crawl before changing decisions.</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => crawlRunId && startPollingCrawl(crawlRunId)}
+                                      className="rounded border border-amber-400/30 px-2 py-1 font-mono uppercase text-amber-200 hover:bg-amber-400/10"
+                                    >
+                                      Reload crawl
+                                    </button>
+                                  </div>
+                                )}
 
                                 <div className="text-left font-sans">
                                   {cand.fieldType === 'visual_identity' && typeof cand.value === 'object' && cand.value !== null && (cand.value as any).colors ? (
