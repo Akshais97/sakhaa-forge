@@ -15,7 +15,7 @@ Create one in-app review route composed only of source components intended for l
 
 ### `LiquidEtherBackground`
 
-An adapted ReactBits Liquid Ether visual layer, loaded only in the browser. It is decorative, `aria-hidden`, non-blocking, and never owns content or workflow state. It uses a static gradient when reduced motion is requested or WebGL is unavailable. The full effect is suspended when off-screen.
+A source-faithful ReactBits Liquid Ether fluid solver, loaded only in the browser through a small project wrapper. The wrapper uses the approved `#5227FF`, `#FF9FFC`, and `#B497CF` palette with `mouseForce={20}`, `cursorSize={100}`, viscous and Poisson iterations of `32`, `resolution={0.5}`, and the approved auto-demo timing. It is decorative, `aria-hidden`, non-blocking, and never owns content or workflow state. Reduced motion or WebGL initialization failure selects a restrained static gradient instead. The solver retains its upstream off-screen and document-visibility suspension.
 
 ### `BrandIntakeStepDeck`
 

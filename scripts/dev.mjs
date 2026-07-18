@@ -24,7 +24,7 @@ try {
 }
 
 const services = [
-  ["api", "node", ["apps/api/src/server.mjs"], { PORT: "3001" }],
+  ["api", "node", ["apps/api/src/server.mjs"], { PORT: localEnv.PORT || "3001" }],
   ["web", "pnpm", ["--filter", "@sakhaa-forge/web", "dev"], { PORT: process.env.PORT_WEB || "3005" }],
   ["queue", "node", ["workers/queue/src/processor.mjs"], {}]
 ];

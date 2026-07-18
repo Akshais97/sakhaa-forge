@@ -123,7 +123,13 @@ compatible signed URL.
 `GET /workspaces/{workspace_id}/brands` returns at most 100 active recognizable brands for
 the authorised workspace. `GET /brands/{brand_id}/assets` returns at most 200 active clean
 asset references for that brand. Both routes enforce tenant isolation and return no object
-keys, provider payloads or storage credentials.
+keys, provider payloads or storage credentials. Browser clients treat returned
+`artifact:{artifact_id}` locators as opaque references. To render a clean private asset,
+the generated client calls `POST /artifacts/{artifact_id}/downloads` with the workspace
+context and assigns only the returned short-lived URL to media `src` or download `href`.
+The media component may request one fresh URL after an expired or failed retrieval; a
+second failure ends in an unavailable state rather than exposing the opaque locator.
+Cross-workspace, missing and non-clean artifacts retain the tenant-hiding 404 response.
 
 `GET /brands/crawl-runs/{crawl_run_id}` is the refresh-safe detail read used by
 `/app/branding?crawlRunId=<uuid>` and workspace crawl-run detail pages. It returns the
@@ -144,6 +150,9 @@ it does not approve brand truth and does not expose raw provider payloads.
 `approved` or `rejected` review decision for the authenticated crawl-run tuple. A `404`
 intentionally covers both a missing tuple and a tuple hidden by workspace isolation; the
 response must not reveal whether the candidate exists in another workspace or crawl run.
+The browser does not update the visible candidate decision before a successful generated
+client response. A tenant-hidden 404 leaves the prior state intact and asks the actor to
+reload the current crawl session.
 
 `GET /users/me/profile`, `PATCH /users/me/profile`, `GET /onboarding/brand-context` and
 `POST /onboarding/brand-context` are V0 branding-context helpers for optional onboarding
@@ -171,7 +180,10 @@ fields, rights attestation and required/prohibited rules. Owner, Admin and Clien
 may approve. Approval creates immutable `BrandProfile`, `BrandApproval`, `BrandRule` and
 `AuditEvent` rows in one tenant-scoped operation, superseding any prior active profile.
 Stale optimistic versions return `RESOURCE_VERSION_STALE`, which prevents concurrent
-approvals from creating two active profiles.
+approvals from creating two active profiles. The browser submits this operation through
+the generated authenticated client and shows approved state only after the canonical 201
+response supplies the retained profile, approval, rules and audit records. It does not
+invent an approval hash or infer approval from an in-flight request.
 
 `POST /generation-estimates` is the first downstream production guard for B3. It accepts
 only the active approved brand-profile version for the workspace. Draft, rejected,

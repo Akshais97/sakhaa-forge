@@ -18,6 +18,8 @@ import {
 } from '../candidate-adapter';
 import { createGeneratedWorkflowClient, makeIdempotencyKey } from '../../../../src/workflow/v0-actions';
 import { AcquiredBrandAssetsCupboard } from '../brand-assets/AcquiredBrandAssetsCupboard';
+import { LiquidEtherBackground } from '../brand-assets/LiquidEtherBackground';
+import { MagneticNextCue } from '../brand-assets/MagneticNextCue';
 import { SecureArtifactThumbnail } from '../brand-assets/SecureArtifactThumbnail';
 import type { ArtifactDownloadClient } from '../brand-assets/secure-artifact-media';
 
@@ -919,8 +921,19 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     }));
   };
 
+  const canAdvanceWithNextCue = currentStep === 3
+    ? crawlRun?.status === 'ready' && verticalConflictResolved
+    : currentStep === 4 || currentStep === 5;
+
+  const handleNextCue = () => {
+    if (!canAdvanceWithNextCue) return;
+    setCurrentStep(current => Math.min(6, current + 1));
+  };
+
   return (
-    <div className="w-full max-w-7xl mx-auto px-6 py-6 lg:py-8 flex flex-col space-y-6" id="brand-extraction-studio-core">
+    <div className="relative min-h-dvh overflow-hidden bg-[#050507]">
+      <LiquidEtherBackground />
+      <div className="relative z-10 w-full max-w-7xl mx-auto px-6 py-6 lg:py-8 flex flex-col space-y-6" id="brand-extraction-studio-core">
       
       {/* Dynamic Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-white/5 pb-4 gap-4">
@@ -2341,6 +2354,14 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
       </div>
 
+      <div className="sticky bottom-4 z-20 flex justify-end">
+        <MagneticNextCue
+          disabled={!canAdvanceWithNextCue}
+          onClick={handleNextCue}
+        />
+      </div>
+
+      </div>
     </div>
   );
 }

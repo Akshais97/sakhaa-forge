@@ -12,7 +12,10 @@ const crawlUrl = "https://chleartech.in/test/suryadevlopers/v3m/";
 test("playwright drives brand-extract crawl setup end to end and captures screenshots", async () => {
   await mkdir(screenshotDir, { recursive: true });
   const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 1100 },
+    reducedMotion: "reduce"
+  });
   const consoleErrors = [];
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
@@ -71,6 +74,14 @@ test("playwright drives brand-extract crawl setup end to end and captures screen
       false,
       consoleErrors.join("\n")
     );
+    const motionState = await page.evaluate(() => ({
+      prefersReducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      fallback: document.querySelector("[data-static-fallback]")?.getAttribute("data-static-fallback") ?? null
+    }));
+    assert.equal(motionState.prefersReducedMotion, true, JSON.stringify(motionState));
+    assert.equal(motionState.fallback, "true", JSON.stringify(motionState));
+    assert.equal(await page.getByRole("button", { name: "Next step" }).count(), 1);
+    assert.equal(await page.locator("canvas").count(), 0);
   } finally {
     await browser.close();
   }

@@ -8293,55 +8293,50 @@ export function createPrismaWorkspaceStore(env = process.env, dependencies = {})
   }
 
   async function listBrandCandidates(actor, crawlRunId) {
-    return withActor(actor, async (tx) => {
-      const crawlRun = await tx.brandCrawlRun.findFirst({ where: { id: crawlRunId } });
-      if (!crawlRun) {
+    const accessibleWorkspaces = await listWorkspaces(actor);
+    for (const workspace of accessibleWorkspaces) {
+      const detail = await withActor(actor, async (tx) => {
+        const crawlRun = await tx.brandCrawlRun.findFirst({ where: { id: crawlRunId, workspaceId: workspace.id } });
+        if (!crawlRun) return null;
+        const candidates = await tx.brandCandidate.findMany({
+          where: { workspaceId: workspace.id, crawlRunId },
+          orderBy: { createdAt: "asc" }
+        });
         return {
-          ok: false,
-          problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          ok: true,
+          response: {
+            crawlRun: publicBrandCrawlRun(crawlRun),
+            candidates: candidates.map(publicBrandCandidate)
+          }
         };
-      }
-      const candidates = await tx.brandCandidate.findMany({
-        where: { workspaceId: crawlRun.workspaceId, crawlRunId },
-        orderBy: { createdAt: "asc" }
-      });
-      return {
-        ok: true,
-        response: {
-          crawlRun: publicBrandCrawlRun(crawlRun),
-          candidates: candidates.map(publicBrandCandidate)
-        }
-      };
-    });
+      }, workspace.id);
+      if (detail) return detail;
+    }
+    return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
   }
 
   async function updateBrandCandidateDecision(actor, crawlRunId, candidateId, decision) {
-    return withActor(actor, async (tx) => {
-      const crawlRun = await tx.brandCrawlRun.findFirst({ where: { id: crawlRunId } });
-      if (!crawlRun) {
+    const accessibleWorkspaces = await listWorkspaces(actor);
+    for (const workspace of accessibleWorkspaces) {
+      const detail = await withActor(actor, async (tx) => {
+        const crawlRun = await tx.brandCrawlRun.findFirst({ where: { id: crawlRunId, workspaceId: workspace.id } });
+        if (!crawlRun) return null;
+        const candidate = await tx.brandCandidate.findFirst({
+          where: { id: candidateId, crawlRunId, workspaceId: workspace.id }
+        });
+        if (!candidate) return null;
+        const updated = await tx.brandCandidate.update({
+          where: { id: candidateId },
+          data: { decision }
+        });
         return {
-          ok: false,
-          problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          ok: true,
+          response: { success: true, candidate: publicBrandCandidate(updated) }
         };
-      }
-      const candidate = await tx.brandCandidate.findFirst({
-        where: { id: candidateId, crawlRunId, workspaceId: crawlRun.workspaceId }
-      });
-      if (!candidate) {
-        return {
-          ok: false,
-          problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
-        };
-      }
-      const updated = await tx.brandCandidate.update({
-        where: { id: candidateId },
-        data: { decision }
-      });
-      return {
-        ok: true,
-        response: { success: true, candidate: publicBrandCandidate(updated) }
-      };
-    });
+      }, workspace.id);
+      if (detail) return detail;
+    }
+    return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
   }
 
   async function approveBrandProfile(actor, brandId, input) {

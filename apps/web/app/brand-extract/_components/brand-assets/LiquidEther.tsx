@@ -62,6 +62,19 @@ export default function LiquidEther({
   const isVisibleRef = useRef(true);
   const resizeRafRef = useRef(null);
 
+  // Stabilize callbacks to prevent unnecessary WebGL reconstruction
+  const onWebGLFailureRef = useRef(onWebGLFailure);
+  useEffect(() => {
+    onWebGLFailureRef.current = onWebGLFailure;
+  }, [onWebGLFailure]);
+
+  // Stabilize colors array reference to prevent unnecessary WebGL reconstruction
+  const colorsRef = useRef(colors);
+  if (JSON.stringify(colorsRef.current) !== JSON.stringify(colors)) {
+    colorsRef.current = colors;
+  }
+  const stableColors = colorsRef.current;
+
   useEffect(() => {
     if (!mountRef.current) return;
 
@@ -95,7 +108,7 @@ export default function LiquidEther({
       return tex;
     }
 
-    const paletteTex = makePaletteTexture(colors);
+    const paletteTex = makePaletteTexture(stableColors);
     const bgVec4 = new THREE.Vector4(0, 0, 0, 0); // always transparent
 
     class CommonClass {
@@ -1051,7 +1064,7 @@ export default function LiquidEther({
         autoRampDuration
       });
     } catch {
-      onWebGLFailure();
+      onWebGLFailureRef.current();
       paletteTex.dispose();
       return;
     }
@@ -1143,14 +1156,13 @@ export default function LiquidEther({
     mouseForce,
     resolution,
     viscous,
-    colors,
+    stableColors,
     autoDemo,
     autoSpeed,
     autoIntensity,
     takeoverDuration,
     autoResumeDelay,
-    autoRampDuration,
-    onWebGLFailure
+    autoRampDuration
   ]);
 
   useEffect(() => {

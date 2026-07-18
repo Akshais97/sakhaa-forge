@@ -1,7 +1,7 @@
 "use client";
 
 import { useReducedMotion } from "motion/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import LiquidEther from "./LiquidEther";
 
 export type LiquidEtherBackgroundProps = {
@@ -11,8 +11,20 @@ export type LiquidEtherBackgroundProps = {
 
 export function LiquidEtherBackground({ className = "", staticFallback = false }: LiquidEtherBackgroundProps) {
   const reduceMotion = useReducedMotion();
+  const [mounted, setMounted] = useState(false);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [webglFailed, setWebglFailed] = useState(false);
-  const shouldUseFallback = staticFallback || Boolean(reduceMotion) || webglFailed;
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updatePreference = () => setPrefersReducedMotion(media.matches);
+    updatePreference();
+    setMounted(true);
+    media.addEventListener("change", updatePreference);
+    return () => media.removeEventListener("change", updatePreference);
+  }, []);
+
+  const shouldUseFallback = !mounted || staticFallback || Boolean(reduceMotion) || prefersReducedMotion || webglFailed;
 
   return (
     <div
