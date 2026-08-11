@@ -79,6 +79,20 @@ Provider payloads, secrets, internal paths and protected resource existence are 
 | `BLUEPRINT_FORMULA_INVALID` | 422 | The blueprint formula is incomplete or inconsistent. | No | Prompt/schema review | error |
 | `BLUEPRINT_INCOMPATIBLE` | 409 | This blueprint is not compatible with the selected brand or objective. | No | None | info |
 
+Brand review UI maps existing errors without exposing protected existence:
+
+- `AUTH_REQUIRED` and `AUTH_TOKEN_INVALID`: keep the pending decision unchanged and ask
+  the actor to sign in again.
+- tenant-hidden `WORKSPACE_ACCESS_DENIED` 404 from candidate or artifact routes: show that
+  the current review session is no longer current and offer a reload; do not say whether
+  the candidate or artifact exists elsewhere.
+- `RESOURCE_VERSION_STALE`: keep approval unsubmitted and ask the actor to review the
+  latest profile version.
+- validation failures including required brand fields: keep approval unsubmitted and
+  highlight the fields that need correction.
+- expired or failed short-lived asset retrieval: request one fresh download URL, then show
+  the media as unavailable if retrieval fails again. Never render `artifact:{id}` as a URL.
+
 ## 6. AI and Script Errors
 
 | Code | HTTP | User message | Retry | Admin action | Log |

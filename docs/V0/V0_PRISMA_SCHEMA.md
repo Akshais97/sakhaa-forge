@@ -50,7 +50,7 @@ Identity:
   User, UserProfile, Workspace, Membership, ServiceCredential, WorkspaceCapability
 
 Brand:
-  BrandContext, BrandProfile, BrandCrawlRun, BrandCandidate, BrandAsset, BrandApproval, BrandRule
+  BrandContext, Brand, BrandProfile, BrandCrawlRun, BrandCandidate, BrandAsset, BrandApproval, BrandRule
 
 Discovery/Blueprint:
   ViralCandidate, MetricSnapshot, MediaAcquisition, ThumbnailBlueprint,

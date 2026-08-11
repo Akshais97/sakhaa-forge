@@ -2,6 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { withApiServer } from "../helpers/server.mjs";
 
+const durableRuntimeEnv = {
+  V0_RUNTIME_DB: "prisma",
+  DATABASE_URL: "postgresql://runtime:runtime@127.0.0.1:1/swagger_contract",
+  OBJECT_STORAGE_PROVIDER: "b2",
+  OBJECT_STORAGE_ENDPOINT: "https://s3.us-west-004.backblazeb2.com",
+  OBJECT_STORAGE_REGION: "us-west-004",
+  OBJECT_STORAGE_KEY_ID: "swagger-test-key-id",
+  OBJECT_STORAGE_APPLICATION_KEY: "swagger-test-application-key",
+  B2_BUCKET_QUARANTINE: "swagger-test-quarantine",
+  B2_BUCKET_CLEAN_MEDIA: "swagger-test-clean",
+  B2_BUCKET_PRIVATE_ARTIFACTS: "swagger-test-artifacts"
+};
+
 test("Swagger is enabled and accessible locally", async () => {
   await withApiServer(
     {
@@ -73,6 +86,7 @@ test("Swagger is protected by Basic Auth in non-local environments (staging)", a
 
   await withApiServer(
     {
+      ...durableRuntimeEnv,
       APP_ENV: "staging",
       SWAGGER_ENABLED: "true",
       SWAGGER_USER: username,
@@ -122,6 +136,7 @@ test("Swagger is protected by Basic Auth in non-local environments (staging)", a
 test("Swagger is blocked in non-local environments when SWAGGER_PASSWORD is not set", async () => {
   await withApiServer(
     {
+      ...durableRuntimeEnv,
       APP_ENV: "staging",
       SWAGGER_ENABLED: "true",
       SWAGGER_USER: "user-only",
@@ -141,6 +156,7 @@ test("Swagger is blocked in non-local environments when SWAGGER_PASSWORD is not 
 test("Swagger defaults to disabled in production", async () => {
   await withApiServer(
     {
+      ...durableRuntimeEnv,
       APP_ENV: "production",
       V0_INTERNAL_WORKER_TOKEN: "test-token"
     },

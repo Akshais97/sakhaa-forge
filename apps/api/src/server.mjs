@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { validateFirecrawlConfiguration } from "./firecrawl-provider.mjs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Controller, Get, HttpCode, HttpException, Module, Param, Patch, Post, Query, Req } from "@nestjs/common";
+import { Controller, Get, HttpCode, HttpException, Module, Param, Patch, Post, Put, Query, Req } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { FastifyAdapter } from "@nestjs/platform-fastify";
 import { authenticateRequest } from "./auth.mjs";
@@ -26,9 +26,15 @@ export async function createApiServer(env = process.env, dependencies = {}) {
     throw new Error(firecrawlConfiguration.problem.detail);
   }
   const { AppModule, store } = createAppModule(env, dependencies);
+  const adapter = new FastifyAdapter({ logger: false });
+  adapter.getInstance().addContentTypeParser(
+    /^(?:image\/|video\/|application\/)/,
+    { parseAs: "buffer", bodyLimit: Number.parseInt(env.MAX_UPLOAD_BYTES || "104857600", 10) },
+    (_request, body, done) => done(null, body)
+  );
   const app = await NestFactory.create(
     AppModule,
-    new FastifyAdapter({ logger: false }),
+    adapter,
     { logger: false }
   );
 
@@ -84,7 +90,7 @@ export function getTestStore(app) {
 }
 
 function createAppModule(env, dependencies = {}) {
-  const store = createStore(env);
+  const store = createStore(env, dependencies);
   const RootController = createF0Controller(env, store, "", dependencies);
   const V0Controller = createF0Controller(env, store, "api/v0", dependencies);
 
@@ -298,6 +304,14 @@ function createF0Controller(env, store, prefix, dependencies = {}) {
       return result.response;
     }
 
+    async putBrandAssetUpload(request, artifactId) {
+      const token = request.query?.token;
+      const contentType = String(request.headers?.["content-type"] ?? "").split(";", 1)[0].trim().toLowerCase();
+      const result = await store.putArtifactUpload(token, artifactId, request.body, contentType);
+      if (!result.ok) throw new HttpException(result.problem, result.problem.status);
+      return result.response;
+    }
+
     async createArtifactDownload(request, artifactId) {
       const auth = authenticateRequest(request.headers, env);
       if (!auth.ok) {
@@ -356,6 +370,22 @@ function createF0Controller(env, store, prefix, dependencies = {}) {
       if (!result.ok) {
         throw new HttpException(result.problem, result.problem.status);
       }
+      return result.response;
+    }
+
+    async listBrands(request, workspaceId) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) throw new HttpException(auth.problem, auth.problem.status);
+      const result = await store.listBrands(auth.actor, workspaceId);
+      if (!result.ok) throw new HttpException(result.problem, result.problem.status);
+      return result.response;
+    }
+
+    async listBrandAssets(request, brandId) {
+      const auth = authenticateRequest(request.headers, env);
+      if (!auth.ok) throw new HttpException(auth.problem, auth.problem.status);
+      const result = await store.listBrandAssets(auth.actor, brandId);
+      if (!result.ok) throw new HttpException(result.problem, result.problem.status);
       return result.response;
     }
 
@@ -1985,9 +2015,12 @@ function createF0Controller(env, store, prefix, dependencies = {}) {
   route("workspaces/:workspaceId", F0Controller, "getWorkspace", [Req(), Param("workspaceId")]);
   postRoute("workspaces/:workspaceId/capabilities", F0Controller, "setWorkspaceCapability", [Req(), Param("workspaceId")], 200);
   postRoute("brands/assets/uploads", F0Controller, "initiateBrandAssetUpload", [Req()]);
+  putRoute("brands/assets/uploads/:artifactId/content", F0Controller, "putBrandAssetUpload", [Req(), Param("artifactId")], 200);
   postRoute("brands/assets/uploads/:artifactId/complete", F0Controller, "completeBrandAssetUpload", [Req(), Param("artifactId")], 200);
   postRoute("artifacts/:artifactId/downloads", F0Controller, "createArtifactDownload", [Req(), Param("artifactId")], 200);
   postRoute("brands/crawl-runs", F0Controller, "createBrandCrawlRun", [Req()], 202);
+  route("workspaces/:workspaceId/brands", F0Controller, "listBrands", [Req(), Param("workspaceId")]);
+  route("brands/:brandId/assets", F0Controller, "listBrandAssets", [Req(), Param("brandId")]);
   route("brands/crawl-runs/:crawlRunId", F0Controller, "getBrandCrawlRun", [Req(), Param("crawlRunId")], 200);
   route("brands/crawl-runs/:crawlRunId/asset-pack", F0Controller, "getBrandAssetPack", [Req(), Param("crawlRunId")], 200);
   route("brands/crawl-runs/:crawlRunId/candidates", F0Controller, "listBrandCandidates", [Req(), Param("crawlRunId")], 200);
@@ -2249,6 +2282,12 @@ function patchRoute(path, target, methodName, params = [], statusCode = null) {
     methodName,
     Object.getOwnPropertyDescriptor(target.prototype, methodName)
   );
+}
+
+function putRoute(path, target, methodName, params = [], statusCode = null) {
+  for (let index = 0; index < params.length; index += 1) params[index](target.prototype, methodName, index);
+  if (statusCode !== null) HttpCode(statusCode)(target.prototype, methodName, Object.getOwnPropertyDescriptor(target.prototype, methodName));
+  Put(path)(target.prototype, methodName, Object.getOwnPropertyDescriptor(target.prototype, methodName));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {

@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { PrismaClient } from "../../../packages/db/generated/client/index.js";
+import { createObjectStorage } from "../../../packages/config/src/storage.mjs";
 import { canPerform } from "./permissions.mjs";
 import {
   aeCapabilityRegistry,
@@ -132,20 +133,25 @@ function isPrismaConflictError(error) {
   );
 }
 
-export function createStore(env = process.env) {
+export function createStore(env = process.env, dependencies = {}) {
   if (env.V0_RUNTIME_DB === "prisma") {
-    return createPrismaWorkspaceStore(env);
+    return createPrismaWorkspaceStore(env, dependencies);
   }
-  return createWorkspaceStore(env);
+  if (!["test", "development", "local"].includes(String(env.APP_ENV ?? "development").toLowerCase())) {
+    throw new Error("V0_RUNTIME_DB=prisma is required outside local and test environments");
+  }
+  return createWorkspaceStore(env, dependencies);
 }
 
-export function createWorkspaceStore(env = process.env) {
+export function createWorkspaceStore(env = process.env, dependencies = {}) {
+  const objectStorage = dependencies.objectStorage ?? createObjectStorage(env);
   const users = new Map();
   const workspaces = new Map();
   const memberships = new Map();
   const audits = [];
   const idempotencyRecords = new Map();
   const artifacts = new Map();
+  const brands = new Map();
   const brandCrawlRuns = new Map();
   const brandAssets = new Map();
   const brandCandidates = new Map();
@@ -339,7 +345,7 @@ export function createWorkspaceStore(env = process.env) {
     };
   }
 
-  function initiateArtifactUpload(actor, input) {
+  async function initiateArtifactUpload(actor, input) {
     if (!getWorkspaceForActor(actor, input.workspaceId)) {
       return {
         ok: false,
@@ -349,6 +355,10 @@ export function createWorkspaceStore(env = process.env) {
     const validation = validateUploadInput(input);
     if (validation) {
       return { ok: false, problem: validation };
+    }
+    const targetBrand = input.brandId ? brands.get(input.brandId) : null;
+    if (input.brandId && (!targetBrand || targetBrand.workspaceId !== input.workspaceId || targetBrand.status !== "ACTIVE")) {
+      return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
     }
 
     const now = new Date().toISOString();
@@ -368,7 +378,20 @@ export function createWorkspaceStore(env = process.env) {
       updatedAt: now
     };
     const upload = signedContract("PUT", artifact.id);
+    upload.url = objectStorage.provider === "b2"
+      ? await objectStorage.createSignedUploadUrl({ area: "quarantine", key: artifact.objectKey, contentType: artifact.contentType })
+      : `/api/v0/brands/assets/uploads/${artifact.id}/content?token=${encodeURIComponent(upload.token)}`;
+    upload.headers = { "content-type": artifact.contentType };
     artifacts.set(artifact.id, artifact);
+    let brandAsset = null;
+    if (targetBrand) {
+      brandAsset = {
+        id: randomUUID(), workspaceId: input.workspaceId, brandId: targetBrand.id, crawlRunId: null,
+        artifactId: artifact.id, rightsBasis: input.rightsBasis.trim(), permittedUse: input.permittedUse.trim(),
+        status: "ACTIVE", createdAt: now, updatedAt: now
+      };
+      brandAssets.set(brandAsset.id, brandAsset);
+    }
     uploadTokens.set(upload.token, {
       artifactId: artifact.id,
       workspaceId: artifact.workspaceId,
@@ -388,12 +411,26 @@ export function createWorkspaceStore(env = process.env) {
       ok: true,
       response: {
         artifact: publicArtifact(artifact),
+        brandAsset: brandAsset ? publicBrandAsset(brandAsset, artifact) : null,
         upload
       }
     };
   }
 
-  function completeArtifactUpload(actor, artifactId, input) {
+  async function putArtifactUpload(token, artifactId, body, contentType) {
+    const grant = uploadTokens.get(token);
+    const artifact = artifacts.get(artifactId);
+    if (!grant || grant.artifactId !== artifactId || !artifact || artifact.status !== "QUARANTINED" || Date.parse(grant.expiresAt) <= Date.now()) {
+      return { ok: false, problem: problem("UPLOAD_URL_EXPIRED", 403, "Upload URL expired", "Request a new upload URL and try again.") };
+    }
+    if (!Buffer.isBuffer(body) || body.length === 0 || body.length > artifact.byteSize || contentType !== artifact.contentType) {
+      return { ok: false, problem: problem("VALIDATION_FAILED", 422, "Validation failed", "The uploaded file did not match the initiated upload.") };
+    }
+    await objectStorage.putObject({ area: "quarantine", key: artifact.objectKey, body, contentType, sha256: artifact.sha256 });
+    return { ok: true, response: { uploaded: true } };
+  }
+
+  async function completeArtifactUpload(actor, artifactId, input) {
     const artifact = artifacts.get(artifactId);
     if (!artifact || !getWorkspaceForActor(actor, artifact.workspaceId) || input.workspaceId !== artifact.workspaceId) {
       return {
@@ -404,8 +441,21 @@ export function createWorkspaceStore(env = process.env) {
     if (!isSha256(input.sha256) || !Number.isInteger(input.byteSize) || input.byteSize <= 0) {
       return { ok: false, problem: problem("VALIDATION_FAILED", 422, "Validation failed", "Check the highlighted fields.") };
     }
+    if (artifact.status === "CLEAN") {
+      if (input.sha256.toLowerCase() === artifact.sha256 && input.byteSize === artifact.byteSize) {
+        return { ok: true, response: { artifact: publicArtifact(artifact) } };
+      }
+      return { ok: false, problem: { ...problem("ARTIFACT_HASH_MISMATCH", 409, "Artifact hash mismatch", "The file did not match the retained asset."), artifact: publicArtifact(artifact) } };
+    }
 
-    if (input.sha256.toLowerCase() !== artifact.sha256 || input.byteSize !== artifact.byteSize) {
+    let bytes;
+    try {
+      bytes = await objectStorage.getObject({ area: "quarantine", key: artifact.objectKey });
+    } catch {
+      return { ok: false, problem: problem("UPLOAD_URL_EXPIRED", 409, "Upload is incomplete", "Upload the file before completing this asset.") };
+    }
+    const retainedHash = createHash("sha256").update(bytes).digest("hex");
+    if (input.sha256.toLowerCase() !== artifact.sha256 || input.byteSize !== artifact.byteSize || bytes.length !== artifact.byteSize || retainedHash !== artifact.sha256) {
       const rejected = rejectArtifact(artifact, "artifact.hash_mismatch");
       return {
         ok: false,
@@ -437,9 +487,24 @@ export function createWorkspaceStore(env = process.env) {
       };
     }
 
+    const cleanObjectKey = artifact.objectKey.replace(/^quarantine\//, "clean-media/");
+    try {
+      await objectStorage.copyObject({
+        sourceArea: "quarantine", sourceKey: artifact.objectKey,
+        destinationArea: "clean-media", destinationKey: cleanObjectKey,
+        contentType: artifact.contentType, sha256: artifact.sha256
+      });
+      const promoted = await objectStorage.headObject({ area: "clean-media", key: cleanObjectKey });
+      if (promoted.byteSize !== artifact.byteSize) throw new Error("ARTIFACT_STORAGE_VERIFICATION_FAILED");
+    } catch {
+      return { ok: false, problem: problem("DEPENDENCY_UNAVAILABLE", 503, "Storage unavailable", "The asset remains quarantined. Try completion again.", true) };
+    }
+    const quarantineObjectKey = artifact.objectKey;
+    artifact.objectKey = cleanObjectKey;
     artifact.status = "CLEAN";
     artifact.retentionClass = "clean-media";
     artifact.updatedAt = new Date().toISOString();
+    await objectStorage.deleteObject({ area: "quarantine", key: quarantineObjectKey }).catch(() => undefined);
     return {
       ok: true,
       response: {
@@ -448,7 +513,7 @@ export function createWorkspaceStore(env = process.env) {
     };
   }
 
-  function createArtifactDownload(actor, artifactId, input) {
+  async function createArtifactDownload(actor, artifactId, input) {
     const artifact = artifacts.get(artifactId);
     if (
       !artifact ||
@@ -462,6 +527,7 @@ export function createWorkspaceStore(env = process.env) {
       };
     }
     const download = signedContract("GET", artifact.id);
+    download.url = await objectStorage.createSignedDownloadUrl({ area: "clean-media", key: artifact.objectKey });
     downloadTokens.set(download.token, {
       artifactId: artifact.id,
       workspaceId: artifact.workspaceId,
@@ -493,9 +559,38 @@ export function createWorkspaceStore(env = process.env) {
     const now = new Date().toISOString();
     const requestId = randomUUID();
     const traceId = randomUUID();
+    const normalizedDomain = new URL(validation.normalizedUrl).hostname.toLowerCase();
+    let brand = [...brands.values()].find(
+      (candidate) => candidate.workspaceId === input.workspaceId && candidate.normalizedDomain === normalizedDomain
+    );
+    const claimedByAnotherBrand = validation.assets.some((assetInput) =>
+      [...brandAssets.values()].some((asset) => asset.artifactId === assetInput.artifactId && (!brand || asset.brandId !== brand.id))
+    );
+    if (claimedByAnotherBrand) {
+      return { ok: false, problem: problem("BRAND_ASSET_NOT_APPROVED", 409, "Brand asset not approved", "This asset belongs to a different brand.") };
+    }
+    if (!brand) {
+      const requestedName = optionalString(input.brandName);
+      brand = {
+        id: randomUUID(),
+        workspaceId: input.workspaceId,
+        name: requestedName ?? recognizableBrandName(normalizedDomain),
+        slug: uniqueBrandSlug(brands, input.workspaceId, requestedName ?? normalizedDomain),
+        websiteUrl: validation.normalizedUrl,
+        normalizedDomain,
+        status: "ACTIVE",
+        createdAt: now,
+        updatedAt: now
+      };
+      brands.set(brand.id, brand);
+    } else if (optionalString(input.brandName) && brand.name !== input.brandName.trim()) {
+      brand.name = input.brandName.trim();
+      brand.updatedAt = now;
+    }
     const crawlRun = {
       id: randomUUID(),
       workspaceId: input.workspaceId,
+      brandId: brand.id,
       sourceUrl: input.websiteUrl.trim(),
       normalizedUrl: validation.normalizedUrl,
       status: "QUEUED",
@@ -513,6 +608,7 @@ export function createWorkspaceStore(env = process.env) {
     const retainedAssets = validation.assets.map((assetInput) => ({
       id: randomUUID(),
       workspaceId: input.workspaceId,
+      brandId: brand.id,
       crawlRunId: crawlRun.id,
       artifactId: assetInput.artifactId,
       rightsBasis: assetInput.rightsBasis.trim(),
@@ -538,6 +634,7 @@ export function createWorkspaceStore(env = process.env) {
         requestId,
         traceId,
         brandCrawlRunId: crawlRun.id,
+        brandId: brand.id,
         normalizedUrl: crawlRun.normalizedUrl,
         crawlScope: crawlRun.crawlScope,
         selectedBrandType: validation.selectedBrandType,
@@ -569,10 +666,43 @@ export function createWorkspaceStore(env = process.env) {
     return {
       ok: true,
       response: {
+        brand: publicBrand(brand),
         crawlRun: publicBrandCrawlRun(crawlRun),
         brandAssets: retainedAssets.map((asset) => publicBrandAsset(asset, artifacts.get(asset.artifactId))),
         job: publicJob(job),
         outboxEvent: publicOutboxEvent(outbox)
+      }
+    };
+  }
+
+  function listBrands(actor, workspaceId) {
+    if (!getWorkspaceForActor(actor, workspaceId)) {
+      return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
+    }
+    return {
+      ok: true,
+      response: {
+        brands: [...brands.values()]
+          .filter((brand) => brand.workspaceId === workspaceId && brand.status === "ACTIVE")
+          .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+          .map(publicBrand)
+      }
+    };
+  }
+
+  function listBrandAssets(actor, brandId) {
+    const brand = brands.get(brandId);
+    if (!brand || !getWorkspaceForActor(actor, brand.workspaceId)) {
+      return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
+    }
+    return {
+      ok: true,
+      response: {
+        brand: publicBrand(brand),
+        assets: [...brandAssets.values()]
+          .filter((asset) => asset.brandId === brandId && asset.status === "ACTIVE" && artifacts.get(asset.artifactId)?.status === "CLEAN")
+          .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+          .map((asset) => publicBrandAsset(asset, artifacts.get(asset.artifactId)))
       }
     };
   }
@@ -823,7 +953,7 @@ export function createWorkspaceStore(env = process.env) {
 
   function approveBrandProfile(actor, brandId, input) {
     const crawlRun = brandCrawlRuns.get(input.crawlRunId);
-    if (!crawlRun || crawlRun.workspaceId !== input.workspaceId || !getWorkspaceForActor(actor, input.workspaceId)) {
+    if (!crawlRun || crawlRun.workspaceId !== input.workspaceId || crawlRun.brandId !== brandId || !getWorkspaceForActor(actor, input.workspaceId)) {
       return {
         ok: false,
         problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
@@ -6640,6 +6770,7 @@ export function createWorkspaceStore(env = process.env) {
     const extracted = buildBrandExtractionCandidates({
       crawlRunId: crawlRun.id,
       workspaceId: job.workspaceId,
+      brandId: crawlRun.brandId,
       scrape: normalizeBrandExtractionScrape(input),
       schemaVersion: input.schemaVersion,
       universal: input.universal,
@@ -6685,6 +6816,7 @@ export function createWorkspaceStore(env = process.env) {
       const brandAsset = {
         id: randomUUID(),
         workspaceId: job.workspaceId,
+        brandId: crawlRun.brandId,
         crawlRunId: crawlRun.id,
         artifactId: artifact.id,
         rightsBasis: assetInput.rightsBasis.trim(),
@@ -7386,9 +7518,12 @@ export function createWorkspaceStore(env = process.env) {
     getWorkspaceOperationalAlerts,
     runIdempotent,
     initiateArtifactUpload,
+    putArtifactUpload,
     completeArtifactUpload,
     createArtifactDownload,
     createBrandCrawlRun,
+    listBrands,
+    listBrandAssets,
     getBrandCrawlRun,
     getBrandAssetPack,
     getUserProfile,
@@ -7455,7 +7590,9 @@ export function createWorkspaceStore(env = process.env) {
   };
 }
 
-export function createPrismaWorkspaceStore(env = process.env) {
+export function createPrismaWorkspaceStore(env = process.env, dependencies = {}) {
+  const objectStorage = dependencies.objectStorage ?? createObjectStorage(env);
+  const uploadTokens = new Map();
   const prisma = new PrismaClient({
     datasources: {
       db: {
@@ -7638,6 +7775,12 @@ export function createPrismaWorkspaceStore(env = process.env) {
     return withActor(
       actor,
       async (tx) => {
+        const targetBrand = input.brandId ? await tx.brand.findFirst({
+          where: { id: input.brandId, workspaceId: input.workspaceId, status: "ACTIVE" }
+        }) : null;
+        if (input.brandId && !targetBrand) {
+          return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
+        }
         const artifact = await tx.artifact.create({
           data: {
             workspaceId: input.workspaceId,
@@ -7661,12 +7804,30 @@ export function createPrismaWorkspaceStore(env = process.env) {
             targetId: artifact.id
           }
         });
+        const brandAsset = targetBrand ? await tx.brandAsset.create({
+          data: {
+            workspaceId: input.workspaceId, brandId: targetBrand.id, crawlRunId: null,
+            artifactId: artifact.id, rightsBasis: input.rightsBasis.trim(), permittedUse: input.permittedUse.trim(), status: "ACTIVE"
+          }
+        }) : null;
 
+        const upload = signedContract("PUT", artifact.id);
+        upload.url = objectStorage.provider === "b2"
+          ? await objectStorage.createSignedUploadUrl({ area: "quarantine", key: artifact.objectKey, contentType: artifact.contentType })
+          : `/api/v0/brands/assets/uploads/${artifact.id}/content?token=${encodeURIComponent(upload.token)}`;
+        upload.headers = { "content-type": artifact.contentType };
+        uploadTokens.set(upload.token, {
+          artifactId: artifact.id,
+          workspaceId: artifact.workspaceId,
+          userId: actor.userId,
+          expiresAt: upload.expiresAt
+        });
         return {
           ok: true,
           response: {
             artifact: publicArtifact(artifact),
-            upload: signedContract("PUT", artifact.id)
+            brandAsset: brandAsset ? publicBrandAsset(brandAsset, artifact) : null,
+            upload
           }
         };
       },
@@ -7674,88 +7835,67 @@ export function createPrismaWorkspaceStore(env = process.env) {
     );
   }
 
+  async function putArtifactUpload(token, artifactId, body, contentType) {
+    const grant = uploadTokens.get(token);
+    if (!grant || grant.artifactId !== artifactId || Date.parse(grant.expiresAt) <= Date.now()) {
+      return { ok: false, problem: problem("UPLOAD_URL_EXPIRED", 403, "Upload URL expired", "Request a new upload URL and try again.") };
+    }
+    const actor = { userId: grant.userId };
+    const artifact = await withActor(actor, (tx) => tx.artifact.findFirst({
+      where: { id: artifactId, workspaceId: grant.workspaceId, status: "QUARANTINED" }
+    }), grant.workspaceId);
+    if (!artifact) return { ok: false, problem: problem("UPLOAD_URL_EXPIRED", 403, "Upload URL expired", "Request a new upload URL and try again.") };
+    if (!Buffer.isBuffer(body) || body.length === 0 || body.length > artifact.byteSize || contentType !== artifact.contentType) {
+      return { ok: false, problem: problem("VALIDATION_FAILED", 422, "Validation failed", "The uploaded file did not match the initiated upload.") };
+    }
+    await objectStorage.putObject({ area: "quarantine", key: artifact.objectKey, body, contentType, sha256: artifact.sha256 });
+    return { ok: true, response: { uploaded: true } };
+  }
+
   async function completeArtifactUpload(actor, artifactId, input) {
     const access = await getWorkspaceForActor(actor, input.workspaceId);
-    if (!access) {
-      return {
-        ok: false,
-        problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
-      };
+    if (!access) return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
+    const artifact = await withActor(actor, (tx) => tx.artifact.findFirst({
+      where: { id: artifactId, workspaceId: input.workspaceId }
+    }), input.workspaceId);
+    if (!artifact) return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
+    if (!isSha256(input.sha256) || !Number.isInteger(input.byteSize) || input.byteSize <= 0) {
+      return { ok: false, problem: problem("VALIDATION_FAILED", 422, "Validation failed", "Check the highlighted fields.") };
     }
-    return withActor(
-      actor,
-      async (tx) => {
-        const artifact = await tx.artifact.findFirst({
-          where: {
-            id: artifactId,
-            workspaceId: input.workspaceId
-          }
-        });
-        if (!artifact) {
-          return {
-            ok: false,
-            problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
-          };
-        }
-        if (!isSha256(input.sha256) || !Number.isInteger(input.byteSize) || input.byteSize <= 0) {
-          return { ok: false, problem: problem("VALIDATION_FAILED", 422, "Validation failed", "Check the highlighted fields.") };
-        }
-
-        if (input.sha256.toLowerCase() !== artifact.sha256 || input.byteSize !== artifact.byteSize) {
-          const rejected = await tx.artifact.update({
-            where: { id: artifact.id },
-            data: {
-              status: "REJECTED",
-              retentionClass: "quarantine"
-            }
-          });
-          return {
-            ok: false,
-            problem: {
-              ...problem(
-                "ARTIFACT_HASH_MISMATCH",
-                409,
-                "Artifact hash mismatch",
-                "The file did not match the expected content. It was not accepted."
-              ),
-              artifact: publicArtifact(rejected)
-            }
-          };
-        }
-
-        if (!supportedContentTypes.has(artifact.contentType)) {
-          const rejected = await tx.artifact.update({
-            where: { id: artifact.id },
-            data: {
-              status: "REJECTED",
-              retentionClass: "quarantine"
-            }
-          });
-          return {
-            ok: false,
-            problem: {
-              ...problem("ASSET_TYPE_UNSUPPORTED", 415, "Asset type unsupported", "This file type is not supported."),
-              artifact: publicArtifact(rejected)
-            }
-          };
-        }
-
-        const clean = await tx.artifact.update({
-          where: { id: artifact.id },
-          data: {
-            status: "CLEAN",
-            retentionClass: "clean-media"
-          }
-        });
-        return {
-          ok: true,
-          response: {
-            artifact: publicArtifact(clean)
-          }
-        };
-      },
-      input.workspaceId
-    );
+    if (artifact.status === "CLEAN") {
+      if (input.sha256.toLowerCase() === artifact.sha256 && input.byteSize === artifact.byteSize) {
+        return { ok: true, response: { artifact: publicArtifact(artifact) } };
+      }
+      return { ok: false, problem: { ...problem("ARTIFACT_HASH_MISMATCH", 409, "Artifact hash mismatch", "The file did not match the retained asset."), artifact: publicArtifact(artifact) } };
+    }
+    let bytes;
+    try {
+      bytes = await objectStorage.getObject({ area: "quarantine", key: artifact.objectKey });
+    } catch {
+      return { ok: false, problem: problem("UPLOAD_URL_EXPIRED", 409, "Upload is incomplete", "Upload the file before completing this asset.") };
+    }
+    const retainedHash = createHash("sha256").update(bytes).digest("hex");
+    if (input.sha256.toLowerCase() !== artifact.sha256 || input.byteSize !== artifact.byteSize || bytes.length !== artifact.byteSize || retainedHash !== artifact.sha256) {
+      const rejected = await withActor(actor, (tx) => tx.artifact.update({ where: { id: artifact.id }, data: { status: "REJECTED", retentionClass: "quarantine" } }), input.workspaceId);
+      return { ok: false, problem: { ...problem("ARTIFACT_HASH_MISMATCH", 409, "Artifact hash mismatch", "The file did not match the expected content. It was not accepted."), artifact: publicArtifact(rejected) } };
+    }
+    if (!supportedContentTypes.has(artifact.contentType)) {
+      const rejected = await withActor(actor, (tx) => tx.artifact.update({ where: { id: artifact.id }, data: { status: "REJECTED", retentionClass: "quarantine" } }), input.workspaceId);
+      return { ok: false, problem: { ...problem("ASSET_TYPE_UNSUPPORTED", 415, "Asset type unsupported", "This file type is not supported."), artifact: publicArtifact(rejected) } };
+    }
+    const cleanObjectKey = artifact.objectKey.replace(/^quarantine\//, "clean-media/");
+    try {
+      await objectStorage.copyObject({ sourceArea: "quarantine", sourceKey: artifact.objectKey, destinationArea: "clean-media", destinationKey: cleanObjectKey, contentType: artifact.contentType, sha256: artifact.sha256 });
+      const promoted = await objectStorage.headObject({ area: "clean-media", key: cleanObjectKey });
+      if (promoted.byteSize !== artifact.byteSize) throw new Error("ARTIFACT_STORAGE_VERIFICATION_FAILED");
+    } catch {
+      return { ok: false, problem: problem("DEPENDENCY_UNAVAILABLE", 503, "Storage unavailable", "The asset remains quarantined. Try completion again.", true) };
+    }
+    const clean = await withActor(actor, (tx) => tx.artifact.update({
+      where: { id: artifact.id }, data: { status: "CLEAN", retentionClass: "clean-media", objectKey: cleanObjectKey }
+    }), input.workspaceId);
+    await objectStorage.deleteObject({ area: "quarantine", key: artifact.objectKey }).catch(() => undefined);
+    return { ok: true, response: { artifact: publicArtifact(clean) } };
   }
 
   async function createArtifactDownload(actor, artifactId, input) {
@@ -7782,11 +7922,13 @@ export function createPrismaWorkspaceStore(env = process.env) {
             problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
           };
         }
+        const download = signedContract("GET", artifact.id);
+        download.url = await objectStorage.createSignedDownloadUrl({ area: "clean-media", key: artifact.objectKey });
         return {
           ok: true,
           response: {
             artifact: publicArtifact(artifact),
-            download: signedContract("GET", artifact.id)
+            download
           }
         };
       },
@@ -7813,9 +7955,44 @@ export function createPrismaWorkspaceStore(env = process.env) {
         }
         const requestId = randomUUID();
         const traceId = randomUUID();
+        const normalizedDomain = new URL(validation.normalizedUrl).hostname.toLowerCase();
+        let brand = await tx.brand.findFirst({
+          where: { workspaceId: input.workspaceId, normalizedDomain, status: "ACTIVE" },
+          orderBy: { createdAt: "asc" }
+        });
+        const claimedAsset = validation.assets.length > 0 ? await tx.brandAsset.findFirst({
+          where: {
+            workspaceId: input.workspaceId,
+            artifactId: { in: validation.assets.map((asset) => asset.artifactId) },
+            ...(brand ? { brandId: { not: brand.id } } : {})
+          }
+        }) : null;
+        if (claimedAsset) {
+          return { ok: false, problem: problem("BRAND_ASSET_NOT_APPROVED", 409, "Brand asset not approved", "This asset belongs to a different brand.") };
+        }
+        if (!brand) {
+          const requestedName = optionalString(input.brandName);
+          const domainHash = createHash("sha256").update(normalizedDomain).digest("hex").slice(0, 10);
+          const identitySlug = `${slugify(normalizedDomain) || "brand"}-${domainHash}`;
+          brand = await tx.brand.upsert({
+            where: { workspaceId_slug: { workspaceId: input.workspaceId, slug: identitySlug } },
+            create: {
+              workspaceId: input.workspaceId,
+              name: requestedName ?? recognizableBrandName(normalizedDomain),
+              slug: identitySlug,
+              websiteUrl: validation.normalizedUrl,
+              normalizedDomain,
+              status: "ACTIVE"
+            },
+            update: {}
+          });
+        } else if (optionalString(input.brandName) && brand.name !== input.brandName.trim()) {
+          brand = await tx.brand.update({ where: { id: brand.id }, data: { name: input.brandName.trim() } });
+        }
         const crawlRun = await tx.brandCrawlRun.create({
           data: {
             workspaceId: input.workspaceId,
+            brandId: brand.id,
             sourceUrl: input.websiteUrl.trim(),
             normalizedUrl: validation.normalizedUrl,
             status: "QUEUED",
@@ -7830,6 +8007,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
             await tx.brandAsset.create({
               data: {
                 workspaceId: input.workspaceId,
+                brandId: brand.id,
                 crawlRunId: crawlRun.id,
                 artifactId: assetInput.artifactId,
                 rightsBasis: assetInput.rightsBasis.trim(),
@@ -7856,6 +8034,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
               requestId,
               traceId,
               brandCrawlRunId: crawlRun.id,
+              brandId: brand.id,
               normalizedUrl: crawlRun.normalizedUrl,
               crawlScope: crawlRun.crawlScope,
               selectedBrandType: validation.selectedBrandType,
@@ -7887,6 +8066,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
         return {
           ok: true,
           response: {
+            brand: publicBrand(brand),
             crawlRun: publicBrandCrawlRun(updatedRun),
             brandAssets: retainedAssets.map(publicBrandAsset),
             job: publicJob(job),
@@ -7896,6 +8076,98 @@ export function createPrismaWorkspaceStore(env = process.env) {
       },
       input.workspaceId
     );
+  }
+
+  async function listBrands(actor, workspaceId) {
+    const access = await getWorkspaceForActor(actor, workspaceId);
+    if (!access) {
+      return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
+    }
+    return withActor(actor, async (tx) => ({
+      ok: true,
+      response: {
+        brands: (await tx.brand.findMany({
+          where: { workspaceId, status: "ACTIVE" },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          take: 100
+        })).map(publicBrand)
+      }
+    }), workspaceId);
+  }
+
+  async function listBrandAssets(actor, brandId) {
+    const accessibleWorkspaces = await listWorkspaces(actor);
+    for (const workspace of accessibleWorkspaces) {
+      const result = await withActor(actor, async (tx) => {
+        const brand = await tx.brand.findFirst({ where: { id: brandId, workspaceId: workspace.id, status: "ACTIVE" } });
+        if (!brand) return null;
+        const assets = await tx.brandAsset.findMany({
+          where: { workspaceId: workspace.id, brandId, status: "ACTIVE", artifact: { status: "CLEAN" } },
+          include: { artifact: true },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          take: 200
+        });
+        return {
+          ok: true,
+          response: { brand: publicBrand(brand), assets: assets.map((asset) => publicBrandAsset(asset, asset.artifact)) }
+        };
+      }, workspace.id);
+      if (result) return result;
+    }
+    return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
+  }
+
+  async function getBrandCrawlRun(actor, crawlRunId) {
+    const accessibleWorkspaces = await listWorkspaces(actor);
+    for (const workspace of accessibleWorkspaces) {
+      const detail = await withActor(actor, async (tx) => {
+        const crawlRun = await tx.brandCrawlRun.findFirst({ where: { id: crawlRunId, workspaceId: workspace.id } });
+        if (!crawlRun) return null;
+        const [assets, candidates] = await Promise.all([
+          tx.brandAsset.findMany({ where: { workspaceId: workspace.id, crawlRunId }, include: { artifact: true }, orderBy: { createdAt: "asc" } }),
+          tx.brandCandidate.findMany({ where: { workspaceId: workspace.id, crawlRunId }, orderBy: { createdAt: "asc" } })
+        ]);
+        return {
+          ok: true,
+          response: {
+            crawlRun: publicBrandCrawlRun(crawlRun),
+            brandAssets: assets.map((asset) => publicBrandAsset(asset, asset.artifact)),
+            candidates: candidates.map(publicBrandCandidate)
+          }
+        };
+      }, workspace.id);
+      if (detail) return detail;
+    }
+    return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
+  }
+
+  async function getBrandAssetPack(actor, crawlRunId) {
+    const detail = await getBrandCrawlRun(actor, crawlRunId);
+    if (!detail.ok) return detail;
+    const candidates = detail.response.candidates;
+    const byGroup = (types) => candidates.filter((candidate) => types.includes(candidate.fieldType));
+    return {
+      ok: true,
+      response: {
+        crawlRun: detail.response.crawlRun,
+        assetPack: {
+          identity: byGroup(["identity", "summary", "color", "font", "logo", "media_asset"]),
+          messaging: byGroup(["copy_messaging", "usp", "cta", "audience", "tone", "positioning"]),
+          offers: byGroup(["offer", "pricing", "product", "service"]),
+          trustProof: byGroup(["social_proof", "testimonial", "rating", "certification", "award", "case_study", "metric"]),
+          vertical: byGroup(["vertical_conflict", "product_service", "claim", "metadata"]),
+          mediaInventory: byGroup(["visual_identity", "color", "font", "logo", "media_asset"]),
+          voice: byGroup(["voice", "tone", "audience"]),
+          publishingSocial: byGroup(["publishing_social"]),
+          complianceRights: byGroup(["prohibited_claim", "regulated_claim", "rights_warning", "disclaimer", "rights_asset"]),
+          missingAssets: byGroup(["missing_asset"]),
+          readiness: {
+            score: calculateBrandCandidateReadiness(candidates),
+            status: candidates.length > 0 ? "approval_required" : "missing_assets"
+          }
+        }
+      }
+    };
   }
 
   async function startSimulatedMediaProcessing(actor, input) {
@@ -8021,55 +8293,50 @@ export function createPrismaWorkspaceStore(env = process.env) {
   }
 
   async function listBrandCandidates(actor, crawlRunId) {
-    return withActor(actor, async (tx) => {
-      const crawlRun = await tx.brandCrawlRun.findFirst({ where: { id: crawlRunId } });
-      if (!crawlRun) {
+    const accessibleWorkspaces = await listWorkspaces(actor);
+    for (const workspace of accessibleWorkspaces) {
+      const detail = await withActor(actor, async (tx) => {
+        const crawlRun = await tx.brandCrawlRun.findFirst({ where: { id: crawlRunId, workspaceId: workspace.id } });
+        if (!crawlRun) return null;
+        const candidates = await tx.brandCandidate.findMany({
+          where: { workspaceId: workspace.id, crawlRunId },
+          orderBy: { createdAt: "asc" }
+        });
         return {
-          ok: false,
-          problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          ok: true,
+          response: {
+            crawlRun: publicBrandCrawlRun(crawlRun),
+            candidates: candidates.map(publicBrandCandidate)
+          }
         };
-      }
-      const candidates = await tx.brandCandidate.findMany({
-        where: { workspaceId: crawlRun.workspaceId, crawlRunId },
-        orderBy: { createdAt: "asc" }
-      });
-      return {
-        ok: true,
-        response: {
-          crawlRun: publicBrandCrawlRun(crawlRun),
-          candidates: candidates.map(publicBrandCandidate)
-        }
-      };
-    });
+      }, workspace.id);
+      if (detail) return detail;
+    }
+    return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
   }
 
   async function updateBrandCandidateDecision(actor, crawlRunId, candidateId, decision) {
-    return withActor(actor, async (tx) => {
-      const crawlRun = await tx.brandCrawlRun.findFirst({ where: { id: crawlRunId } });
-      if (!crawlRun) {
+    const accessibleWorkspaces = await listWorkspaces(actor);
+    for (const workspace of accessibleWorkspaces) {
+      const detail = await withActor(actor, async (tx) => {
+        const crawlRun = await tx.brandCrawlRun.findFirst({ where: { id: crawlRunId, workspaceId: workspace.id } });
+        if (!crawlRun) return null;
+        const candidate = await tx.brandCandidate.findFirst({
+          where: { id: candidateId, crawlRunId, workspaceId: workspace.id }
+        });
+        if (!candidate) return null;
+        const updated = await tx.brandCandidate.update({
+          where: { id: candidateId },
+          data: { decision }
+        });
         return {
-          ok: false,
-          problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
+          ok: true,
+          response: { success: true, candidate: publicBrandCandidate(updated) }
         };
-      }
-      const candidate = await tx.brandCandidate.findFirst({
-        where: { id: candidateId, crawlRunId, workspaceId: crawlRun.workspaceId }
-      });
-      if (!candidate) {
-        return {
-          ok: false,
-          problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
-        };
-      }
-      const updated = await tx.brandCandidate.update({
-        where: { id: candidateId },
-        data: { decision }
-      });
-      return {
-        ok: true,
-        response: { success: true, candidate: publicBrandCandidate(updated) }
-      };
-    });
+      }, workspace.id);
+      if (detail) return detail;
+    }
+    return { ok: false, problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.") };
   }
 
   async function approveBrandProfile(actor, brandId, input) {
@@ -8083,7 +8350,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
         const crawlRun = await tx.brandCrawlRun.findFirst({
           where: { id: input.crawlRunId, workspaceId: input.workspaceId }
         });
-        if (!crawlRun) {
+        if (!crawlRun || crawlRun.brandId !== brandId) {
           return {
             ok: false,
             problem: problem("WORKSPACE_ACCESS_DENIED", 404, "Workspace access denied", "We could not find that item.")
@@ -12177,6 +12444,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
     const extracted = buildBrandExtractionCandidates({
       crawlRunId: crawlRun.id,
       workspaceId: job.workspaceId,
+      brandId: crawlRun.brandId,
       scrape: normalizeBrandExtractionScrape(input),
       schemaVersion: input.schemaVersion,
       universal: input.universal,
@@ -12202,6 +12470,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
         await tx.brandCandidate.create({
           data: {
             workspaceId: job.workspaceId,
+            brandId: crawlRun.brandId,
             crawlRunId: crawlRun.id,
             fieldType: candidate.fieldType,
             value: candidate.value,
@@ -12237,6 +12506,7 @@ export function createPrismaWorkspaceStore(env = process.env) {
       const brandAsset = await tx.brandAsset.create({
         data: {
           workspaceId: job.workspaceId,
+          brandId: crawlRun.brandId,
           crawlRunId: crawlRun.id,
           artifactId: artifact.id,
           rightsBasis: assetInput.rightsBasis.trim(),
@@ -15667,9 +15937,14 @@ export function createPrismaWorkspaceStore(env = process.env) {
     getWorkspaceOperationalAlerts,
     runIdempotent,
     initiateArtifactUpload,
+    putArtifactUpload,
     completeArtifactUpload,
     createArtifactDownload,
     createBrandCrawlRun,
+    listBrands,
+    listBrandAssets,
+    getBrandCrawlRun,
+    getBrandAssetPack,
     approveBrandProfile,
     createGenerationEstimate,
     confirmGenerationEstimate,
@@ -15786,6 +16061,9 @@ function validateUploadInput(input) {
   }
   if (input.byteSize > 104857600) {
     return problem("ASSET_TOO_LARGE", 413, "Asset too large", "This file is larger than the allowed limit.");
+  }
+  if (input.brandId && (!optionalString(input.rightsBasis) || !optionalString(input.permittedUse))) {
+    return problem("SOURCE_RIGHTS_REQUIRED", 409, "Source rights required", "Record the rights basis and permitted use for this brand asset.");
   }
   return null;
 }
@@ -16045,6 +16323,7 @@ function publicBrandCrawlRun(crawlRun) {
   return {
     id: crawlRun.id,
     workspaceId: crawlRun.workspaceId,
+    brandId: crawlRun.brandId,
     sourceUrl: crawlRun.sourceUrl,
     normalizedUrl: crawlRun.normalizedUrl,
     status: crawlRun.status,
@@ -16179,6 +16458,7 @@ function publicBrandAsset(asset, artifact = null) {
   return {
     id: asset.id,
     workspaceId: asset.workspaceId,
+    brandId: asset.brandId,
     crawlRunId: asset.crawlRunId,
     artifactId: asset.artifactId,
     locator: `artifact:${asset.artifactId}`,
@@ -16190,6 +16470,40 @@ function publicBrandAsset(asset, artifact = null) {
     createdAt: toIso(asset.createdAt),
     updatedAt: toIso(asset.updatedAt)
   };
+}
+
+function publicBrand(brand) {
+  return {
+    id: brand.id,
+    workspaceId: brand.workspaceId,
+    name: brand.name,
+    slug: brand.slug,
+    websiteUrl: brand.websiteUrl,
+    normalizedDomain: brand.normalizedDomain,
+    status: brand.status,
+    createdAt: toIso(brand.createdAt),
+    updatedAt: toIso(brand.updatedAt)
+  };
+}
+
+function recognizableBrandName(domain) {
+  const label = String(domain).split(".")[0] || "Brand";
+  return label
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ") || "Brand";
+}
+
+function uniqueBrandSlug(brands, workspaceId, value) {
+  const base = slugify(value) || "brand";
+  const occupied = new Set(
+    [...brands.values()].filter((brand) => brand.workspaceId === workspaceId).map((brand) => brand.slug)
+  );
+  if (!occupied.has(base)) return base;
+  let suffix = 2;
+  while (occupied.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
 }
 
 function brandAssetCategoryFromContentType(contentType) {
@@ -16205,6 +16519,7 @@ function publicBrandCandidate(candidate) {
   return {
     id: candidate.id,
     workspaceId: candidate.workspaceId,
+    brandId: candidate.brandId,
     crawlRunId: candidate.crawlRunId,
     fieldType: candidate.fieldType,
     value: candidate.value,

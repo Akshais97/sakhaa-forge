@@ -47,9 +47,9 @@ surface.
 | Brand list | `/brands` | Owner/Admin/Client Manager | Workspace | Create/open brand | empty with Create brand; loading; archived filter |
 | Brand intake | `/brands/new` | Owner/Admin/Client Manager | Workspace capability | Submit permitted URL/files and optional brand type | URL invalid, unsupported brand type, rights missing, upload scanning, partial uploads, success run |
 | Crawl run | `/brands/{id}/runs/{runId}` | Owner/Admin/Client Manager | Intake run | Observe, cancel before external side effect, retry safe stage | queued, crawling universal, crawling vertical, selected/detected conflict, partial, blocked, failed, candidates ready |
-| Brand review | `/brands/{id}/profiles/{profileId}/review` | Owner/Admin/Client Manager | Candidates ready | Edit universal/vertical candidate, approve/reject | low confidence, source conflict, selected/detected conflict, missing required field, stale version |
+| Brand review | `/brands/{id}/profiles/{profileId}/review` | Owner/Admin/Client Manager | Candidates ready | Edit universal/vertical candidate, approve/reject | low confidence, source conflict, selected/detected conflict, candidate saving, stale review session, missing required field, approval saving, stale profile version, approval failed |
 | Brand detail | `/brands/{id}` | Relevant production roles | Brand exists | Open active profile/assets/rules | no approved profile, approved, superseded |
-| Brand assets | `/brands/{id}/assets` | Brand roles | Brand exists | Upload/approve/revoke | quarantine, validating, clean, rejected, revoked |
+| Brand assets | `/brands/{id}/assets` | Brand roles | Brand exists | Upload, add/remove from pending profile, approve/revoke | library loading, empty, ready, download expired/retrying, unavailable, rejected source, removed from pending profile, quarantine, validating, clean, revoked |
 | Brand rules | `/brands/{id}/rules` | Owner/Admin/Client Manager | Brand exists | Add required/prohibited rule | empty, duplicate, conflicting rule |
 
 The active standalone branding app route is `/app/branding`, with refresh-safe detail state
@@ -65,7 +65,10 @@ object keys, signed URLs, prompt material or extracted values as approved truth 
 approval endpoint creates an immutable brand profile version.
 The intake state may include a brand type selector. The crawl detail and review states must
 show universal candidate groups first, then the selected or detected vertical group, plus
-any selected/detected conflict and retained-asset rights state.
+any selected/detected conflict and retained-asset rights state. The acquired-assets review
+uses the clean brand library as retained truth, keeps source-only candidates separate,
+exchanges opaque `artifact:{id}` references for authorised short-lived downloads, and
+supports removing an asset from the pending profile without deleting retained evidence.
 
 ## 4. Blueprint Screens
 

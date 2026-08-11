@@ -94,6 +94,12 @@ test("brand crawl intake creates durable crawl run, brand asset rights and queue
         },
         { idempotencyKey: "b1-logo-upload" }
       );
+      const retained = await fetch(new URL(upload.body.upload.url, baseUrl), {
+        method: "PUT",
+        headers: upload.body.upload.headers,
+        body: Buffer.from("logo")
+      });
+      assert.equal(retained.status, 200);
       await client.completeBrandAssetUpload(upload.body.artifact.id, {
         workspaceId,
         byteSize: 4,

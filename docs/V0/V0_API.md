@@ -35,10 +35,14 @@ POST   /workspaces/{workspace_id}/backlog-simulation   Owner/Admin two-hour load
 POST   /workspaces/{workspace_id}/incident-rehearsal   Owner/Admin incident/runbook rehearsal record (V0-A2)
 GET    /workspaces/{workspace_id}/operations/alerts    Owner/Admin operational alert states (V0-A2)
 POST   /brands/crawl-runs       Idempotency-Key required; B1 safe brand intake
+GET    /workspaces/{workspace_id}/brands  Bounded recognizable brand library
+GET    /brands/{brand_id}/assets           Clean retained assets for one brand
 GET    /brands/crawl-runs/{crawl_run_id}
 GET    /brands/crawl-runs/{crawl_run_id}/asset-pack
 GET    /brands/crawl-runs/{crawl_run_id}/candidates
+POST   /brands/crawl-runs/{crawl_run_id}/candidates/{candidate_id}/status
 POST   /brands/assets/uploads      Idempotency-Key required
+PUT    /brands/assets/uploads/{artifact_id}/content  Local/test signed-upload simulator only
 POST   /brands/assets/uploads/{artifact_id}/complete
 GET    /users/me/profile
 PATCH  /users/me/profile
@@ -93,7 +97,8 @@ GET    /jobs/{id}/trace
 POST   /jobs/{id}/recover
 ```
 
-`POST /brands/crawl-runs` creates the V0-B1 durable intake record. The API normalizes a
+`POST /brands/crawl-runs` resolves or creates the workspace-owned `Brand` by normalized
+domain, returns that stable identity and creates the V0-B1 durable intake record. The API normalizes a
 public `http` or `https` website URL, rejects private, link-local, localhost and metadata
 targets with `CRAWL_SSRF_BLOCKED`, requires source rights acknowledgement with
 `SOURCE_RIGHTS_REQUIRED`, accepts an optional `brandType` from the documented V0 brand
@@ -103,7 +108,28 @@ records in one authenticated tenant-scoped operation. Unsupported brand types re
 `VALIDATION_FAILED`; the selected type changes the vertical Firecrawl pass only and does
 not approve brand truth. Returned `BrandAsset` rows include the retained artifact ID plus
 review-safe display metadata (`name`, `category`, `locator` as `artifact:{artifact_id}`),
-rights basis and permitted use; they do not include object keys or signed URLs.
+rights basis and permitted use; they do not include object keys or signed URLs. Every
+created crawl run, asset and candidate carries the resolved `brandId`.
+
+`POST /brands/assets/uploads` returns a short-lived private upload destination. The browser
+must `PUT` the actual bytes before calling completion. Completion reads the retained object,
+verifies byte size and SHA-256, then promotes it from the quarantine bucket to the clean
+media bucket; a declaration without retained bytes is rejected. When an existing
+`brandId`, rights basis and permitted use are supplied, the clean artifact is addressable
+from that brand library without requiring another crawl. The `PUT .../content` route is
+only the deterministic local/test signed-upload simulator; B2 deployments return an S3
+compatible signed URL.
+
+`GET /workspaces/{workspace_id}/brands` returns at most 100 active recognizable brands for
+the authorised workspace. `GET /brands/{brand_id}/assets` returns at most 200 active clean
+asset references for that brand. Both routes enforce tenant isolation and return no object
+keys, provider payloads or storage credentials. Browser clients treat returned
+`artifact:{artifact_id}` locators as opaque references. To render a clean private asset,
+the generated client calls `POST /artifacts/{artifact_id}/downloads` with the workspace
+context and assigns only the returned short-lived URL to media `src` or download `href`.
+The media component may request one fresh URL after an expired or failed retrieval; a
+second failure ends in an unavailable state rather than exposing the opaque locator.
+Cross-workspace, missing and non-clean artifacts retain the tenant-hiding 404 response.
 
 `GET /brands/crawl-runs/{crawl_run_id}` is the refresh-safe detail read used by
 `/app/branding?crawlRunId=<uuid>` and workspace crawl-run detail pages. It returns the
@@ -119,6 +145,14 @@ the branding UI: brand identity, universal visual identity, messaging, offers,
 trust/proof, media inventory, voice, selected/detected brand type, vertical assets,
 compliance/rights, missing assets and readiness. The response is a review surface only;
 it does not approve brand truth and does not expose raw provider payloads.
+
+`POST /brands/crawl-runs/{crawl_run_id}/candidates/{candidate_id}/status` retains an
+`approved` or `rejected` review decision for the authenticated crawl-run tuple. A `404`
+intentionally covers both a missing tuple and a tuple hidden by workspace isolation; the
+response must not reveal whether the candidate exists in another workspace or crawl run.
+The browser does not update the visible candidate decision before a successful generated
+client response. A tenant-hidden 404 leaves the prior state intact and asks the actor to
+reload the current crawl session.
 
 `GET /users/me/profile`, `PATCH /users/me/profile`, `GET /onboarding/brand-context` and
 `POST /onboarding/brand-context` are V0 branding-context helpers for optional onboarding
@@ -146,7 +180,10 @@ fields, rights attestation and required/prohibited rules. Owner, Admin and Clien
 may approve. Approval creates immutable `BrandProfile`, `BrandApproval`, `BrandRule` and
 `AuditEvent` rows in one tenant-scoped operation, superseding any prior active profile.
 Stale optimistic versions return `RESOURCE_VERSION_STALE`, which prevents concurrent
-approvals from creating two active profiles.
+approvals from creating two active profiles. The browser submits this operation through
+the generated authenticated client and shows approved state only after the canonical 201
+response supplies the retained profile, approval, rules and audit records. It does not
+invent an approval hash or infer approval from an in-flight request.
 
 `POST /generation-estimates` is the first downstream production guard for B3. It accepts
 only the active approved brand-profile version for the workspace. Draft, rejected,

@@ -87,6 +87,69 @@ export type AdaptedBrandCrawlRun = {
   crawlProvider: BackendCrawlRun["crawlProvider"];
 };
 
+type CanonicalApprovalDraft = {
+  name: { public: string };
+  industry: string;
+  markets: string[];
+  positioning: { statement: string };
+  products: unknown[];
+  audiences: unknown[];
+  calls_to_action: unknown[];
+  voice: {
+    attributes: string[];
+    avoid_list: string[];
+    formality: string;
+    languages: string[];
+  };
+  visual_identity: unknown;
+  claims: unknown[];
+  rightsAttestationChecked: boolean;
+  rules: {
+    required_phrases: string[];
+    prohibited_phrases: string[];
+    required_disclosures: string[];
+  };
+  version: string;
+};
+
+export function buildCanonicalApprovalInput(
+  draft: CanonicalApprovalDraft,
+  context: { workspaceId: string; crawlRunId: string }
+) {
+  const displayedVersion = Number.parseInt(draft.version.split(".")[0] ?? "", 10);
+  const optimisticVersion = Number.isInteger(displayedVersion) && displayedVersion > 0 ? displayedVersion - 1 : 0;
+
+  return {
+    workspaceId: context.workspaceId,
+    crawlRunId: context.crawlRunId,
+    decision: "approve" as const,
+    optimisticVersion,
+    profile: {
+      publicName: draft.name.public,
+      industry: draft.industry,
+      markets: draft.markets,
+      positioningStatement: draft.positioning.statement,
+      products: draft.products,
+      audiences: draft.audiences,
+      callsToAction: draft.calls_to_action,
+      voice: {
+        attributes: draft.voice.attributes,
+        avoid: draft.voice.avoid_list,
+        formality: draft.voice.formality,
+        languages: draft.voice.languages
+      },
+      visualIdentity: draft.visual_identity,
+      claims: draft.claims,
+      rightsAttestation: draft.rightsAttestationChecked
+    },
+    rules: [
+      ...draft.rules.required_phrases.map(value => ({ type: "required_phrase", value, severity: "warning", rationale: "Approved brand phrase." })),
+      ...draft.rules.prohibited_phrases.map(value => ({ type: "prohibited_phrase", value, severity: "critical", rationale: "Prohibited by approved brand rules." })),
+      ...draft.rules.required_disclosures.map(value => ({ type: "required_disclosure", value, severity: "critical", rationale: "Required approved disclosure." }))
+    ]
+  };
+}
+
 const fieldTypeToSection: Record<string, CandidateSection> = {
   identity: "identity",
   summary: "identity",
@@ -118,7 +181,7 @@ const fieldTypeToSection: Record<string, CandidateSection> = {
   prohibited_claim: "compliance",
   regulated_claim: "compliance",
   disclaimer: "compliance",
-  rights_asset: "compliance",
+  rights_asset: "visual",
   rights_warning: "compliance",
   publishing_social: "social",
   metadata: "metadata",
@@ -272,6 +335,24 @@ export function buildApprovalDraftFromCandidates(candidates: UiCandidate[], base
         heading: value.typography?.heading_font ?? draft.visual_identity.fonts.heading,
         code: value.typography?.code_font ?? draft.visual_identity.fonts.code
       };
+    }
+    if (candidate.fieldType === "logo") {
+      const src = value?.locator ?? value?.src ?? candidate.displayValue;
+      if (src && !draft.visual_identity.logos.includes(src)) {
+        draft.visual_identity.logos.push(src);
+      }
+    }
+    if (candidate.fieldType === "media_asset" || candidate.fieldType === "rights_asset") {
+      const src = value?.locator ?? value?.src ?? candidate.displayValue;
+      const type = value?.type ?? "uncategorised";
+      if (src) {
+        if (!draft.visual_identity.media_assets) {
+          draft.visual_identity.media_assets = [];
+        }
+        if (!draft.visual_identity.media_assets.some((m: any) => m.locator === src)) {
+          draft.visual_identity.media_assets.push({ locator: src, category: type });
+        }
+      }
     }
     if (candidate.fieldType === "voice") {
       draft.voice.attributes = unique([...asArray(value.toneSignals), ...asArray(value.writingStyleTags), ...asArray(value.brandValues)]);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import Header from './components/Header';
 import AccessModal from './components/AccessModal';
 import BrandExtractionStudio from './components/BrandExtractionStudio';
@@ -64,11 +64,22 @@ const EMPTY_BRAND: BrandData = {
 
 export default function App() {
   const [activeBrand, setActiveBrand] = useState<BrandData>(EMPTY_BRAND);
+  const [brands, setBrands] = useState<BrandData[]>([]);
   const [isAccessModalOpen, setIsAccessModalOpen] = useState(false);
 
   const handleSelectBrand = (brand: BrandData) => {
     setActiveBrand(brand);
   };
+
+  const handlePersistedBrands = useCallback((persisted: Array<{ id: string; name: string; websiteUrl: string }>) => {
+    const next = persisted.map(brand => ({ ...EMPTY_BRAND, id: brand.id, name: brand.name, url: brand.websiteUrl }));
+    setBrands(current => {
+      const byId = new Map(current.map(brand => [brand.id, brand]));
+      for (const brand of next) byId.set(brand.id, { ...byId.get(brand.id), ...brand });
+      return [...byId.values()];
+    });
+    setActiveBrand(current => current.id === EMPTY_BRAND.id && next[0] ? next[0] : current);
+  }, []);
 
   return (
     <div className="relative min-h-dvh bg-[#050507] text-zinc-100 flex flex-col justify-between overflow-x-hidden font-sans select-none selection:bg-white/10 selection:text-white" id="brand-extract-app">
@@ -78,7 +89,7 @@ export default function App() {
 
       {/* Persistent Premium Header */}
       <Header
-        brands={[]}
+        brands={brands}
         activeBrand={activeBrand}
         onSelectBrand={handleSelectBrand}
         onRequestAccess={() => setIsAccessModalOpen(true)}
@@ -91,7 +102,9 @@ export default function App() {
             activeBrand={activeBrand}
             onUpdateBrandData={(updated) => {
               setActiveBrand(updated);
+              setBrands(current => [...current.filter(brand => brand.id !== updated.id), updated]);
             }}
+            onPersistedBrands={handlePersistedBrands}
             onProceedWorkflow={() => {
               setIsAccessModalOpen(true);
             }}

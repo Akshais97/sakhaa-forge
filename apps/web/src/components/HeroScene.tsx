@@ -1,3 +1,4 @@
+import { useRouter } from 'next/navigation';
 import { motion } from 'motion/react';
 import { Play, ShieldAlert, CheckCircle2, RefreshCw, ArrowRight } from 'lucide-react';
 import { BrandData } from '../types';
@@ -10,6 +11,12 @@ interface HeroSceneProps {
 }
 
 export default function HeroScene({ activeBrand, onRequestAccess, onExploreWorkflow }: HeroSceneProps) {
+  const router = useRouter();
+
+  const handleBuildCalendar = () => {
+    router.push('/sign-in');
+  };
+
   return (
     <div className="relative w-full h-full flex flex-col justify-between py-5 px-5 lg:px-12 overflow-hidden" id="hero-scene">
       {/* Background ambient lighting */}
@@ -52,7 +59,7 @@ export default function HeroScene({ activeBrand, onRequestAccess, onExploreWorkf
           <div className="flex flex-wrap items-center gap-3 pt-1">
             <Magnet>
               <button
-                onClick={onRequestAccess}
+                onClick={handleBuildCalendar}
                 className="primary-action px-5 py-3 text-xs font-mono tracking-widest uppercase text-black font-semibold rounded-lg transition-all duration-300 hover:scale-[1.02] hover:shadow-lg active:scale-[0.97]"
                 style={{
                   backgroundColor: activeBrand.primaryColor,

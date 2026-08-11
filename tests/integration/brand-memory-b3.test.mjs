@@ -18,7 +18,7 @@ test("B3 approval creates one active immutable brand profile and blocks stale co
     async ({ baseUrl }) => {
       const client = new V0Client({ baseUrl, authToken: signJwt("b3-owner") });
       const prepared = await prepareCandidates(client);
-      const brandId = "20000000-0000-4000-8000-000000000001";
+      const brandId = prepared.brandId;
       const approvalInput = approvalPayload(prepared.workspaceId, prepared.crawlRunId, 0);
 
       const [first, second] = await Promise.all([
@@ -51,7 +51,7 @@ test("B3 downstream production rejects draft or superseded brand profile version
     async ({ baseUrl }) => {
       const client = new V0Client({ baseUrl, authToken: signJwt("b3-manager") });
       const prepared = await prepareCandidates(client);
-      const brandId = "20000000-0000-4000-8000-000000000002";
+      const brandId = prepared.brandId;
       const draftEstimate = await client.createGenerationEstimate({
         workspaceId: prepared.workspaceId,
         brandProfileId: "21000000-0000-4000-8000-000000000099",
@@ -117,7 +117,7 @@ async function prepareCandidates(client) {
     },
     { idempotencyKey: `b3-crawl-${randomUUID()}` }
   );
-  return { workspaceId, crawlRunId: crawl.body.crawlRun.id };
+  return { workspaceId, crawlRunId: crawl.body.crawlRun.id, brandId: crawl.body.brand.id };
 }
 
 function approvalPayload(workspaceId, crawlRunId, optimisticVersion, overrides = {}) {

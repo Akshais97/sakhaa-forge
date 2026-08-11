@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useReducer, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Globe, Shield, CheckCircle2, AlertTriangle, Play, HelpCircle,
@@ -11,15 +11,22 @@ import {
 import { BrandData } from '../types';
 import {
   adaptBrandCrawlRunResponse,
+  buildCanonicalApprovalInput,
   buildApprovalDraftFromCandidates,
   shouldCompleteCrawlWithLocalDemo,
   type UiCandidate
 } from '../candidate-adapter';
 import { createGeneratedWorkflowClient, makeIdempotencyKey } from '../../../../src/workflow/v0-actions';
+import { AcquiredBrandAssetsCupboard } from '../brand-assets/AcquiredBrandAssetsCupboard';
+import { LiquidEtherBackground } from '../brand-assets/LiquidEtherBackground';
+import { MagneticNextCue } from '../brand-assets/MagneticNextCue';
+import { SecureArtifactThumbnail } from '../brand-assets/SecureArtifactThumbnail';
+import type { ArtifactDownloadClient } from '../brand-assets/secure-artifact-media';
 
 interface BrandExtractionStudioProps {
   activeBrand: BrandData;
   onUpdateBrandData: (updated: BrandData) => void;
+  onPersistedBrands: (brands: Array<{ id: string; name: string; websiteUrl: string }>) => void;
   onProceedWorkflow: () => void;
 }
 
@@ -39,6 +46,7 @@ type ApprovalDraft = {
     fonts: { primary: string; heading: string; code: string };
     imagery_rules: string;
     layout_rules: string;
+    media_assets?: Array<{ locator: string; category: string }>;
   };
   voice: {
     attributes: string[];
@@ -120,6 +128,11 @@ type UploadedBrandAsset = {
   error?: string;
 };
 
+type CandidateMutation = {
+  candidateId: string;
+  state: 'saving' | 'saved' | 'failed' | 'stale-session';
+};
+
 function normalizeUrlInput(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return '';
@@ -158,7 +171,7 @@ async function sha256File(file: File): Promise<string> {
     .join('');
 }
 
-export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, onProceedWorkflow }: BrandExtractionStudioProps) {
+export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, onPersistedBrands, onProceedWorkflow }: BrandExtractionStudioProps) {
   // Navigation Steps
   const steps = [
     { id: 1, name: 'Brand Context' },
@@ -177,6 +190,21 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     authToken: '',
     source: 'pending'
   });
+  const continuingBrandIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!apiContext.workspaceId.trim() || !apiContext.authToken.trim()) return;
+    let cancelled = false;
+    void createGeneratedWorkflowClient({ baseUrl: '/api/v0', authToken: apiContext.authToken.trim() })
+      .then(client => client.listBrands(apiContext.workspaceId.trim()))
+      .then(response => {
+        if (!cancelled && response.status < 400 && Array.isArray((response.body as any)?.brands)) {
+          onPersistedBrands((response.body as any).brands);
+        }
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [apiContext.workspaceId, apiContext.authToken, onPersistedBrands]);
 
   // STEP 1 State: Brand Context Onboarding Form
   const [onboardingForm, setOnboardingForm] = useState({
@@ -199,6 +227,32 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     pathPrefixes: ['/'],
     assets: [] as UploadedBrandAsset[]
   });
+
+  useEffect(() => {
+    if (!apiContext.workspaceId.trim() || !apiContext.authToken.trim() || activeBrand.id === 'brand-extract-draft') return;
+    let cancelled = false;
+    void createGeneratedWorkflowClient({ baseUrl: '/api/v0', authToken: apiContext.authToken.trim() })
+      .then(client => client.listBrandAssets(activeBrand.id))
+      .then(response => {
+        const retained = (response.body as any)?.assets;
+        if (cancelled || response.status >= 400 || !Array.isArray(retained)) return;
+        setSelectedAssetIds(new Set(retained.map((asset: any) => asset.id)));
+        setSetupForm(current => ({
+          ...current,
+          assets: retained.map((asset: any) => ({
+            id: asset.id,
+            artifactId: asset.artifactId,
+            name: asset.name,
+            category: asset.category,
+            rightsBasis: asset.rightsBasis,
+            permittedUse: asset.permittedUse,
+            status: 'clean' as const
+          }))
+        }));
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [activeBrand.id, apiContext.workspaceId, apiContext.authToken]);
   // Local states for adding a path prefix and real asset uploads
   const [newPrefix, setNewPrefix] = useState('');
   const [selectedAssetFile, setSelectedAssetFile] = useState<File | null>(null);
@@ -224,9 +278,26 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
   const [activeCandidateSection, setActiveCandidateSection] = useState<string>('identity');
   const [selectedCandidateForEvidence, setSelectedCandidateForEvidence] = useState<any | null>(null);
   const [expandedEvidenceIds, setExpandedEvidenceIds] = useState<Record<string, boolean>>({});
+  const [candidateMutations, setCandidateMutation] = useReducer(
+    (current: Record<string, CandidateMutation>, mutation: CandidateMutation) => ({
+      ...current,
+      [mutation.candidateId]: mutation
+    }),
+    {}
+  );
 
   // STEP 5 State: Asset Pack
   const [assetPack, setAssetPack] = useState<any[]>([]);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(() => new Set());
+  const artifactDownloadClient = useMemo<ArtifactDownloadClient>(() => ({
+    async createArtifactDownload(artifactId, input) {
+      const client = await createGeneratedWorkflowClient({
+        baseUrl: '/api/v0',
+        authToken: apiContext.authToken.trim()
+      });
+      return client.createArtifactDownload(artifactId, input);
+    }
+  }), [apiContext.authToken]);
 
   // STEP 6 State: Brand Profile Approval Form (fully pre-populated from approved candidates)
   const [approvalDraft, setApprovalDraft] = useState<ApprovalDraft>({
@@ -244,7 +315,8 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
       colors: [] as Array<{ role: string; value: string; usage: string; prohibited: string }>,
       fonts: { primary: 'Inter', heading: 'Space Grotesk', code: 'JetBrains Mono' },
       imagery_rules: '',
-      layout_rules: ''
+      layout_rules: '',
+      media_assets: [] as Array<{ locator: string; category: string }>
     },
     voice: {
       attributes: [] as string[],
@@ -284,9 +356,10 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
   const [approvalStatus, setApprovalStatus] = useState<{
     submitted: boolean;
     timestamp: string | null;
-    hash: string | null;
-    version: string | null;
-  }>({ submitted: false, timestamp: null, hash: null, version: null });
+    approvalId: string | null;
+    version: number | null;
+  }>({ submitted: false, timestamp: null, approvalId: null, version: null });
+  const [approvalMutation, setApprovalMutation] = useState<'idle' | 'saving' | 'sign-in' | 'stale-session' | 'stale-version' | 'invalid' | 'failed'>('idle');
 
   const ensureDemoSession = async () => {
     if (apiContext.workspaceId.trim() && apiContext.authToken.trim()) {
@@ -309,6 +382,10 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
   // Load Brand Onboarding Context on start / change
   useEffect(() => {
+    if (continuingBrandIdRef.current === activeBrand.id) {
+      continuingBrandIdRef.current = null;
+      return;
+    }
     setOnboardingForm({
       brandName: activeBrand.name || '',
       websiteUrl: activeBrand.url || '',
@@ -329,7 +406,8 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     setCrawlRun(null);
     setCandidates([]);
     setAssetPack([]);
-    setApprovalStatus({ submitted: false, timestamp: null, hash: null, version: null });
+    setApprovalStatus({ submitted: false, timestamp: null, approvalId: null, version: null });
+    setApprovalMutation('idle');
   }, [activeBrand]);
 
   useEffect(() => {
@@ -458,7 +536,12 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
           fileName: file.name,
           contentType: file.type || 'application/octet-stream',
           byteSize: file.size,
-          sha256
+          sha256,
+          ...(activeBrand.id !== 'brand-extract-draft' ? {
+            brandId: activeBrand.id,
+            rightsBasis: assetUploadInput.rightsBasis.trim(),
+            permittedUse: assetUploadInput.permittedUse.trim()
+          } : {})
         },
         { idempotencyKey: makeIdempotencyKey('brand-asset-upload') }
       );
@@ -467,6 +550,17 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
         throw new Error(initiatedBody?.detail || initiatedBody?.title || 'Asset upload initiation failed.');
       }
       const artifactId = initiatedBody.artifact.id;
+      if (!initiatedBody?.upload?.url) {
+        throw new Error('The storage service did not return an upload destination.');
+      }
+      const uploadResponse = await fetch(initiatedBody.upload.url, {
+        method: initiatedBody.upload.method || 'PUT',
+        headers: initiatedBody.upload.headers || { 'content-type': file.type || 'application/octet-stream' },
+        body: file
+      });
+      if (!uploadResponse.ok) {
+        throw new Error('The asset could not be retained in private storage.');
+      }
       const completed = await client.completeBrandAssetUpload(artifactId, {
         workspaceId: apiContext.workspaceId.trim(),
         byteSize: file.size,
@@ -482,6 +576,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
           asset.id === localId ? { ...asset, artifactId, status: 'clean' } : asset
         )
       }));
+      setSelectedAssetIds(current => new Set(current).add(localId));
       setSelectedAssetFile(null);
       setAssetUploadInput({
         category: 'Logo',
@@ -537,6 +632,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
     const payload = {
       workspaceId: apiContext.workspaceId.trim(),
+      brandName: onboardingForm.brandName.trim() || undefined,
       websiteUrl: setupForm.websiteUrl,
       rightsAcknowledged: setupForm.rightsAcknowledged,
       brandType: toBackendBrandType(setupForm.brandType),
@@ -562,6 +658,10 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
       const body = response.body as any;
       const createdRunId = body?.crawlRun?.id;
       if (createdRunId) {
+        if (body?.brand?.id) {
+          continuingBrandIdRef.current = body.brand.id;
+          onPersistedBrands([{ id: body.brand.id, name: body.brand.name, websiteUrl: body.brand.websiteUrl }]);
+        }
         if (shouldCompleteCrawlWithLocalDemo({
           source: apiContext.source,
           jobId: body?.job?.id,
@@ -656,54 +756,84 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     }, 1000);
   };
 
-  // Approve/Reject candidates
-  const handleUpdateCandidateStatus = async (candidateId: string, status: 'approved' | 'rejected') => {
-    // Optimistically update
-    setCandidates(prev => prev.map(c => c.id === candidateId ? { ...c, status } : c));
-    
-    if (crawlRunId) {
-      try {
-        const response = await fetch(`/api/v0/brands/crawl-runs/${crawlRunId}/candidates/${candidateId}/status`, {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiContext.authToken.trim()}`
-          },
-          body: JSON.stringify({ status })
-        });
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({}));
-          console.error('Failed to update candidate status on server:', body.detail || response.statusText);
-        }
-      } catch (err) {
-        console.error('Failed to update candidate status:', err);
+  // Candidate decisions remain pending until the authenticated domain API confirms them.
+  const persistCandidateDecision = async (candidateId: string, status: 'approved' | 'rejected') => {
+    if (!crawlRunId) return false;
+    setCandidateMutation({ candidateId, state: 'saving' });
+
+    try {
+      const client = await createGeneratedWorkflowClient({
+        baseUrl: '/api/v0',
+        authToken: apiContext.authToken.trim()
+      });
+      const response = await client.updateBrandCandidateDecision(crawlRunId, candidateId, { status });
+      if (response.status === 200) {
+        setCandidates(current => current.map(candidate => candidate.id === candidateId ? { ...candidate, status } : candidate));
+        setCandidateMutation({ candidateId, state: 'saved' });
+        return true;
       }
+
+      setCandidateMutation({
+        candidateId,
+        state: response.status === 404 ? 'stale-session' : 'failed'
+      });
+    } catch {
+      setCandidateMutation({ candidateId, state: 'failed' });
     }
+    return false;
+  };
+
+  const handleUpdateCandidateStatus = async (candidateId: string, status: 'approved' | 'rejected') => {
+    await persistCandidateDecision(candidateId, status);
+  };
+
+  const handleRecategorizeImage = (candidateId: string, newCategory: 'logo' | 'product' | 'lifestyle' | 'uncategorised') => {
+    setCandidates(current => current.map(cand => {
+      if (cand.id !== candidateId) return cand;
+      
+      let fieldType = 'rights_asset';
+      if (newCategory === 'logo') {
+        fieldType = 'logo';
+      } else if (newCategory === 'product') {
+        fieldType = 'product';
+      } else if (newCategory === 'lifestyle') {
+        fieldType = 'media_asset';
+      }
+      
+      const fieldLabelsMap: Record<string, string> = {
+        logo: 'Logo',
+        product: 'Product',
+        media_asset: 'Media asset',
+        rights_asset: 'Rights asset'
+      };
+
+      const fieldTypeToSectionMap: Record<string, any> = {
+        logo: 'visual',
+        product: 'products',
+        media_asset: 'visual',
+        rights_asset: 'visual'
+      };
+
+      const val = typeof cand.value === 'object' && cand.value !== null 
+        ? { ...cand.value, type: newCategory } 
+        : { locator: cand.displayValue, type: newCategory };
+      
+      return {
+        ...cand,
+        fieldType,
+        field: fieldLabelsMap[fieldType] || cand.field,
+        section: fieldTypeToSectionMap[fieldType] || cand.section,
+        value: val
+      };
+    }));
   };
 
   const handleApproveAllSection = async (section: string) => {
     const sectionCandidates = candidates.filter(c => c.section === section && c.status !== 'approved');
     if (sectionCandidates.length === 0) return;
 
-    // Optimistically update all in frontend
-    setCandidates(prev => prev.map(c => c.section === section ? { ...c, status: 'approved' } : c));
-
-    // Send status updates to backend for each
-    if (crawlRunId) {
-      for (const cand of sectionCandidates) {
-        try {
-          await fetch(`/api/v0/brands/crawl-runs/${crawlRunId}/candidates/${cand.id}/status`, {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiContext.authToken.trim()}`
-            },
-            body: JSON.stringify({ status: 'approved' })
-          });
-        } catch (err) {
-          console.error(`Failed to approve candidate ${cand.id}:`, err);
-        }
-      }
+    for (const candidate of sectionCandidates) {
+      await persistCandidateDecision(candidate.id, 'approved');
     }
   };
 
@@ -720,69 +850,109 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
       // Populate rules
       draft.rules.required_phrases = [activeBrand.guidelines[3] || 'Legacy of quiet luxury.'];
       draft.rules.prohibited_phrases = ['Cheap EMI', 'Flash Sale', 'Broker-free discount'];
+      draft.visual_identity.logos = setupForm.assets
+        .filter(asset => asset.status === 'clean' && asset.artifactId && selectedAssetIds.has(asset.id))
+        .map(asset => `artifact:${asset.artifactId}`);
 
       setApprovalDraft(draft);
     }
   }, [currentStep]);
 
+  const removeFromProfile = (assetId: string) => {
+    setSelectedAssetIds(current => {
+      const next = new Set(current);
+      next.delete(assetId);
+      return next;
+    });
+  };
+
+  const restoreToProfile = (assetId: string) => {
+    setSelectedAssetIds(current => new Set(current).add(assetId));
+  };
+
   // Submit final approval
   const handleApproveProfile = async () => {
+    if (!crawlRunId) {
+      setApprovalMutation('stale-session');
+      setApiError('This brand review session is no longer current. Reload the crawl before approving the profile.');
+      return;
+    }
     if (!approvalDraft.rightsAttestationChecked) {
-      setApiError('You must check and confirm the rights attestation to lock in approval.');
+      setApprovalMutation('invalid');
+      setApiError('Check the highlighted approval fields, including the rights attestation.');
       return;
     }
 
-    setLoading(true);
+    setApprovalMutation('saving');
     setApiError(null);
 
-    const payload = {
-      ...approvalDraft,
-      version: approvalDraft.version,
-      approvedBy: 'Client Manager (' + onboardingForm.brandName.trim() + ' Host)',
-      timestamp: new Date().toISOString()
-    };
-
     try {
-      const res = await fetch(`/api/brands/${activeBrand.id}/approvals`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+      const client = await createGeneratedWorkflowClient({
+        baseUrl: '/api/v0',
+        authToken: apiContext.authToken.trim()
       });
-      const json = await res.json();
-      if (json.success) {
-        setApprovalStatus({
-          submitted: true,
-          timestamp: json.data.approvedAt,
-          hash: json.data.approvalHash,
-          version: json.data.version
-        });
+      const response = await client.approveBrandProfile(
+        activeBrand.id,
+        buildCanonicalApprovalInput(approvalDraft, {
+          workspaceId: apiContext.workspaceId.trim(),
+          crawlRunId
+        })
+      );
 
-        // Trigger parent state update to reflect approved brand data
-        onUpdateBrandData({
-          ...activeBrand,
-          name: approvalDraft.name.public,
-          niche: approvalDraft.products[0]?.title || activeBrand.niche,
-          guidelines: [
-            ...approvalDraft.rules.required_phrases,
-            ...approvalDraft.rules.prohibited_phrases.map((p: string) => `PROHIBITED: Do not use "${p}"`)
-          ],
-          reviewItem: {
-            version: 'v' + json.data.version + ' (Approved)',
-            thumbnailUrl: activeBrand.reviewItem.thumbnailUrl,
-            comments: [
-              { user: 'Forge System', text: 'Brand extraction approved and synchronized with Creative Ancestry.', time: 'Just now' }
-            ],
-            status: 'Approved',
-            hash: json.data.approvalHash
-          }
-        });
-      } else {
-        setApiError(json.error || 'Failed to submit final profile approval.');
+      if (response.status !== 201) {
+        const mutation = response.status === 401
+          ? 'sign-in'
+          : response.status === 404
+          ? 'stale-session'
+          : response.status === 409
+          ? 'stale-version'
+          : response.status === 422
+          ? 'invalid'
+          : 'failed';
+        setApprovalMutation(mutation);
+        setApiError({
+          'sign-in': 'Your session expired. Sign in again before approving this profile.',
+          'stale-session': 'This brand review session is no longer current. Reload the crawl before approving the profile.',
+          'stale-version': 'The brand profile changed. Refresh the current profile version and review it again.',
+          'invalid': 'Check the highlighted approval fields and try again.',
+          'failed': 'The brand profile could not be approved. Try again.'
+        }[mutation]);
+        return;
       }
-    } catch (error) {
-      setApiError(error instanceof Error ? error.message : 'Failed to submit final profile approval.');
-    } finally {
-      setLoading(false);
+
+      const body = response.body as {
+        profile: { id: string; version: number; approvedAt: string };
+        approval: { id: string; decision: 'approve' };
+      };
+      setApprovalStatus({
+        submitted: true,
+        timestamp: body.profile.approvedAt,
+        version: body.profile.version,
+        approvalId: body.approval.id
+      });
+      setApprovalMutation('idle');
+
+      onUpdateBrandData({
+        ...activeBrand,
+        name: approvalDraft.name.public,
+        niche: approvalDraft.products[0]?.title || activeBrand.niche,
+        guidelines: [
+          ...approvalDraft.rules.required_phrases,
+          ...approvalDraft.rules.prohibited_phrases.map((p: string) => `PROHIBITED: Do not use "${p}"`)
+        ],
+        reviewItem: {
+          version: 'v' + body.profile.version + ' (Approved)',
+          thumbnailUrl: activeBrand.reviewItem.thumbnailUrl,
+          comments: [
+            { user: 'Forge System', text: 'Brand profile approval was retained with its audit record.', time: 'Just now' }
+          ],
+          status: 'Approved',
+          hash: activeBrand.reviewItem.hash
+        }
+      });
+    } catch {
+      setApprovalMutation('failed');
+      setApiError('The brand profile could not be approved. Try again.');
     }
   };
 
@@ -794,8 +964,19 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
     }));
   };
 
+  const canAdvanceWithNextCue = currentStep === 3
+    ? crawlRun?.status === 'ready' && verticalConflictResolved
+    : currentStep === 4 || currentStep === 5;
+
+  const handleNextCue = () => {
+    if (!canAdvanceWithNextCue) return;
+    setCurrentStep(current => Math.min(6, current + 1));
+  };
+
   return (
-    <div className="w-full max-w-7xl mx-auto px-6 py-6 lg:py-8 flex flex-col space-y-6" id="brand-extraction-studio-core">
+    <div className="relative min-h-dvh overflow-hidden bg-[#050507]">
+      <LiquidEtherBackground />
+      <div className="relative z-10 w-full max-w-7xl mx-auto px-6 py-6 lg:py-8 flex flex-col space-y-6" id="brand-extraction-studio-core">
       
       {/* Dynamic Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-white/5 pb-4 gap-4">
@@ -1491,6 +1672,8 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                             const isRejected = cand.status === 'rejected';
                             const isConflict = cand.status === 'conflict';
                             const isExpanded = expandedEvidenceIds[cand.id];
+                            const mutation = candidateMutations[cand.id];
+                            const isSaving = mutation?.state === 'saving';
 
                             return (
                               <div
@@ -1519,6 +1702,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                                   <div className="flex gap-1.5 font-mono text-[9px]">
                                     <button
                                       onClick={() => handleUpdateCandidateStatus(cand.id, 'rejected')}
+                                      disabled={isSaving}
                                       className={`px-2 py-1 rounded transition-colors ${
                                         isRejected ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-transparent'
                                       }`}
@@ -1527,6 +1711,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                                     </button>
                                     <button
                                       onClick={() => handleUpdateCandidateStatus(cand.id, 'approved')}
+                                      disabled={isSaving}
                                       className={`px-2 py-1 rounded transition-colors flex items-center gap-1 ${
                                         isApproved ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-transparent'
                                       }`}
@@ -1535,6 +1720,25 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                                     </button>
                                   </div>
                                 </div>
+
+                                {mutation?.state === 'saving' && (
+                                  <p role="status" className="text-[10px] text-zinc-400">Saving decision…</p>
+                                )}
+                                {mutation?.state === 'failed' && (
+                                  <p role="alert" className="text-[10px] text-amber-300">The decision could not be saved. Try again.</p>
+                                )}
+                                {mutation?.state === 'stale-session' && (
+                                  <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-2 text-[10px] text-amber-200">
+                                    <span>This review session is no longer current. Reload the crawl before changing decisions.</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => crawlRunId && startPollingCrawl(crawlRunId)}
+                                      className="rounded border border-amber-400/30 px-2 py-1 font-mono uppercase text-amber-200 hover:bg-amber-400/10"
+                                    >
+                                      Reload crawl
+                                    </button>
+                                  </div>
+                                )}
 
                                 <div className="text-left font-sans">
                                   {cand.fieldType === 'visual_identity' && typeof cand.value === 'object' && cand.value !== null && (cand.value as any).colors ? (
@@ -1551,16 +1755,47 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                                       <div className="h-3.5 w-3.5 rounded-sm border border-white/20" style={{ backgroundColor: (cand.value as any).value || '#FFFFFF' }} />
                                       <span className="text-[10px] font-mono text-zinc-300 uppercase">{(cand.value as any).role || 'color'}: <span className="text-white font-bold">{(cand.value as any).value}</span></span>
                                     </div>
-                                  ) : cand.fieldType === 'rights_asset' && typeof cand.value === 'object' && cand.value !== null ? (
-                                    <div className="grid grid-cols-3 gap-2">
-                                      {[cand.value as any].map((img: any, i: number) => (
-                                        <div key={i} className="relative rounded overflow-hidden border border-white/10 group bg-zinc-950">
-                                          <img src={img.locator} alt={img.type ?? 'Brand asset'} className="h-14 w-full object-cover" referrerPolicy="no-referrer" />
-                                          <div className="absolute inset-0 bg-black/40 flex items-end p-1">
-                                            <span className="text-[8px] font-mono text-white truncate">{img.type ?? 'Asset'}</span>
-                                          </div>
+                                  ) : ['rights_asset', 'logo', 'media_asset'].includes(cand.fieldType) ? (
+                                    <div className="space-y-3">
+                                      <div className="relative rounded-lg overflow-hidden border border-white/10 bg-zinc-950 w-36 h-28">
+                                        <img
+                                          src={(cand.value as any)?.locator || (cand.value as any)?.src || cand.displayValue}
+                                          alt={cand.field}
+                                          className="h-full w-full object-cover"
+                                          referrerPolicy="no-referrer"
+                                        />
+                                        <div className="absolute inset-0 bg-black/40 flex items-end p-1.5">
+                                          <span className="text-[8px] font-mono text-white bg-black/55 px-1 py-0.5 rounded uppercase">
+                                            {(cand.value as any)?.type || cand.fieldType}
+                                          </span>
                                         </div>
-                                      ))}
+                                      </div>
+
+                                      {/* Manual category switcher UI */}
+                                      <div className="flex items-center gap-1.5 pt-1.5 border-t border-white/5 flex-wrap">
+                                        <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">Categorize as:</span>
+                                        {(['logo', 'product', 'lifestyle', 'uncategorised'] as const).map(cat => {
+                                          const isActive = (cand.value as any)?.type === cat || 
+                                            (cand.fieldType === 'logo' && cat === 'logo') ||
+                                            (cand.fieldType === 'product' && cat === 'product') ||
+                                            (cand.fieldType === 'media_asset' && cat === 'lifestyle') ||
+                                            (cand.fieldType === 'rights_asset' && cat === 'uncategorised');
+                                          return (
+                                            <button
+                                              key={cat}
+                                              type="button"
+                                              onClick={() => handleRecategorizeImage(cand.id, cat)}
+                                              className={`px-2 py-0.5 rounded text-[9px] font-mono border transition-all ${
+                                                isActive
+                                                  ? 'bg-violet-500/20 text-violet-300 border-violet-500/30'
+                                                  : 'bg-zinc-900 border-transparent text-zinc-400 hover:text-white hover:bg-zinc-800'
+                                              }`}
+                                            >
+                                              {cat === 'uncategorised' ? 'Compliance/Uncat' : cat}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
                                     </div>
                                   ) : typeof cand.value === 'object' && cand.value !== null ? (
                                     <pre className="text-[10px] text-white leading-relaxed whitespace-pre-wrap select-all bg-black/30 border border-white/5 rounded-lg p-2 max-h-40 overflow-auto">{cand.displayValue}</pre>
@@ -1630,67 +1865,53 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                   </p>
                 </div>
 
-                {assetPack.length === 0 ? (
-                  <div className="py-16 text-center space-y-4 rounded-xl border border-dashed border-white/10 bg-zinc-950/20 max-w-lg mx-auto">
-                    <UploadCloud className="h-10 w-10 text-zinc-600 mx-auto" />
-                    <div className="space-y-1">
-                      <p className="font-mono text-sm text-zinc-400">No assets were extracted yet</p>
-                      <p className="text-xs text-zinc-500">
-                        {crawlRun?.crawlProvider && !crawlRun.crawlProvider.configured
-                          ? 'No crawl provider is configured. Attach direct uploads or configure a crawl provider to harvest brand visuals from the source site.'
-                          : 'Attach direct uploads or run a crawl to harvest brand visuals from the source site.'}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => setCurrentStep(2)}
-                      className="px-4 py-2 rounded bg-white/5 hover:bg-white/10 text-xs font-mono text-white border border-white/10"
-                    >
-                      Return to Crawl Setup
-                    </button>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    {assetPack.map((asset) => (
-                      <div
-                        key={asset.id}
-                        className="group bg-zinc-900/60 rounded-xl border border-white/5 overflow-hidden transition-all duration-300 hover:border-white/10 flex flex-col justify-between"
-                      >
-                        {/* Thumbnail / image placeholder */}
-                        <div className="relative h-28 bg-zinc-950 flex items-center justify-center overflow-hidden">
-                          <img
-                            src={asset.locator}
-                            alt={asset.name}
-                            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/60 backdrop-blur border border-white/10 text-[8px] font-mono text-zinc-400">
-                            {asset.category}
-                          </div>
-                        </div>
+                <p className="text-[10px] text-zinc-500">Remove from profile changes only the pending profile selection. Retained evidence is not deleted.</p>
+                {setupForm.assets.every(asset => asset.status !== 'clean') && (
+                  <p className="rounded-lg border border-dashed border-white/10 bg-zinc-950/20 p-3 text-xs text-zinc-500">
+                    No retained assets are available. Add a direct upload, or configure the crawl provider before harvesting source visuals.
+                  </p>
+                )}
+                <AcquiredBrandAssetsCupboard
+                  assets={setupForm.assets
+                    .filter(asset => asset.status === 'clean' && asset.artifactId)
+                    .map(asset => ({
+                      id: asset.id,
+                      artifactReference: `artifact:${asset.artifactId}` as `artifact:${string}`,
+                      name: asset.name,
+                      category: asset.category,
+                      provenance: crawlRunId ? `Crawl run ${crawlRunId}` : 'Client upload',
+                      rights: `${asset.rightsBasis} · ${asset.permittedUse}`,
+                      status: 'ready' as const,
+                      selected: selectedAssetIds.has(asset.id)
+                    }))}
+                  renderThumbnail={asset => asset.status === 'rejected' ? null : asset.selected ? (
+                    <SecureArtifactThumbnail
+                      artifactReference={asset.artifactReference}
+                      workspaceId={apiContext.workspaceId.trim()}
+                      client={artifactDownloadClient}
+                      label={asset.name}
+                      status="ready"
+                    />
+                  ) : (
+                    <SecureArtifactThumbnail label={asset.name} status="removed" />
+                  )}
+                  onAdd={() => setCurrentStep(2)}
+                  onRemove={removeFromProfile}
+                  onRestore={restoreToProfile}
+                />
 
-                        {/* Details */}
-                        <div className="p-3 space-y-1.5 text-left font-mono text-[9px] leading-tight border-t border-white/5">
-                          <p className="text-white font-sans font-medium truncate text-[10px]">{asset.name}</p>
-                          <p className="text-zinc-500">BASIS: <span className="text-zinc-300">{asset.rightsBasis}</span></p>
-                          <p className="text-zinc-500">USE: <span className="text-zinc-300">{asset.permittedUse}</span></p>
-                          
-                          <div className="pt-2 flex justify-between items-center text-[8px]">
-                            <span className="text-emerald-400 bg-emerald-500/5 px-1.5 py-0.5 rounded border border-emerald-500/10 uppercase font-semibold">
-                              CLEAN
-                            </span>
-                            <a
-                              href={asset.locator}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-zinc-500 hover:text-white flex items-center gap-1 font-mono"
-                            >
-                              Open <ExternalLink className="h-3 w-3" />
-                            </a>
-                          </div>
+                {assetPack.length > 0 && (
+                  <section aria-labelledby="source-asset-candidates" className="rounded-xl border border-white/5 bg-zinc-950/30 p-4">
+                    <h5 id="source-asset-candidates" className="text-xs font-mono uppercase tracking-wider text-zinc-400">Source candidates not retained</h5>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {assetPack.map(asset => (
+                        <div key={asset.id} className="rounded-lg border border-white/5 bg-white/[0.02] p-3 text-xs text-zinc-400">
+                          <p className="font-medium text-zinc-200">{asset.name}</p>
+                          <p className="mt-1">{asset.category} · Candidate evidence only</p>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  </section>
                 )}
 
                 <div className="flex justify-between pt-4">
@@ -1718,7 +1939,7 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                 <div>
                   <h4 className="text-lg font-display text-white font-medium">Approved Brand Profile Constructor</h4>
                   <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
-                    Verify and modify approved fields prior to cryptographic lineage commitment. Once approved, downstream video generators refer exclusively to these parameters.
+                    Verify and modify approved fields before retaining a new approved profile version. Downstream video generators use only the active approved version.
                   </p>
                 </div>
 
@@ -1979,64 +2200,272 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                       
                       <button
                         onClick={handleApproveProfile}
-                        disabled={loading || !approvalDraft.rightsAttestationChecked || !approvalDraft.reviewerSignature || !approvalDraft.name.public}
+                        disabled={approvalMutation === 'saving'}
                         className="px-6 py-2.5 rounded-lg text-xs font-mono tracking-wider uppercase font-semibold text-black transition-all hover:opacity-90 disabled:opacity-30 flex items-center gap-1.5 shadow"
                         style={{ backgroundColor: activeBrand.primaryColor }}
                         id="submit-final-approval-btn"
                       >
-                        {loading ? 'Submitting approval...' : 'Submit Brand Approval'} <CheckCircle className="h-4 w-4" />
+                        {approvalMutation === 'saving' ? 'Submitting approval...' : 'Submit Brand Approval'} <CheckCircle className="h-4 w-4" />
                       </button>
                     </div>
 
                   </div>
                 ) : (
-                  // Approval Success Card
+                  // Approval Success Card Redesign
                   <motion.div
                     initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}
-                    className="py-12 text-center space-y-6 max-w-lg mx-auto"
+                    className="py-6 space-y-6 w-full text-left"
                   >
-                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
-                      <CheckCircle2 className="h-8 w-8 animate-pulse" />
-                    </div>
-
-                    <div className="space-y-2">
-                      <h4 className="text-xl font-display font-medium text-white">Brand Profile Approved & Synchronized</h4>
-                      <p className="text-sm text-zinc-400 max-w-sm mx-auto leading-relaxed">
-                        The approved parameters for <strong className="text-white">{approvalDraft.name.public}</strong> have been cryptographically bound as version <strong className="text-white">v{approvalStatus.version}</strong>.
-                      </p>
-                    </div>
-
-                    {/* Evidence Sync Card */}
-                    <div className="p-4 bg-zinc-950/60 rounded-xl border border-white/5 text-left font-mono text-[10px] space-y-2 max-w-md mx-auto">
-                      <div className="flex justify-between text-zinc-500 uppercase border-b border-white/5 pb-1.5">
-                        <span>Creative Ancestry ledger sync</span>
-                        <span className="text-emerald-400">STATUS: OK</span>
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                          <CheckCircle2 className="h-6 w-6 animate-pulse" />
+                        </div>
+                        <div>
+                          <h4 className="text-xl font-display font-medium text-white">Brand Profile Approved & Synchronized</h4>
+                          <p className="text-xs text-zinc-400">
+                            Version <strong className="text-white">v{approvalStatus.version}</strong> saved as the downstream production standard for ad/reel generation.
+                          </p>
+                        </div>
                       </div>
-                      <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Approval Stamp:</span> <span className="text-white">{approvalStatus.timestamp}</span></p>
-                      <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Cryptographic Hash:</span> <span className="text-zinc-300 select-all">{approvalStatus.hash}</span></p>
-                      <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Signatory:</span> <span className="text-white italic">{approvalDraft.reviewerSignature}</span></p>
+                      
+                      <div className="flex gap-3">
+                        <button
+                          onClick={() => {
+                            setApprovalStatus({ submitted: false, timestamp: null, approvalId: null, version: null });
+                            setApprovalMutation('idle');
+                            setApprovalDraft(prev => ({ ...prev, rightsAttestationChecked: false, reviewerSignature: '' }));
+                            setCurrentStep(1);
+                          }}
+                          className="px-4 py-2.5 rounded-lg border border-white/10 bg-white/2 hover:bg-white/5 text-xs font-mono text-zinc-300 hover:text-white"
+                        >
+                          Recrawl Website
+                        </button>
+                        <button
+                          onClick={onProceedWorkflow}
+                          className="px-6 py-2.5 rounded-lg text-xs font-mono font-semibold text-black uppercase tracking-wider transition-all hover:opacity-90 active:scale-95 flex items-center gap-1.5"
+                          style={{ backgroundColor: activeBrand.primaryColor }}
+                          id="proceed-video-workflow-btn"
+                        >
+                          Launch Video Pipeline <ArrowRight className="h-4 w-4" />
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="pt-4 flex gap-4 justify-center">
-                      <button
-                        onClick={() => {
-                          setApprovalStatus({ submitted: false, timestamp: null, hash: null, version: null });
-                          setApprovalDraft(prev => ({ ...prev, rightsAttestationChecked: false, reviewerSignature: '' }));
-                          setCurrentStep(1);
-                        }}
-                        className="px-4 py-2.5 rounded-lg border border-white/10 bg-white/2 hover:bg-white/5 text-xs font-mono text-zinc-300 hover:text-white"
-                      >
-                        Recrawl Brand Website
-                      </button>
-                      <button
-                        onClick={onProceedWorkflow}
-                        className="px-6 py-2.5 rounded-lg text-xs font-mono font-semibold text-black uppercase tracking-wider transition-all hover:opacity-90 active:scale-95 flex items-center gap-1.5"
-                        style={{ backgroundColor: activeBrand.primaryColor }}
-                        id="proceed-video-workflow-btn"
-                      >
-                        Launch Video Pipeline <ArrowRight className="h-4 w-4" />
-                      </button>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      {/* COLUMN 1: Visual Identity & Creative Ingredients */}
+                      <div className="space-y-4">
+                        
+                        {/* Core Identity */}
+                        <div className="rounded-xl border border-white/5 bg-zinc-950/40 p-4 space-y-2">
+                          <span className="block text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Brand Identity</span>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight">Public Name</span>
+                              <span className="text-sm font-semibold text-white">{approvalDraft.name.public}</span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight">Industry / Niche</span>
+                              <span className="text-sm font-semibold text-white capitalize">{approvalDraft.industry}</span>
+                            </div>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-zinc-400 block leading-tight">Target Markets</span>
+                            <span className="text-xs text-zinc-300 font-mono">{approvalDraft.markets?.join(', ') || 'Global'}</span>
+                          </div>
+                        </div>
+
+                        {/* Visual Identity */}
+                        <div className="rounded-xl border border-white/5 bg-zinc-950/40 p-4 space-y-3">
+                          <span className="block text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Visual identity</span>
+                          
+                          {/* Logos Shelf */}
+                          <div className="space-y-1.5">
+                            <span className="text-[10px] text-zinc-400 block leading-tight">Approved Logos</span>
+                            <div className="flex flex-wrap gap-3">
+                              {approvalDraft.visual_identity.logos?.length > 0 ? (
+                                approvalDraft.visual_identity.logos.map((logo: string, idx: number) => {
+                                  const isArtifact = logo.startsWith("artifact:");
+                                  return (
+                                    <div key={idx} className="relative rounded-lg overflow-hidden border border-white/10 bg-zinc-950 w-24 h-20 flex items-center justify-center">
+                                      {isArtifact ? (
+                                        <SecureArtifactThumbnail
+                                          artifactReference={logo as `artifact:${string}`}
+                                          workspaceId={apiContext.workspaceId.trim()}
+                                          client={artifactDownloadClient}
+                                          label={`Approved Logo ${idx + 1}`}
+                                          status="ready"
+                                        />
+                                      ) : (
+                                        <img src={logo} alt={`Approved Logo ${idx + 1}`} className="h-full w-full object-contain p-1" referrerPolicy="no-referrer" />
+                                      )}
+                                    </div>
+                                  );
+                                })
+                              ) : (
+                                <span className="text-xs text-zinc-500 italic">No approved logos attached.</span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Swatches */}
+                          <div className="space-y-1.5 pt-1.5">
+                            <span className="text-[10px] text-zinc-400 block leading-tight">Color Palette</span>
+                            <div className="flex flex-wrap gap-2">
+                              {approvalDraft.visual_identity.colors?.map((col: any, idx: number) => (
+                                <div key={idx} className="flex items-center gap-1.5 bg-zinc-900/60 p-1.5 px-2.5 border border-white/5 rounded-lg">
+                                  <div className="h-4 w-4 rounded border border-white/20" style={{ backgroundColor: col.value }} />
+                                  <div className="leading-none flex flex-col">
+                                    <span className="text-[9px] font-mono text-zinc-400 uppercase">{col.role}</span>
+                                    <span className="text-[10px] font-mono text-white font-bold">{col.value}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Other Approved Media Assets */}
+                          {approvalDraft.visual_identity.media_assets && approvalDraft.visual_identity.media_assets.length > 0 && (
+                            <div className="space-y-1.5 pt-2">
+                              <span className="text-[10px] text-zinc-400 block leading-tight">Other Approved Images</span>
+                              <div className="flex flex-wrap gap-2">
+                                {approvalDraft.visual_identity.media_assets.map((m: any, idx: number) => {
+                                  const isArtifact = m.locator.startsWith("artifact:");
+                                  return (
+                                    <div key={idx} className="relative rounded-lg overflow-hidden border border-white/10 bg-zinc-950 w-20 h-16 flex items-center justify-center" title={`Category: ${m.category}`}>
+                                      {isArtifact ? (
+                                        <SecureArtifactThumbnail
+                                          artifactReference={m.locator as `artifact:${string}`}
+                                          workspaceId={apiContext.workspaceId.trim()}
+                                          client={artifactDownloadClient}
+                                          label={`Media ${idx + 1}`}
+                                          status="ready"
+                                        />
+                                      ) : (
+                                        <img src={m.locator} alt={`Media ${idx + 1}`} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Core Positioning */}
+                        <div className="rounded-xl border border-white/5 bg-zinc-950/40 p-4 space-y-2">
+                          <span className="block text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Core Positioning</span>
+                          <blockquote className="border-l-2 pl-3 py-1 text-sm text-zinc-200 italic" style={{ borderColor: activeBrand.primaryColor }}>
+                            "{approvalDraft.positioning.statement}"
+                          </blockquote>
+                          
+                          {approvalDraft.positioning.differentiators?.length > 0 && (
+                            <div className="pt-2 space-y-1">
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">USPs / Differentiators</span>
+                              <ul className="list-disc list-inside text-xs text-zinc-300 space-y-1">
+                                {approvalDraft.positioning.differentiators.map((diff: string, idx: number) => (
+                                  <li key={idx} className="truncate">{diff}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* COLUMN 2: Voice Guidelines & Reel Rules */}
+                      <div className="space-y-4">
+                        
+                        {/* Voice & Personality */}
+                        <div className="rounded-xl border border-white/5 bg-zinc-950/40 p-4 space-y-3">
+                          <span className="block text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Voice & Personality</span>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">Formality Level</span>
+                              <span className="text-xs font-semibold text-white capitalize">{approvalDraft.voice.formality}</span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">Languages</span>
+                              <span className="text-xs font-semibold text-white">{approvalDraft.voice.languages?.join(', ') || 'English'}</span>
+                            </div>
+                          </div>
+                          
+                          {approvalDraft.voice.attributes?.length > 0 && (
+                            <div className="space-y-1.5">
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">Tone Attributes</span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {approvalDraft.voice.attributes.map((attr: string) => (
+                                  <span key={attr} className="px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-[10px] text-zinc-300">
+                                    {attr}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Products, Target Audience & CTAs */}
+                        <div className="rounded-xl border border-white/5 bg-zinc-950/40 p-4 space-y-3">
+                          <span className="block text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Offerings & CTAs</span>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">Active Products</span>
+                              <div className="space-y-1">
+                                {approvalDraft.products?.map((p: any, idx: number) => (
+                                  <span key={idx} className="block text-xs text-white font-medium truncate">{p.title}</span>
+                                ))}
+                              </div>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">Approved CTAs</span>
+                              <div className="space-y-1">
+                                {approvalDraft.calls_to_action?.map((c: any, idx: number) => (
+                                  <span key={idx} className="block text-xs text-white font-medium truncate">{c.label}</span>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Rules & Claims */}
+                        <div className="rounded-xl border border-white/5 bg-zinc-950/40 p-4 space-y-3">
+                          <span className="block text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Reel Guardrails & Compliance</span>
+                          
+                          {approvalDraft.rules.required_phrases?.length > 0 && (
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">Required Phrases</span>
+                              <div className="space-y-1">
+                                {approvalDraft.rules.required_phrases.map((p: string, idx: number) => (
+                                  <span key={idx} className="block text-xs text-zinc-300 font-mono">• "{p}"</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {approvalDraft.rules.prohibited_phrases?.length > 0 && (
+                            <div>
+                              <span className="text-[10px] text-red-400 block leading-tight font-semibold">Prohibited Phrases</span>
+                              <div className="space-y-1">
+                                {approvalDraft.rules.prohibited_phrases.map((p: string, idx: number) => (
+                                  <span key={idx} className="block text-xs text-red-300 font-mono">• "{p}"</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Creative Ancestry Ledger */}
+                        <div className="p-4 bg-zinc-950/60 rounded-xl border border-white/5 text-left font-mono text-[10px] space-y-2">
+                          <div className="flex justify-between text-zinc-500 uppercase border-b border-white/5 pb-1.5">
+                            <span>Creative Ancestry ledger sync</span>
+                            <span className="text-emerald-400">STATUS: SYNCHRONIZED</span>
+                          </div>
+                          <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Approval Stamp:</span> <span className="text-white">{approvalStatus.timestamp}</span></p>
+                          <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Approval Record:</span> <span className="text-zinc-300 select-all">{approvalStatus.approvalId}</span></p>
+                          <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Signatory:</span> <span className="text-white italic">{approvalDraft.reviewerSignature}</span></p>
+                        </div>
+
+                      </div>
                     </div>
                   </motion.div>
                 )}
@@ -2206,6 +2635,14 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
       </div>
 
+      <div className="sticky bottom-4 z-20 flex justify-end">
+        <MagneticNextCue
+          disabled={!canAdvanceWithNextCue}
+          onClick={handleNextCue}
+        />
+      </div>
+
+      </div>
     </div>
   );
 }

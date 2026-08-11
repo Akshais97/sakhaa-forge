@@ -1,5 +1,5 @@
 /** @type {import('next').NextConfig} */
-const v0ApiBaseUrl = (process.env.V0_API_BASE_URL ?? "http://localhost:3001").replace(/\/$/, "");
+const v0ApiBaseUrl = (process.env.V0_API_BASE_URL ?? "http://127.0.0.1:3003").replace(/\/$/, "");
 
 const nextConfig = {
   async rewrites() {

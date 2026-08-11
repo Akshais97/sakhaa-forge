@@ -222,7 +222,13 @@ The query parameter is refresh-safe state only; signed URLs, provider IDs that g
 access, raw Firecrawl payloads and worker lease tokens are never placed in the URL.
 Branding routes show universal candidate groups before vertical candidate groups, preserve
 selected/detected brand-type conflicts as review state and never present crawled assets as
-approved production assets before V0-B3 approval.
+approved production assets before V0-B3 approval. The brand review sequence contains an
+Acquired brand assets card between candidate review and final profile approval. Its
+horizontally scrollable cupboard lists retained clean files with provenance and rights,
+while source-only or rejected candidates remain in a separate evidence section. Add and
+Remove from profile actions change only the pending profile selection; retained evidence is
+not deleted. Opaque `artifact:{id}` references are identifiers, not browser URLs, and must
+be exchanged through the authorised artifact-download contract before media rendering.
 
 ## 9. Object Detail URLs and Breadcrumbs
 

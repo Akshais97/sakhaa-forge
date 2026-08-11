@@ -74,6 +74,8 @@ test("brand-extract frontend exposes required crawl controls and validation", as
   assert.match(studio, /type="file"/);
   assert.match(studio, /initiateBrandAssetUpload/);
   assert.match(studio, /completeBrandAssetUpload/);
+  assert.match(studio, /body:\s*file/);
+  assert.match(studio, /listBrandAssets/);
   assert.match(studio, /sha256File/);
 });
 
@@ -115,6 +117,45 @@ test("brand-extract generated client binds browser fetch before passing it to V0
 
   assert.match(actions, /globalThis\.fetch\.bind\(globalThis\)/);
   assert.match(actions, /fetchImpl:\s*boundFetchImpl/);
+});
+
+test("brand-extract candidate decisions remain pending until the generated client confirms them", async () => {
+  const studio = await readFile("apps/web/app/brand-extract/_components/components/BrandExtractionStudio.tsx", "utf8");
+
+  assert.match(studio, /client\.updateBrandCandidateDecision\(crawlRunId, candidateId, \{ status \}\)/);
+  assert.doesNotMatch(studio, /Optimistically update/);
+  assert.match(studio, /setCandidateMutation\(\{ candidateId, state: ['"]saving['"] \}\)/);
+  assert.match(studio, /['"]stale-session['"]/);
+  assert.match(studio, /This review session is no longer current\. Reload the crawl before changing decisions\./);
+  assert.match(studio, /startPollingCrawl\(crawlRunId\)/);
+});
+
+test("brand-extract approval uses canonical server truth and does not invent a cryptographic hash", async () => {
+  const studio = await readFile("apps/web/app/brand-extract/_components/components/BrandExtractionStudio.tsx", "utf8");
+
+  assert.match(studio, /client\.approveBrandProfile/);
+  assert.match(studio, /response\.status !== 201/);
+  assert.doesNotMatch(studio, /approvalHash/);
+  assert.doesNotMatch(studio, /cryptographically bound/i);
+  assert.match(studio, /body\.approval\.id/);
+});
+
+test("brand-extract live asset review uses the controlled secure cupboard", async () => {
+  const studio = await readFile("apps/web/app/brand-extract/_components/components/BrandExtractionStudio.tsx", "utf8");
+
+  assert.match(studio, /AcquiredBrandAssetsCupboard/);
+  assert.match(studio, /SecureArtifactThumbnail/);
+  assert.match(studio, /Remove from profile/);
+  assert.match(studio, /Retained evidence is not deleted/);
+  assert.doesNotMatch(studio, /src=\{asset\.locator\}/);
+  assert.doesNotMatch(studio, /href=\{asset\.locator\}/);
+});
+
+test("brand creation does not reset an in-flight crawl back to onboarding", async () => {
+  const studio = await readFile("apps/web/app/brand-extract/_components/components/BrandExtractionStudio.tsx", "utf8");
+
+  assert.match(studio, /continuingBrandIdRef/);
+  assert.match(studio, /continuingBrandIdRef\.current === activeBrand\.id/);
 });
 
 test("brand-extract studio is an explicit interactive client component", async () => {

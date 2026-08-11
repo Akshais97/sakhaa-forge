@@ -1,3 +1,4 @@
+import { useRouter } from 'next/navigation';
 import { motion } from 'motion/react';
 import { ArrowUpRight, Activity } from 'lucide-react';
 import { BrandData } from '../types';
@@ -10,6 +11,12 @@ interface HeaderProps {
 }
 
 export default function Header({ brands, activeBrand, onSelectBrand, onRequestAccess }: HeaderProps) {
+  const router = useRouter();
+
+  const handleAccess = () => {
+    router.push('/sign-in');
+  };
+
   return (
     <header className="shrink-0 z-40 w-full border-b border-white/5 bg-zinc-950/80 backdrop-blur-xl px-5 py-3 flex items-center justify-between" id="app-header">
       {/* Left logo & Brand tag */}
@@ -89,7 +96,7 @@ export default function Header({ brands, activeBrand, onSelectBrand, onRequestAc
         </div>
 
         <button
-          onClick={onRequestAccess}
+          onClick={handleAccess}
           className="relative overflow-hidden group rounded-lg px-4 py-2 text-xs font-mono tracking-widest uppercase transition-all duration-300 hover:shadow-lg hover:shadow-white/5 flex items-center gap-1.5 border border-white/15 text-white bg-white/5 hover:bg-white/15"
           style={{
             borderColor: `${activeBrand.primaryColor}22`

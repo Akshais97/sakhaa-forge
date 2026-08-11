@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server.js';
 
 export const runtime = 'nodejs';
 
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const apiBaseUrl = `${(process.env.V0_API_BASE_URL || 'http://localhost:3001').replace(/\/$/, '')}/api/v0`;
+  const apiBaseUrl = `${(process.env.V0_API_BASE_URL || 'http://127.0.0.1:3003').replace(/\/$/, '')}/api/v0`;
   const claimed = await postWorker(apiBaseUrl, `/internal/jobs/${encodeURIComponent(input.jobId)}/claim`, {
     resourceClass: 'CPU'
   });

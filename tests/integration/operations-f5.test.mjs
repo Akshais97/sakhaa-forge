@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import { V0Client } from "../../packages/contracts/generated/v0-client.mjs";
-import { withApiServer } from "../helpers/server.mjs";
+import { uploadInitiatedArtifact, withApiServer } from "../helpers/server.mjs";
 
 const jwtSecret = "test-supabase-jwt-secret";
 const workerToken = "test-worker-token";
@@ -113,14 +113,15 @@ test("simulator mode, restore drill and redaction scan are protected local opera
           workspaceId,
           fileName: "ops.mp4",
           contentType: "video/mp4",
-          byteSize: 9,
+          byteSize: Buffer.byteLength("ops-source"),
           sha256: sourceHash
         },
         { idempotencyKey: "f5-ops-source" }
       );
+      await uploadInitiatedArtifact(baseUrl, source, "ops-source");
       await client.completeBrandAssetUpload(source.body.artifact.id, {
         workspaceId,
-        byteSize: 9,
+        byteSize: Buffer.byteLength("ops-source"),
         sha256: sourceHash
       });
 
@@ -156,20 +157,22 @@ async function createCleanSourceAndJob(baseUrl, { idSuffix, maxAttempts = undefi
     { idempotencyKey: `f5-create-${idSuffix}` }
   );
   const workspaceId = created.body.workspace.id;
-  const sourceHash = sha256(`source-video-${idSuffix}`);
+  const sourceBytes = `source-video-${idSuffix}`;
+  const sourceHash = sha256(sourceBytes);
   const source = await client.initiateBrandAssetUpload(
     {
       workspaceId,
       fileName: `source-${idSuffix}.mp4`,
       contentType: "video/mp4",
-      byteSize: 12,
+      byteSize: Buffer.byteLength(sourceBytes),
       sha256: sourceHash
     },
     { idempotencyKey: `f5-source-${idSuffix}` }
   );
+  await uploadInitiatedArtifact(baseUrl, source, sourceBytes);
   await client.completeBrandAssetUpload(source.body.artifact.id, {
     workspaceId,
-    byteSize: 12,
+    byteSize: Buffer.byteLength(sourceBytes),
     sha256: sourceHash
   });
   const started = await client.startSimulatedMediaProcessing(

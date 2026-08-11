@@ -15,3 +15,14 @@ export async function withApiServer(env, testFn) {
     await app.close();
   }
 }
+
+export async function uploadInitiatedArtifact(baseUrl, initiated, bytes) {
+  const body = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  const response = await fetch(new URL(initiated.body.upload.url, baseUrl), {
+    method: initiated.body.upload.method,
+    headers: initiated.body.upload.headers,
+    body
+  });
+  if (!response.ok) throw new Error(`Artifact upload failed: ${response.status} ${await response.text()}`);
+  return response;
+}

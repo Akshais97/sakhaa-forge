@@ -33,6 +33,11 @@ implementation mapping is `V0_PRISMA_SCHEMA.md`. Product V2's separate model rem
 
 ## Brand Intelligence
 
+- `Brand`: the stable, workspace-owned identity for one recognizable customer brand. It
+  owns the display name, slug, canonical website and normalized domain used to resolve
+  repeat crawls. Crawl runs, retained assets, candidates and approved profiles carry its
+  `brand_id`; downstream video work consumes an exact approved profile belonging to this
+  identity rather than an unrelated UUID.
 - `BrandProfile`: immutable versioned approved brand memory. One active approved profile
   version is allowed per workspace/brand; corrections create a later version and
   supersede the previous active one for new production use.
@@ -46,8 +51,10 @@ implementation mapping is `V0_PRISMA_SCHEMA.md`. Product V2's separate model rem
   product/service/project, social proof, voice, positive claim, prohibited-claim,
   publishing/social, retained-asset or selected/detected vertical-conflict fact with
   confidence, extraction state and source evidence. Candidates remain unapproved until B3.
-- `BrandAsset`: uploaded or approved media linked to a clean `Artifact` with retained
-  rights basis, permitted use and usage status.
+- `BrandAsset`: uploaded or approved media linked to a `Brand` and a clean `Artifact` with
+  retained rights basis, permitted use and usage status. A manual library upload may exist
+  before a crawl (`crawl_run_id` is nullable); a crawl-retained asset carries both brand and
+  crawl lineage. Browser responses never expose its private object key.
 - `BrandApproval`: append-only actor decision that activates, rejects or requests changes
   for an exact profile/version and records actor, timestamp and reason.
 - `BrandRule`: approved claim, required phrase, prohibited term or visual restriction

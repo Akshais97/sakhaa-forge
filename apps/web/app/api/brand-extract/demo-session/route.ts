@@ -1,5 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto';
-import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server.js';
 
 export const runtime = 'nodejs';
 
@@ -47,7 +47,7 @@ export async function POST() {
   }
 
   const secret = process.env.SUPABASE_JWT_SECRET || LOCAL_DEV_JWT_SECRET;
-  const apiBaseUrl = `${(process.env.V0_API_BASE_URL || 'http://localhost:3001').replace(/\/$/, '')}/api/v0`;
+  const apiBaseUrl = `${(process.env.V0_API_BASE_URL || 'http://127.0.0.1:3003').replace(/\/$/, '')}/api/v0`;
   const userId = `brand-extract-demo-${randomUUID()}`;
   const expiresAtSeconds = Math.floor(Date.now() / 1000) + 60 * 60;
   const authToken = signLocalJwt(secret, userId, expiresAtSeconds);

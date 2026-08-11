@@ -3,9 +3,57 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
   adaptBrandCrawlRunResponse,
+  buildCanonicalApprovalInput,
   buildApprovalDraftFromCandidates,
   shouldCompleteCrawlWithLocalDemo
 } from "../../apps/web/app/brand-extract/_components/candidate-adapter.ts";
+
+test("approval drafts map to the exact canonical B3 approval input", () => {
+  const draft = baseApprovalDraft();
+  draft.name.public = "Aster Heights";
+  draft.industry = "real_estate";
+  draft.markets = ["Bengaluru"];
+  draft.positioning.statement = "Premium practical homes.";
+  draft.products = [{ title: "Aster Heights", description: "Residential project", pricing: "On request" }];
+  draft.audiences = [{ name: "Urban families", needs: "Practical homes", objections: "Trust" }];
+  draft.calls_to_action = ["Book a site visit"];
+  draft.voice.attributes = ["calm"];
+  draft.voice.languages = ["en-IN"];
+  draft.visual_identity.logos = ["artifact:f33971d6-61aa-4d42-8ce1-58d00cdd15cd"];
+  draft.claims = [{ statement: "Guaranteed appreciation", status: "prohibited", evidence_artifact: "", required_disclaimer: "", allowed_channels: [] }];
+  draft.rules.required_phrases = ["Terms apply"];
+  draft.rules.prohibited_phrases = ["Guaranteed appreciation"];
+  draft.rules.required_disclosures = ["Availability may change"];
+  draft.rightsAttestationChecked = true;
+  draft.version = "1.0.0";
+
+  const payload = buildCanonicalApprovalInput(draft, { workspaceId: "workspace-a", crawlRunId: "crawl-a" });
+
+  assert.deepEqual(payload, {
+    workspaceId: "workspace-a",
+    crawlRunId: "crawl-a",
+    decision: "approve",
+    optimisticVersion: 0,
+    profile: {
+      publicName: "Aster Heights",
+      industry: "real_estate",
+      markets: ["Bengaluru"],
+      positioningStatement: "Premium practical homes.",
+      products: draft.products,
+      audiences: draft.audiences,
+      callsToAction: draft.calls_to_action,
+      voice: { attributes: ["calm"], avoid: [], formality: "balanced", languages: ["en-IN"] },
+      visualIdentity: draft.visual_identity,
+      claims: draft.claims,
+      rightsAttestation: true
+    },
+    rules: [
+      { type: "required_phrase", value: "Terms apply", severity: "warning", rationale: "Approved brand phrase." },
+      { type: "prohibited_phrase", value: "Guaranteed appreciation", severity: "critical", rationale: "Prohibited by approved brand rules." },
+      { type: "required_disclosure", value: "Availability may change", severity: "critical", rationale: "Required approved disclosure." }
+    ]
+  });
+});
 
 test("local demo completion only owns simulator crawl jobs", () => {
   assert.equal(

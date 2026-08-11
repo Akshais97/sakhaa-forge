@@ -135,7 +135,7 @@ async function prepareSceneInput(client) {
     },
     { idempotencyKey: `p4-crawl-${randomUUID()}` }
   );
-  const approved = await client.approveBrandProfile(randomUUID(), approvalPayload(workspaceId, crawl.body.crawlRun.id, 0));
+  const approved = await client.approveBrandProfile(crawl.body.brand.id, approvalPayload(workspaceId, crawl.body.crawlRun.id, 0));
   const request = await client.createBlueprintRequest({
     workspaceId,
     brandProfileId: approved.body.profile.id,

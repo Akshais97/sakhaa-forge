@@ -61,6 +61,7 @@ No other browser variable is permitted without updating this catalog.
 |---|---|---|---|---|---|---|
 | `DATABASE_URL` | API/queue | restricted pooled PostgreSQL URL | Yes | all | Secret | Fail; `OPS/SEC` |
 | `DIRECT_DATABASE_URL` | migration | direct migration-owner URL | Migration only | all | Secret | Migration fails |
+| `V0_RUNTIME_DB` | API | enum `memory,prisma` | Yes | all | Internal | local/test `memory`; staging/production must be `prisma` and fail closed otherwise |
 | `SUPABASE_URL` | API | absolute URL | Yes | all | Internal | Fail |
 | `SUPABASE_JWT_ISSUER` | API | absolute issuer URL | Yes | all | Internal | Fail |
 | `SUPABASE_JWT_AUDIENCE` | API | non-empty audience | Yes | all | Internal | Fail |

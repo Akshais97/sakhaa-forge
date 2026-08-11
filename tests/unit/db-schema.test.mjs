@@ -143,6 +143,24 @@ test("B1 Prisma schema and migration define brand crawl runs and brand asset rig
   assert.doesNotMatch(migration, /BYPASSRLS/i);
 });
 
+test("brand identity migration owns crawl, candidate, asset and approved profile lineage", async () => {
+  const schema = await readFile("packages/db/prisma/schema.prisma", "utf8");
+  const migration = await readFile(
+    "packages/db/prisma/migrations/0034_v0_brand_entity_and_asset_ownership/migration.sql",
+    "utf8"
+  );
+
+  assert.match(schema, /model Brand \{/);
+  assert.match(schema, /normalizedDomain\s+String\s+@map\("normalized_domain"\)/);
+  assert.match(schema, /brandId\s+String\s+@map\("brand_id"\) @db\.Uuid/);
+  assert.match(schema, /crawlRunId\s+String\?\s+@map\("crawl_run_id"\) @db\.Uuid/);
+  assert.match(migration, /CREATE TABLE brands/);
+  assert.match(migration, /ALTER TABLE brand_crawl_runs ADD COLUMN brand_id UUID/);
+  assert.match(migration, /ALTER TABLE brand_assets ALTER COLUMN crawl_run_id DROP NOT NULL/);
+  assert.match(migration, /CREATE POLICY brands_workspace_isolation/);
+  assert.doesNotMatch(migration, /BYPASSRLS/i);
+});
+
 test("B2 Prisma schema and migration define evidence-backed brand candidates with RLS", async () => {
   const schema = await readFile("packages/db/prisma/schema.prisma", "utf8");
   const migration = await readFile(

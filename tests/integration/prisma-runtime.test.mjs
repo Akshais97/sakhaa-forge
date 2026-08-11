@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { V0Client } from "../../packages/contracts/generated/v0-client.mjs";
 import { loadApiEnv } from "../helpers/env.mjs";
-import { withApiServer } from "../helpers/server.mjs";
+import { uploadInitiatedArtifact, withApiServer } from "../helpers/server.mjs";
 import { prepareReadyTournament, prepareApprovedBrand } from "../helpers/script-tournament-fixtures.mjs";
 import { prepareRenderedFinalVideo, prepareApprovedFinalVideo } from "../helpers/review-fixtures.mjs";
 import { prepareCompleteApprovedFinalVideo } from "../helpers/lineage-fixtures.mjs";
@@ -85,20 +85,22 @@ test("prisma runtime persists workspace and idempotency records in Supabase", {
 
       assert.equal(persisted, "1");
 
-      const hash = sha256(`runtime-artifact-${userId}`);
+      const artifactBytes = `runtime-artifact-${userId}`;
+      const hash = sha256(artifactBytes);
       const initiated = await client.initiateBrandAssetUpload(
         {
           workspaceId: created.body.workspace.id,
           fileName: "runtime-logo.png",
           contentType: "image/png",
-          byteSize: 32,
+          byteSize: Buffer.byteLength(artifactBytes),
           sha256: hash
         },
         { idempotencyKey: `runtime-artifact-${userId}` }
       );
+      await uploadInitiatedArtifact(baseUrl, initiated, artifactBytes);
       const completed = await client.completeBrandAssetUpload(initiated.body.artifact.id, {
         workspaceId: created.body.workspace.id,
-        byteSize: 32,
+        byteSize: Buffer.byteLength(artifactBytes),
         sha256: hash
       });
       const download = await client.createArtifactDownload(initiated.body.artifact.id, {

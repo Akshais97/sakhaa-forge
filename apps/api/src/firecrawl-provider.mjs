@@ -946,14 +946,14 @@ function buildUniversalProfile({ crawlRun, baseUrl, responses }) {
     crawl_date: new Date().toISOString(),
     detected_vertical: detectBrandType({ metadata: { schema_org_type: schemaType, vertical_signals: homepageJson.vertical_signals ?? [] } }),
     visual_identity: {
-      logo_url: branding.images?.logo ?? branding.logo ?? homepageJson.logo_url ?? null,
-      favicon_url: branding.images?.favicon ?? branding.favicon ?? homepageJson.favicon_url ?? null,
-      og_image_url: branding.images?.ogImage ?? branding.ogImage ?? homepageJson.og_image_url ?? null,
+      logo_url: firstPublicAssetLocator(branding.images?.logo, branding.logo, homepageJson.logo_url),
+      favicon_url: firstPublicAssetLocator(branding.images?.favicon, branding.favicon, homepageJson.favicon_url),
+      og_image_url: firstPublicAssetLocator(branding.images?.ogImage, branding.ogImage, homepageJson.og_image_url),
       colors: normalizeUniversalColors(branding.colors ?? branding.palette ?? {}),
       typography: normalizeUniversalTypography(branding.typography ?? {}),
       color_scheme: branding.colorScheme ?? null,
       hero_screenshot_url: screenshotAt(homepage, 0),
-      full_page_screenshot_url: homepage.formatScreenshot ?? null,
+      full_page_screenshot_url: normalizePublicAssetLocator(homepage.formatScreenshot),
       downloaded_images: collectDownloadedImages(responses, homepageJson)
     },
     copy_messaging: {
@@ -1058,7 +1058,7 @@ function normaliseScrapePayload(payload) {
     markdown: typeof data?.markdown === "string" ? data.markdown : "",
     text: typeof data?.text === "string" && data.text.trim() ? data.text : typeof data?.markdown === "string" ? data.markdown : "",
     links: Array.isArray(data?.links) ? data.links.filter((item) => typeof item === "string") : [],
-    images: Array.isArray(data?.images) ? data.images.filter((item) => typeof item === "string") : [],
+    images: Array.isArray(data?.images) ? data.images.map(normalizePublicAssetLocator).filter(Boolean) : [],
     language: metadata.language ?? null,
     rawHtml: typeof data?.rawHtml === "string" ? data.rawHtml : "",
     screenshots: Array.isArray(data?.actions?.screenshots)
@@ -1066,7 +1066,7 @@ function normaliseScrapePayload(payload) {
       : Array.isArray(data?.screenshots)
         ? data.screenshots
         : [],
-    formatScreenshot: typeof data?.screenshot === "string" ? data.screenshot : null,
+    formatScreenshot: normalizePublicAssetLocator(data?.screenshot),
     branding: data?.branding ?? {},
     json: data?.json ?? data?.extract ?? {}
   };
@@ -1135,7 +1135,7 @@ function collectDownloadedImages(responses, homepageJson = {}) {
     ...responses.flatMap(({ response }) => normaliseScrapePayload(response).images.map((url) => ({ url }))),
     ...asArray(homepageJson.hero_image_urls).map((url) => ({ url, category: "hero", context: "Homepage hero" })),
     ...asArray(homepageJson.homepage_image_assets).map((asset) => typeof asset === "string" ? { url: asset } : asset)
-  ];
+  ].map((entry) => ({ ...entry, url: normalizePublicAssetLocator(entry?.url) })).filter((entry) => entry.url);
   return buildImageInventory(entries).all;
 }
 
@@ -1147,7 +1147,7 @@ function collectRightsAssets(universalProfile, verticalResponses, categoryMap = 
     universalProfile.visual_identity.full_page_screenshot_url,
     ...universalProfile.visual_identity.downloaded_images.map((image) => image.url),
     ...verticalResponses.flatMap(({ response }) => normaliseScrapePayload(response).images)
-  ].filter(Boolean);
+  ].map(normalizePublicAssetLocator).filter(Boolean);
   return uniqueValues(urls).slice(0, 50).map((locator) => ({
     type: categoryMap.get(locator) || categorizeImage(locator),
     locator,
@@ -1162,10 +1162,12 @@ function collectVerticalImageEntries(responses) {
     const page = normaliseScrapePayload(response);
     entries.push(...page.images.map((url) => ({ url, context: page.title || page.url || "Vertical page" })));
     for (const context of asArray(page.json?.visual_asset_contexts)) {
-      if (typeof context === "object" && context?.url) entries.push(context);
+      const url = normalizePublicAssetLocator(context?.url);
+      if (typeof context === "object" && url) entries.push({ ...context, url });
     }
     for (const label of asArray(page.json?.image_asset_labels)) {
-      if (typeof label === "object" && label?.url) entries.push(label);
+      const url = normalizePublicAssetLocator(label?.url);
+      if (typeof label === "object" && url) entries.push({ ...label, url });
     }
   }
   return entries;
@@ -1404,7 +1406,7 @@ function observedCredits(payloads) {
 }
 
 function screenshotAt(page, index) {
-  return Array.isArray(page?.screenshots) ? page.screenshots[index] ?? null : null;
+  return Array.isArray(page?.screenshots) ? normalizePublicAssetLocator(page.screenshots[index]) : null;
 }
 
 function asArray(value) {
@@ -1426,6 +1428,26 @@ function normalizeBaseUrl(value) {
   parsed.search = "";
   parsed.pathname = "/";
   return parsed.toString();
+}
+
+export function normalizePublicAssetLocator(value) {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (!url.hostname) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function firstPublicAssetLocator(...values) {
+  for (const value of values) {
+    const locator = normalizePublicAssetLocator(value);
+    if (locator) return locator;
+  }
+  return null;
 }
 
 function safeInternalUrl(value, baseUrl) {
@@ -1504,7 +1526,7 @@ function normaliseBranding(branding) {
       fontFamilies: branding.typography?.fontFamilies ?? branding.typography?.fonts ?? {}
     },
     images: {
-      logo: branding.images?.logo ?? branding.logo ?? "",
+      logo: firstPublicAssetLocator(branding.images?.logo, branding.logo) ?? "",
       logoAlt: branding.images?.logoAlt ?? branding.logoAlt ?? ""
     },
     personality: {
