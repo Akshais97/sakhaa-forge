@@ -181,7 +181,7 @@ const fieldTypeToSection: Record<string, CandidateSection> = {
   prohibited_claim: "compliance",
   regulated_claim: "compliance",
   disclaimer: "compliance",
-  rights_asset: "compliance",
+  rights_asset: "visual",
   rights_warning: "compliance",
   publishing_social: "social",
   metadata: "metadata",
@@ -335,6 +335,24 @@ export function buildApprovalDraftFromCandidates(candidates: UiCandidate[], base
         heading: value.typography?.heading_font ?? draft.visual_identity.fonts.heading,
         code: value.typography?.code_font ?? draft.visual_identity.fonts.code
       };
+    }
+    if (candidate.fieldType === "logo") {
+      const src = value?.locator ?? value?.src ?? candidate.displayValue;
+      if (src && !draft.visual_identity.logos.includes(src)) {
+        draft.visual_identity.logos.push(src);
+      }
+    }
+    if (candidate.fieldType === "media_asset" || candidate.fieldType === "rights_asset") {
+      const src = value?.locator ?? value?.src ?? candidate.displayValue;
+      const type = value?.type ?? "uncategorised";
+      if (src) {
+        if (!draft.visual_identity.media_assets) {
+          draft.visual_identity.media_assets = [];
+        }
+        if (!draft.visual_identity.media_assets.some((m: any) => m.locator === src)) {
+          draft.visual_identity.media_assets.push({ locator: src, category: type });
+        }
+      }
     }
     if (candidate.fieldType === "voice") {
       draft.voice.attributes = unique([...asArray(value.toneSignals), ...asArray(value.writingStyleTags), ...asArray(value.brandValues)]);

@@ -46,6 +46,7 @@ type ApprovalDraft = {
     fonts: { primary: string; heading: string; code: string };
     imagery_rules: string;
     layout_rules: string;
+    media_assets?: Array<{ locator: string; category: string }>;
   };
   voice: {
     attributes: string[];
@@ -314,7 +315,8 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
       colors: [] as Array<{ role: string; value: string; usage: string; prohibited: string }>,
       fonts: { primary: 'Inter', heading: 'Space Grotesk', code: 'JetBrains Mono' },
       imagery_rules: '',
-      layout_rules: ''
+      layout_rules: '',
+      media_assets: [] as Array<{ locator: string; category: string }>
     },
     voice: {
       attributes: [] as string[],
@@ -783,6 +785,47 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
   const handleUpdateCandidateStatus = async (candidateId: string, status: 'approved' | 'rejected') => {
     await persistCandidateDecision(candidateId, status);
+  };
+
+  const handleRecategorizeImage = (candidateId: string, newCategory: 'logo' | 'product' | 'lifestyle' | 'uncategorised') => {
+    setCandidates(current => current.map(cand => {
+      if (cand.id !== candidateId) return cand;
+      
+      let fieldType = 'rights_asset';
+      if (newCategory === 'logo') {
+        fieldType = 'logo';
+      } else if (newCategory === 'product') {
+        fieldType = 'product';
+      } else if (newCategory === 'lifestyle') {
+        fieldType = 'media_asset';
+      }
+      
+      const fieldLabelsMap: Record<string, string> = {
+        logo: 'Logo',
+        product: 'Product',
+        media_asset: 'Media asset',
+        rights_asset: 'Rights asset'
+      };
+
+      const fieldTypeToSectionMap: Record<string, any> = {
+        logo: 'visual',
+        product: 'products',
+        media_asset: 'visual',
+        rights_asset: 'visual'
+      };
+
+      const val = typeof cand.value === 'object' && cand.value !== null 
+        ? { ...cand.value, type: newCategory } 
+        : { locator: cand.displayValue, type: newCategory };
+      
+      return {
+        ...cand,
+        fieldType,
+        field: fieldLabelsMap[fieldType] || cand.field,
+        section: fieldTypeToSectionMap[fieldType] || cand.section,
+        value: val
+      };
+    }));
   };
 
   const handleApproveAllSection = async (section: string) => {
@@ -1712,16 +1755,47 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
                                       <div className="h-3.5 w-3.5 rounded-sm border border-white/20" style={{ backgroundColor: (cand.value as any).value || '#FFFFFF' }} />
                                       <span className="text-[10px] font-mono text-zinc-300 uppercase">{(cand.value as any).role || 'color'}: <span className="text-white font-bold">{(cand.value as any).value}</span></span>
                                     </div>
-                                  ) : cand.fieldType === 'rights_asset' && typeof cand.value === 'object' && cand.value !== null ? (
-                                    <div className="grid grid-cols-3 gap-2">
-                                      {[cand.value as any].map((img: any, i: number) => (
-                                        <div key={i} className="relative rounded overflow-hidden border border-white/10 group bg-zinc-950">
-                                          <img src={img.locator} alt={img.type ?? 'Brand asset'} className="h-14 w-full object-cover" referrerPolicy="no-referrer" />
-                                          <div className="absolute inset-0 bg-black/40 flex items-end p-1">
-                                            <span className="text-[8px] font-mono text-white truncate">{img.type ?? 'Asset'}</span>
-                                          </div>
+                                  ) : ['rights_asset', 'logo', 'media_asset'].includes(cand.fieldType) ? (
+                                    <div className="space-y-3">
+                                      <div className="relative rounded-lg overflow-hidden border border-white/10 bg-zinc-950 w-36 h-28">
+                                        <img
+                                          src={(cand.value as any)?.locator || (cand.value as any)?.src || cand.displayValue}
+                                          alt={cand.field}
+                                          className="h-full w-full object-cover"
+                                          referrerPolicy="no-referrer"
+                                        />
+                                        <div className="absolute inset-0 bg-black/40 flex items-end p-1.5">
+                                          <span className="text-[8px] font-mono text-white bg-black/55 px-1 py-0.5 rounded uppercase">
+                                            {(cand.value as any)?.type || cand.fieldType}
+                                          </span>
                                         </div>
-                                      ))}
+                                      </div>
+
+                                      {/* Manual category switcher UI */}
+                                      <div className="flex items-center gap-1.5 pt-1.5 border-t border-white/5 flex-wrap">
+                                        <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">Categorize as:</span>
+                                        {(['logo', 'product', 'lifestyle', 'uncategorised'] as const).map(cat => {
+                                          const isActive = (cand.value as any)?.type === cat || 
+                                            (cand.fieldType === 'logo' && cat === 'logo') ||
+                                            (cand.fieldType === 'product' && cat === 'product') ||
+                                            (cand.fieldType === 'media_asset' && cat === 'lifestyle') ||
+                                            (cand.fieldType === 'rights_asset' && cat === 'uncategorised');
+                                          return (
+                                            <button
+                                              key={cat}
+                                              type="button"
+                                              onClick={() => handleRecategorizeImage(cand.id, cat)}
+                                              className={`px-2 py-0.5 rounded text-[9px] font-mono border transition-all ${
+                                                isActive
+                                                  ? 'bg-violet-500/20 text-violet-300 border-violet-500/30'
+                                                  : 'bg-zinc-900 border-transparent text-zinc-400 hover:text-white hover:bg-zinc-800'
+                                              }`}
+                                            >
+                                              {cat === 'uncategorised' ? 'Compliance/Uncat' : cat}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
                                     </div>
                                   ) : typeof cand.value === 'object' && cand.value !== null ? (
                                     <pre className="text-[10px] text-white leading-relaxed whitespace-pre-wrap select-all bg-black/30 border border-white/5 rounded-lg p-2 max-h-40 overflow-auto">{cand.displayValue}</pre>
@@ -2137,54 +2211,261 @@ export default function BrandExtractionStudio({ activeBrand, onUpdateBrandData, 
 
                   </div>
                 ) : (
-                  // Approval Success Card
+                  // Approval Success Card Redesign
                   <motion.div
                     initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}
-                    className="py-12 text-center space-y-6 max-w-lg mx-auto"
+                    className="py-6 space-y-6 w-full text-left"
                   >
-                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
-                      <CheckCircle2 className="h-8 w-8 animate-pulse" />
-                    </div>
-
-                    <div className="space-y-2">
-                      <h4 className="text-xl font-display font-medium text-white">Brand Profile Approved & Synchronized</h4>
-                      <p className="text-sm text-zinc-400 max-w-sm mx-auto leading-relaxed">
-                        The approved parameters for <strong className="text-white">{approvalDraft.name.public}</strong> were retained as version <strong className="text-white">v{approvalStatus.version}</strong> with an approval audit record.
-                      </p>
-                    </div>
-
-                    {/* Evidence Sync Card */}
-                    <div className="p-4 bg-zinc-950/60 rounded-xl border border-white/5 text-left font-mono text-[10px] space-y-2 max-w-md mx-auto">
-                      <div className="flex justify-between text-zinc-500 uppercase border-b border-white/5 pb-1.5">
-                        <span>Creative Ancestry ledger sync</span>
-                        <span className="text-emerald-400">STATUS: OK</span>
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                          <CheckCircle2 className="h-6 w-6 animate-pulse" />
+                        </div>
+                        <div>
+                          <h4 className="text-xl font-display font-medium text-white">Brand Profile Approved & Synchronized</h4>
+                          <p className="text-xs text-zinc-400">
+                            Version <strong className="text-white">v{approvalStatus.version}</strong> saved as the downstream production standard for ad/reel generation.
+                          </p>
+                        </div>
                       </div>
-                      <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Approval Stamp:</span> <span className="text-white">{approvalStatus.timestamp}</span></p>
-                      <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Approval Record:</span> <span className="text-zinc-300 select-all">{approvalStatus.approvalId}</span></p>
-                      <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Signatory:</span> <span className="text-white italic">{approvalDraft.reviewerSignature}</span></p>
+                      
+                      <div className="flex gap-3">
+                        <button
+                          onClick={() => {
+                            setApprovalStatus({ submitted: false, timestamp: null, approvalId: null, version: null });
+                            setApprovalMutation('idle');
+                            setApprovalDraft(prev => ({ ...prev, rightsAttestationChecked: false, reviewerSignature: '' }));
+                            setCurrentStep(1);
+                          }}
+                          className="px-4 py-2.5 rounded-lg border border-white/10 bg-white/2 hover:bg-white/5 text-xs font-mono text-zinc-300 hover:text-white"
+                        >
+                          Recrawl Website
+                        </button>
+                        <button
+                          onClick={onProceedWorkflow}
+                          className="px-6 py-2.5 rounded-lg text-xs font-mono font-semibold text-black uppercase tracking-wider transition-all hover:opacity-90 active:scale-95 flex items-center gap-1.5"
+                          style={{ backgroundColor: activeBrand.primaryColor }}
+                          id="proceed-video-workflow-btn"
+                        >
+                          Launch Video Pipeline <ArrowRight className="h-4 w-4" />
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="pt-4 flex gap-4 justify-center">
-                      <button
-                        onClick={() => {
-                          setApprovalStatus({ submitted: false, timestamp: null, approvalId: null, version: null });
-                          setApprovalMutation('idle');
-                          setApprovalDraft(prev => ({ ...prev, rightsAttestationChecked: false, reviewerSignature: '' }));
-                          setCurrentStep(1);
-                        }}
-                        className="px-4 py-2.5 rounded-lg border border-white/10 bg-white/2 hover:bg-white/5 text-xs font-mono text-zinc-300 hover:text-white"
-                      >
-                        Recrawl Brand Website
-                      </button>
-                      <button
-                        onClick={onProceedWorkflow}
-                        className="px-6 py-2.5 rounded-lg text-xs font-mono font-semibold text-black uppercase tracking-wider transition-all hover:opacity-90 active:scale-95 flex items-center gap-1.5"
-                        style={{ backgroundColor: activeBrand.primaryColor }}
-                        id="proceed-video-workflow-btn"
-                      >
-                        Launch Video Pipeline <ArrowRight className="h-4 w-4" />
-                      </button>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      {/* COLUMN 1: Visual Identity & Creative Ingredients */}
+                      <div className="space-y-4">
+                        
+                        {/* Core Identity */}
+                        <div className="rounded-xl border border-white/5 bg-zinc-950/40 p-4 space-y-2">
+                          <span className="block text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Brand Identity</span>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight">Public Name</span>
+                              <span className="text-sm font-semibold text-white">{approvalDraft.name.public}</span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight">Industry / Niche</span>
+                              <span className="text-sm font-semibold text-white capitalize">{approvalDraft.industry}</span>
+                            </div>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-zinc-400 block leading-tight">Target Markets</span>
+                            <span className="text-xs text-zinc-300 font-mono">{approvalDraft.markets?.join(', ') || 'Global'}</span>
+                          </div>
+                        </div>
+
+                        {/* Visual Identity */}
+                        <div className="rounded-xl border border-white/5 bg-zinc-950/40 p-4 space-y-3">
+                          <span className="block text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Visual identity</span>
+                          
+                          {/* Logos Shelf */}
+                          <div className="space-y-1.5">
+                            <span className="text-[10px] text-zinc-400 block leading-tight">Approved Logos</span>
+                            <div className="flex flex-wrap gap-3">
+                              {approvalDraft.visual_identity.logos?.length > 0 ? (
+                                approvalDraft.visual_identity.logos.map((logo: string, idx: number) => {
+                                  const isArtifact = logo.startsWith("artifact:");
+                                  return (
+                                    <div key={idx} className="relative rounded-lg overflow-hidden border border-white/10 bg-zinc-950 w-24 h-20 flex items-center justify-center">
+                                      {isArtifact ? (
+                                        <SecureArtifactThumbnail
+                                          artifactReference={logo as `artifact:${string}`}
+                                          workspaceId={apiContext.workspaceId.trim()}
+                                          client={artifactDownloadClient}
+                                          label={`Approved Logo ${idx + 1}`}
+                                          status="ready"
+                                        />
+                                      ) : (
+                                        <img src={logo} alt={`Approved Logo ${idx + 1}`} className="h-full w-full object-contain p-1" referrerPolicy="no-referrer" />
+                                      )}
+                                    </div>
+                                  );
+                                })
+                              ) : (
+                                <span className="text-xs text-zinc-500 italic">No approved logos attached.</span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Swatches */}
+                          <div className="space-y-1.5 pt-1.5">
+                            <span className="text-[10px] text-zinc-400 block leading-tight">Color Palette</span>
+                            <div className="flex flex-wrap gap-2">
+                              {approvalDraft.visual_identity.colors?.map((col: any, idx: number) => (
+                                <div key={idx} className="flex items-center gap-1.5 bg-zinc-900/60 p-1.5 px-2.5 border border-white/5 rounded-lg">
+                                  <div className="h-4 w-4 rounded border border-white/20" style={{ backgroundColor: col.value }} />
+                                  <div className="leading-none flex flex-col">
+                                    <span className="text-[9px] font-mono text-zinc-400 uppercase">{col.role}</span>
+                                    <span className="text-[10px] font-mono text-white font-bold">{col.value}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Other Approved Media Assets */}
+                          {approvalDraft.visual_identity.media_assets && approvalDraft.visual_identity.media_assets.length > 0 && (
+                            <div className="space-y-1.5 pt-2">
+                              <span className="text-[10px] text-zinc-400 block leading-tight">Other Approved Images</span>
+                              <div className="flex flex-wrap gap-2">
+                                {approvalDraft.visual_identity.media_assets.map((m: any, idx: number) => {
+                                  const isArtifact = m.locator.startsWith("artifact:");
+                                  return (
+                                    <div key={idx} className="relative rounded-lg overflow-hidden border border-white/10 bg-zinc-950 w-20 h-16 flex items-center justify-center" title={`Category: ${m.category}`}>
+                                      {isArtifact ? (
+                                        <SecureArtifactThumbnail
+                                          artifactReference={m.locator as `artifact:${string}`}
+                                          workspaceId={apiContext.workspaceId.trim()}
+                                          client={artifactDownloadClient}
+                                          label={`Media ${idx + 1}`}
+                                          status="ready"
+                                        />
+                                      ) : (
+                                        <img src={m.locator} alt={`Media ${idx + 1}`} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Core Positioning */}
+                        <div className="rounded-xl border border-white/5 bg-zinc-950/40 p-4 space-y-2">
+                          <span className="block text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Core Positioning</span>
+                          <blockquote className="border-l-2 pl-3 py-1 text-sm text-zinc-200 italic" style={{ borderColor: activeBrand.primaryColor }}>
+                            "{approvalDraft.positioning.statement}"
+                          </blockquote>
+                          
+                          {approvalDraft.positioning.differentiators?.length > 0 && (
+                            <div className="pt-2 space-y-1">
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">USPs / Differentiators</span>
+                              <ul className="list-disc list-inside text-xs text-zinc-300 space-y-1">
+                                {approvalDraft.positioning.differentiators.map((diff: string, idx: number) => (
+                                  <li key={idx} className="truncate">{diff}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* COLUMN 2: Voice Guidelines & Reel Rules */}
+                      <div className="space-y-4">
+                        
+                        {/* Voice & Personality */}
+                        <div className="rounded-xl border border-white/5 bg-zinc-950/40 p-4 space-y-3">
+                          <span className="block text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Voice & Personality</span>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">Formality Level</span>
+                              <span className="text-xs font-semibold text-white capitalize">{approvalDraft.voice.formality}</span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">Languages</span>
+                              <span className="text-xs font-semibold text-white">{approvalDraft.voice.languages?.join(', ') || 'English'}</span>
+                            </div>
+                          </div>
+                          
+                          {approvalDraft.voice.attributes?.length > 0 && (
+                            <div className="space-y-1.5">
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">Tone Attributes</span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {approvalDraft.voice.attributes.map((attr: string) => (
+                                  <span key={attr} className="px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-[10px] text-zinc-300">
+                                    {attr}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Products, Target Audience & CTAs */}
+                        <div className="rounded-xl border border-white/5 bg-zinc-950/40 p-4 space-y-3">
+                          <span className="block text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Offerings & CTAs</span>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">Active Products</span>
+                              <div className="space-y-1">
+                                {approvalDraft.products?.map((p: any, idx: number) => (
+                                  <span key={idx} className="block text-xs text-white font-medium truncate">{p.title}</span>
+                                ))}
+                              </div>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">Approved CTAs</span>
+                              <div className="space-y-1">
+                                {approvalDraft.calls_to_action?.map((c: any, idx: number) => (
+                                  <span key={idx} className="block text-xs text-white font-medium truncate">{c.label}</span>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Rules & Claims */}
+                        <div className="rounded-xl border border-white/5 bg-zinc-950/40 p-4 space-y-3">
+                          <span className="block text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Reel Guardrails & Compliance</span>
+                          
+                          {approvalDraft.rules.required_phrases?.length > 0 && (
+                            <div>
+                              <span className="text-[10px] text-zinc-400 block leading-tight font-medium">Required Phrases</span>
+                              <div className="space-y-1">
+                                {approvalDraft.rules.required_phrases.map((p: string, idx: number) => (
+                                  <span key={idx} className="block text-xs text-zinc-300 font-mono">• "{p}"</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {approvalDraft.rules.prohibited_phrases?.length > 0 && (
+                            <div>
+                              <span className="text-[10px] text-red-400 block leading-tight font-semibold">Prohibited Phrases</span>
+                              <div className="space-y-1">
+                                {approvalDraft.rules.prohibited_phrases.map((p: string, idx: number) => (
+                                  <span key={idx} className="block text-xs text-red-300 font-mono">• "{p}"</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Creative Ancestry Ledger */}
+                        <div className="p-4 bg-zinc-950/60 rounded-xl border border-white/5 text-left font-mono text-[10px] space-y-2">
+                          <div className="flex justify-between text-zinc-500 uppercase border-b border-white/5 pb-1.5">
+                            <span>Creative Ancestry ledger sync</span>
+                            <span className="text-emerald-400">STATUS: SYNCHRONIZED</span>
+                          </div>
+                          <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Approval Stamp:</span> <span className="text-white">{approvalStatus.timestamp}</span></p>
+                          <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Approval Record:</span> <span className="text-zinc-300 select-all">{approvalStatus.approvalId}</span></p>
+                          <p className="text-zinc-400">• <span className="text-zinc-500 uppercase">Signatory:</span> <span className="text-white italic">{approvalDraft.reviewerSignature}</span></p>
+                        </div>
+
+                      </div>
                     </div>
                   </motion.div>
                 )}
